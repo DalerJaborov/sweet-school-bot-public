@@ -36,6 +36,8 @@ jobs:
           "$RUNNER_TEMP/gitleaks/gitleaks" git . --log-opts=--all --redact --no-banner
       - run: npm ci --no-audit --no-fund
       - run: npm run prisma:generate
+      - name: Prepare the isolated application data volume
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /data
       - run: npm exec --workspace=apps/api -- vitest run --maxWorkers=4
       - run: npm exec --workspace=apps/web -- vitest run --maxWorkers=4
       - run: npm run build
