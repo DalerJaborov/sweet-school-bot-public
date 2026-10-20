@@ -19,6 +19,12 @@ import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
  */
 vi.mock("node:child_process", () => ({
   spawn: vi.fn((cmd: string, args: string[] = []) => {
+    // Production uses nice -n 19 ffmpeg on Linux. Unwrap that launcher so
+    // this fake still writes the synthetic poster/teaser output files.
+    if (cmd === "nice") {
+      cmd = args[2];
+      args = args.slice(3);
+    }
     const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: () => void };
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
