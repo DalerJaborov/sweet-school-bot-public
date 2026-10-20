@@ -19,6 +19,7 @@ apps/web/public/sitemap.xml
 apps/web/public/robots.txt
 
 # Private runtime data must never enter the public source repository.
+/apps/web/public/app/*.apk
 *.db
 *.db-wal
 *.db-shm

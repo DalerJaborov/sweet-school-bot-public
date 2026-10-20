@@ -1,5 +1,22 @@
 # Эксплуатация
 
+## Публичный исходный код — 21.10.2026
+
+Серверный каталог сохраняется: `/opt/sweet-school-bot`, origin теперь
+`DalerJaborov/sweet-school-bot-public`, ветка `main`. Приватная история и
+конфигурация сохранены отдельно. Базы и загрузки остаются в прежних томах.
+
+APK приложения хранится вне Git. Перед производственной сборкой веба:
+
+```bash
+test -s /opt/royalhome-private-assets/school/shirin-sweets.apk
+mkdir -p apps/web/public/app
+cp /opt/royalhome-private-assets/school/shirin-sweets.apk apps/web/public/app/shirin-sweets.apk
+```
+
+Не добавлять APK в коммит. После релиза проверить `/health` и доступность
+`/app/shirin-sweets.apk`; зелёный CI сам по себе не подтверждает выкат.
+
 ## Что где лежит на сервере
 
 Сервер `rh-vps` (85.198.70.182), доступ по ключу `~/.ssh/royalhome_ops`.
