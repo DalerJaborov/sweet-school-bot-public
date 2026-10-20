@@ -1,0 +1,602 @@
+{
+ "name": "🔴 Курси кондитерӣ – Shirin Sweets",
+ "type": "private_channel",
+ "id": 3336347353,
+ "messages": [
+  {
+   "id": 1,
+   "type": "service",
+   "date": "2025-11-11T01:03:46",
+   "actor": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "action": "create_channel",
+   "title": "Курси қаннодӣ – Shirin Sweets",
+   "text": ""
+  },
+  {
+   "id": 7,
+   "type": "message",
+   "date": "2025-12-24T01:48:10",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_1@24-12-2025_01-48-10.jpg",
+   "width": 622,
+   "height": 720,
+   "text": "👋🏻🥰Салом духтарон! \nМарҳамат ба онлайн курси мо 🤍\n\nНоми ман Ширин, ман кондитер ҳастам, бо таҷрибаи чандинсола.\n\nҲар моҳ…",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 35,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 13,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 7,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 2,
+     "emoji": "😘"
+    },
+    {
+     "type": "emoji",
+     "count": 1,
+     "emoji": "😍"
+    }
+   ]
+  },
+  {
+   "id": 15,
+   "type": "message",
+   "date": "2025-12-24T02:36:46",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_2@24-12-2025_02-36-46.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "🤍 Асбобҳои асосии кондитер\n\nПеш аз оғоз кардани дарсҳо, мехоҳам шуморо бо асбобҳои асосӣ, ки мо дар ин курс истифода мек…",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 15,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 11,
+     "emoji": "👍"
+    }
+   ]
+  },
+  {
+   "id": 16,
+   "type": "message",
+   "date": "2025-12-24T03:23:08",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_3@24-12-2025_03-23-08.jpg",
+   "width": 768,
+   "height": 1089,
+   "text": "Тарозуи электронӣ — барои дақиқ чен кардани маҳсулот (орд, шакар, равған, шоколад ва ғайра)",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 20,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 8,
+     "emoji": "❤"
+    }
+   ]
+  },
+  {
+   "id": 27,
+   "type": "message",
+   "date": "2025-12-24T14:35:05",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_14@24-12-2025_14-35-05.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 30,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 10,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 5,
+     "emoji": "🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 5,
+     "emoji": "🥰"
+    },
+    {
+     "type": "emoji",
+     "count": 3,
+     "emoji": "😍"
+    }
+   ]
+  },
+  {
+   "id": 28,
+   "type": "message",
+   "date": "2025-12-24T14:35:05",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_15@24-12-2025_14-35-05.jpg",
+   "width": 960,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 29,
+   "type": "message",
+   "date": "2025-12-24T14:35:05",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Банан.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 1175,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 30,
+   "type": "message",
+   "date": "2025-12-24T17:53:51",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_16@24-12-2025_17-53-51.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 22,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 19,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 3,
+     "emoji": "😍"
+    },
+    {
+     "type": "emoji",
+     "count": 2,
+     "emoji": "👍"
+    }
+   ]
+  },
+  {
+   "id": 31,
+   "type": "message",
+   "date": "2025-12-24T17:53:51",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "video_files/1224.mp4",
+   "file_name": "1224.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 12,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 32,
+   "type": "message",
+   "date": "2025-12-24T17:53:51",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Орео.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 962,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 33,
+   "type": "message",
+   "date": "2025-12-24T18:13:13",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_17@24-12-2025_18-13-13.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 23,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 16,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "👍"
+    }
+   ]
+  },
+  {
+   "id": 34,
+   "type": "message",
+   "date": "2025-12-24T18:13:13",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "video_files/1224 (1).mp4",
+   "file_name": "1224 (1).mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 13,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 35,
+   "type": "message",
+   "date": "2025-12-24T18:13:13",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Творожный пирог.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 1240,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 45,
+   "type": "message",
+   "date": "2025-12-24T18:53:28",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_23@24-12-2025_18-53-28.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 15,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 7,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 7,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "🥰"
+    }
+   ]
+  },
+  {
+   "id": 46,
+   "type": "message",
+   "date": "2025-12-24T18:53:28",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "video_files/1224 (1)(2).mp4",
+   "file_name": "1224 (1)(2).mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 15,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 47,
+   "type": "message",
+   "date": "2025-12-24T18:53:28",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Эклеры.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 742,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 48,
+   "type": "message",
+   "date": "2025-12-24T18:55:32",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_24@24-12-2025_18-55-32.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 21,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 5,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 5,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 2,
+     "emoji": "😘"
+    },
+    {
+     "type": "emoji",
+     "count": 1,
+     "emoji": "🔥"
+    }
+   ]
+  },
+  {
+   "id": 49,
+   "type": "message",
+   "date": "2025-12-24T18:55:32",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_25@24-12-2025_18-55-32.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 50,
+   "type": "message",
+   "date": "2025-12-24T18:55:32",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Меренгевый рулет.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 742,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 69,
+   "type": "message",
+   "date": "2026-01-13T00:48:43",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_33@13-01-2026_00-48-43.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 14,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 11,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "😍"
+    }
+   ]
+  },
+  {
+   "id": 70,
+   "type": "message",
+   "date": "2026-01-13T00:48:43",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Дубайский чизкейк-копия(1).mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 8,
+   "width": 1080,
+   "height": 1920,
+   "text": ""
+  },
+  {
+   "id": 71,
+   "type": "message",
+   "date": "2026-01-13T00:48:43",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "Дубайский чизкейк.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 742,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 87,
+   "type": "message",
+   "date": "2026-01-28T03:19:12",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_39@28-01-2026_03-19-12.jpg",
+   "width": 720,
+   "height": 1280,
+   "text": "",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 38,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 5,
+     "emoji": "😍"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "🍓"
+    },
+    {
+     "type": "emoji",
+     "count": 2,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 1,
+     "emoji": "🥰"
+    }
+   ]
+  },
+  {
+   "id": 88,
+   "type": "message",
+   "date": "2026-01-28T03:19:12",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "клубника тизер.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 10,
+   "width": 1080,
+   "height": 1920,
+   "text": ""
+  },
+  {
+   "id": 89,
+   "type": "message",
+   "date": "2026-01-28T03:19:12",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "file": "(File exceeds maximum size. Change data exporting settings to download.)",
+   "file_name": "клубника в шоколаде.mp4",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 459,
+   "width": 720,
+   "height": 1280,
+   "text": ""
+  },
+  {
+   "id": 90,
+   "type": "message",
+   "date": "2026-01-28T03:27:59",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_40@28-01-2026_03-27-59.jpg",
+   "width": 918,
+   "height": 1280,
+   "text": "Сабти сертификат 👇👇👇",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 26,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 1,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 1,
+     "emoji": "👍"
+    }
+   ]
+  },
+  {
+   "id": 101,
+   "type": "message",
+   "date": "2026-02-25T12:07:50",
+   "from": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "photo": "photos/photo_41@25-02-2026_12-07-50.jpg",
+   "width": 704,
+   "height": 810,
+   "text": "Духтарои хушруи ман 🤍\n\nМо группа дорем барои саволу ҷавоб, марҳамат дароен 👇👇👇\n\nhttps://t.me/+1pQl6T-EnWU2OWUy\nhttps://t…",
+   "reactions": [
+    {
+     "type": "emoji",
+     "count": 52,
+     "emoji": "❤"
+    },
+    {
+     "type": "emoji",
+     "count": 12,
+     "emoji": "🥰"
+    },
+    {
+     "type": "emoji",
+     "count": 7,
+     "emoji": "😘"
+    },
+    {
+     "type": "emoji",
+     "count": 6,
+     "emoji": "👍"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "❤‍🔥"
+    },
+    {
+     "type": "emoji",
+     "count": 4,
+     "emoji": "😍"
+    },
+    {
+     "type": "emoji",
+     "count": 3,
+     "emoji": "🍓"
+    }
+   ]
+  },
+  {
+   "id": 118,
+   "type": "service",
+   "date": "2026-08-05T23:19:11",
+   "actor": "🔴 Курси кондитерӣ – Shirin Sweets",
+   "action": "pin_message",
+   "message_id": 90,
+   "text": ""
+  }
+ ]
+}

@@ -1,0 +1,380 @@
+{
+  "desserts": {
+    "Клубника в шоколаде": {
+      "src": "/img/desserts/klubnika-v-shokolade.webp",
+      "srcSm": "/img/desserts/klubnika-v-shokolade-sm.webp",
+      "width": 1254,
+      "height": 1254,
+      "alt": {
+        "ru": "Клубника в шоколаде — десерт курса Shirin Sweets",
+        "tg": "Клубника дар шоколад — ширинии курс"
+      },
+      "avif": "/img/desserts/klubnika-v-shokolade.avif",
+      "avifSm": "/img/desserts/klubnika-v-shokolade-sm.avif"
+    },
+    "Чизкейк «Дубайский шоколад»": {
+      "src": "/img/desserts/chizkejk-dubajskij-shokolad.webp",
+      "srcSm": "/img/desserts/chizkejk-dubajskij-shokolad-sm.webp",
+      "width": 1254,
+      "height": 1254,
+      "alt": {
+        "ru": "Чизкейк «Дубайский шоколад» с фисташковой крошкой",
+        "tg": "Чизкейки шоколади Убай бо орди писта"
+      },
+      "avif": "/img/desserts/chizkejk-dubajskij-shokolad.avif",
+      "avifSm": "/img/desserts/chizkejk-dubajskij-shokolad-sm.avif"
+    },
+    "Пирожное «Сникерс»": {
+      "src": "/img/desserts/snikers.webp",
+      "srcSm": "/img/desserts/snikers-sm.webp",
+      "width": 800,
+      "height": 800,
+      "alt": {
+        "ru": "Пирожное «Сникерс» с карамелью и орехами",
+        "tg": "Пирожнии Сникерс бо карамел ва мағз"
+      },
+      "avif": "/img/desserts/snikers.avif",
+      "avifSm": "/img/desserts/snikers-sm.avif"
+    },
+    "Фисташковое пирожное": {
+      "src": "/img/desserts/fistashkovoe-pirozhnoe.webp",
+      "srcSm": "/img/desserts/fistashkovoe-pirozhnoe-sm.webp",
+      "width": 800,
+      "height": 800,
+      "alt": {
+        "ru": "Фисташковое пирожное с шоколадной глазурью",
+        "tg": "Пирожнии писта бо шоколад"
+      },
+      "avif": "/img/desserts/fistashkovoe-pirozhnoe.avif",
+      "avifSm": "/img/desserts/fistashkovoe-pirozhnoe-sm.avif"
+    },
+    "Пирожное «Красный бархат»": {
+      "src": "/img/desserts/krasnyj-barhat.webp",
+      "srcSm": "/img/desserts/krasnyj-barhat-sm.webp",
+      "width": 1254,
+      "height": 1254,
+      "alt": {
+        "ru": "Пирожное «Красный бархат» с клубникой",
+        "tg": "Пирожнии бархати сурх бо тути замини"
+      },
+      "avif": "/img/desserts/krasnyj-barhat.avif",
+      "avifSm": "/img/desserts/krasnyj-barhat-sm.avif"
+    },
+    "Пирожное «Рафаэлло»": {
+      "src": "/img/desserts/rafaello.webp",
+      "srcSm": "/img/desserts/rafaello-sm.webp",
+      "width": 1254,
+      "height": 1254,
+      "alt": {
+        "ru": "Пирожное «Рафаэлло» с кокосовой стружкой",
+        "tg": "Пирожнии Рафаэлло бо кокос"
+      },
+      "avif": "/img/desserts/rafaello.avif",
+      "avifSm": "/img/desserts/rafaello-sm.avif"
+    },
+    "Пирожное «Вупи пай»": {
+      "src": "/img/desserts/vupi-paj.webp",
+      "srcSm": "/img/desserts/vupi-paj-sm.webp",
+      "width": 800,
+      "height": 800,
+      "alt": {
+        "ru": "Пирожное «Вупи пай» с кремом и ягодами",
+        "tg": "Пирожнии Вупи Пай бо крем ва мева"
+      },
+      "avif": "/img/desserts/vupi-paj.avif",
+      "avifSm": "/img/desserts/vupi-paj-sm.avif"
+    },
+    "Шоколадное пирожное с ганашом": {
+      "src": "/img/desserts/shokoladnoe-pirozhnoe-s-ganashom.webp",
+      "srcSm": "/img/desserts/shokoladnoe-pirozhnoe-s-ganashom-sm.webp",
+      "width": 800,
+      "height": 800,
+      "alt": {
+        "ru": "Шоколадное пирожное с ганашом",
+        "tg": "Пирожнии шоколадӣ бо ганаш"
+      },
+      "avif": "/img/desserts/shokoladnoe-pirozhnoe-s-ganashom.avif",
+      "avifSm": "/img/desserts/shokoladnoe-pirozhnoe-s-ganashom-sm.avif"
+    },
+    "Чизкейк-тортики": {
+      "src": "/img/desserts/chizkejk-tortiki.webp",
+      "srcSm": "/img/desserts/chizkejk-tortiki-sm.webp",
+      "width": 800,
+      "height": 800,
+      "alt": {
+        "ru": "Чизкейк-тортики с шоколадной шапочкой",
+        "tg": "Чизкейк-тортикҳо бо шоколад"
+      },
+      "avif": "/img/desserts/chizkejk-tortiki.avif",
+      "avifSm": "/img/desserts/chizkejk-tortiki-sm.avif"
+    },
+    "Шоколадный торт": {
+      "src": "/img/desserts/shokoladnyj-tort.webp",
+      "srcSm": "/img/desserts/shokoladnyj-tort-sm.webp",
+      "width": 1254,
+      "height": 1254,
+      "alt": {
+        "ru": "Шоколадный торт с ягодами и потёками",
+        "tg": "Торти шоколадӣ бо мева"
+      },
+      "avif": "/img/desserts/shokoladnyj-tort.avif",
+      "avifSm": "/img/desserts/shokoladnyj-tort-sm.avif"
+    },
+    "Пирожное «Шу»": {
+      "src": "/img/desserts/shu.webp",
+      "srcSm": "/img/desserts/shu-sm.webp",
+      "width": 1254,
+      "height": 1254,
+      "alt": {
+        "ru": "Пирожное «Шу» (профитроли) с ягодами",
+        "tg": "Пирожнии Шу бо мева"
+      },
+      "avif": "/img/desserts/shu.avif",
+      "avifSm": "/img/desserts/shu-sm.avif"
+    }
+  },
+  "tools": [
+    {
+      "src": "/img/tools/scales.webp",
+      "caption": {
+        "ru": "Электронные весы — для точного взвешивания продуктов",
+        "tg": "Тарозуи электронӣ — барои дақиқ чен кардани маҳсулот"
+      },
+      "srcSm": "/img/tools/scales-sm.webp",
+      "avif": "/img/tools/scales.avif",
+      "avifSm": "/img/tools/scales-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/mixer.webp",
+      "caption": {
+        "ru": "Миксер — для крема и теста",
+        "tg": "Миксер — барои крем ва хамир"
+      },
+      "srcSm": "/img/tools/mixer-sm.webp",
+      "avif": "/img/tools/mixer.avif",
+      "avifSm": "/img/tools/mixer-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/turntable.webp",
+      "caption": {
+        "ru": "Вращающаяся подставка для торта — для ровного и красивого декора",
+        "tg": "Пояи гардишкунандаи торт — барои ороиши ҳамвор"
+      },
+      "srcSm": "/img/tools/turntable-sm.webp",
+      "avif": "/img/tools/turntable.avif",
+      "avifSm": "/img/tools/turntable-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/piping-bag.webp",
+      "caption": {
+        "ru": "Кондитерский мешок — для украшения торта, крема и теста",
+        "tg": "Халтаи қаннодӣ — барои ороиши торт ва крем"
+      },
+      "srcSm": "/img/tools/piping-bag-sm.webp",
+      "avif": "/img/tools/piping-bag.avif",
+      "avifSm": "/img/tools/piping-bag-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/silicone-mat.webp",
+      "caption": {
+        "ru": "Силиконовый коврик — чтобы выпечка не прилипала",
+        "tg": "Варақаи силиконӣ — барои начаспидани ширинӣ"
+      },
+      "srcSm": "/img/tools/silicone-mat-sm.webp",
+      "avif": "/img/tools/silicone-mat.avif",
+      "avifSm": "/img/tools/silicone-mat-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/cake-ring-round.webp",
+      "caption": {
+        "ru": "Регулируемая форма для торта — круглая",
+        "tg": "Қолаби танзимшавандаи торт — мудаввар"
+      },
+      "srcSm": "/img/tools/cake-ring-round-sm.webp",
+      "avif": "/img/tools/cake-ring-round.avif",
+      "avifSm": "/img/tools/cake-ring-round-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/cake-ring-square.webp",
+      "caption": {
+        "ru": "Регулируемая форма для торта — квадратная",
+        "tg": "Қолаби танзимшавандаи торт — чоркунҷа"
+      },
+      "srcSm": "/img/tools/cake-ring-square-sm.webp",
+      "avif": "/img/tools/cake-ring-square.avif",
+      "avifSm": "/img/tools/cake-ring-square-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/piping-tips.webp",
+      "caption": {
+        "ru": "Насадки 847 и 9F — для цветов и декоративных линий крема",
+        "tg": "Нӯгакҳои 847 ва 9F — барои гулҳо ва нақшҳои крем"
+      },
+      "srcSm": "/img/tools/piping-tips-sm.webp",
+      "avif": "/img/tools/piping-tips.avif",
+      "avifSm": "/img/tools/piping-tips-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/spatula.webp",
+      "caption": {
+        "ru": "Кондитерский шпатель — для выравнивания крема",
+        "tg": "Белчаи қаннодӣ — барои ҳамвор кардани крем"
+      },
+      "srcSm": "/img/tools/spatula-sm.webp",
+      "avif": "/img/tools/spatula.avif",
+      "avifSm": "/img/tools/spatula-sm.avif",
+      "width": 800,
+      "height": 600
+    },
+    {
+      "src": "/img/tools/silicone-spatula.webp",
+      "caption": {
+        "ru": "Силиконовый шпатель — для перемешивания и сбора крема",
+        "tg": "Белчаи силиконӣ — барои омехта кардани крем"
+      },
+      "srcSm": "/img/tools/silicone-spatula-sm.webp",
+      "avif": "/img/tools/silicone-spatula.avif",
+      "avifSm": "/img/tools/silicone-spatula-sm.avif",
+      "width": 800,
+      "height": 600
+    }
+  ],
+  "cards": [
+    "/img/cards/1.webp",
+    "/img/cards/2.webp",
+    "/img/cards/3.webp",
+    "/img/cards/4.webp",
+    "/img/cards/5.webp",
+    "/img/cards/6.webp",
+    "/img/cards/7.webp",
+    "/img/cards/8.webp",
+    "/img/cards/9.webp",
+    "/img/cards/10.webp",
+    "/img/cards/11.webp",
+    "/img/cards/12.webp",
+    "/img/cards/13.webp",
+    "/img/cards/14.webp",
+    "/img/cards/15.webp",
+    "/img/cards/16.webp",
+    "/img/cards/17.webp",
+    "/img/cards/18.webp",
+    "/img/cards/19.webp",
+    "/img/cards/20.webp",
+    "/img/cards/21.webp"
+  ],
+  "cardTexture": "/img/cards/texture.webp",
+  "shirin": {
+    "png": "/img/shirin.webp"
+  },
+  "og": "/img/og.jpg",
+  "hero": {
+    "src": "/img/covers/hero.webp",
+    "srcSm": "/img/covers/hero-sm.webp",
+    "avif": "/img/covers/hero.avif",
+    "avifSm": "/img/covers/hero-sm.avif",
+    "width": 1000,
+    "height": 1250,
+    "alt": {
+      "ru": "Шоколадный торт, Пирожное Красный бархат, Пирожное Шу — десерты курса Shirin Sweets",
+      "tg": "Шоколадный торт, Пирожное Красный бархат, Пирожное Шу — шириниҳои курси Shirin Sweets"
+    }
+  },
+  "heroPages": {
+    "online-kurs": {
+      "src": "/img/hero/online-kurs.webp",
+      "srcSm": "/img/hero/online-kurs-sm.webp",
+      "avif": "/img/hero/online-kurs.avif",
+      "avifSm": "/img/hero/online-kurs-sm.avif",
+      "width": 1600,
+      "height": 900,
+      "alt": {
+        "ru": "Шоколадный торт с ягодами — курс «21 рецепт» Shirin Sweets",
+        "tg": "Торти шоколадӣ бо мева — курси «21 рецепт»-и Shirin Sweets"
+      }
+    },
+    "art-desserty": {
+      "src": "/img/hero/art-desserty.webp",
+      "srcSm": "/img/hero/art-desserty-sm.webp",
+      "avif": "/img/hero/art-desserty.avif",
+      "avifSm": "/img/hero/art-desserty-sm.avif",
+      "width": 1536,
+      "height": 864,
+      "alt": {
+        "ru": "Муссовый десерт в глянцевой глазури — курс «Арт-десерты» Shirin Sweets",
+        "tg": "Ширинии мусс дар сирдорпӯши ялоқдор — курси «Арт-десерты»-и Shirin Sweets"
+      }
+    }
+  },
+  "courseCovers": {
+    "COURSE50": {
+      "src": "/img/covers/course-course50.webp",
+      "srcSm": "/img/covers/course-course50-sm.webp",
+      "avif": "/img/covers/course-course50.avif",
+      "og": "/img/covers/course-course50-og.jpg",
+      "width": 1600,
+      "height": 900
+    },
+    "COURSE70": {
+      "src": "/img/covers/course-course70.webp",
+      "srcSm": "/img/covers/course-course70-sm.webp",
+      "avif": "/img/covers/course-course70.avif",
+      "og": "/img/covers/course-course70-og.jpg",
+      "width": 1600,
+      "height": 900
+    }
+  },
+  "ogPages": {
+    "": {
+      "ru": "/img/covers/og-home-ru.jpg",
+      "tg": "/img/covers/og-home-tg.jpg"
+    },
+    "online-kurs": {
+      "ru": "/img/covers/og-online-kurs-ru.jpg",
+      "tg": "/img/covers/og-online-kurs-tg.jpg"
+    },
+    "art-desserty": {
+      "ru": "/img/covers/og-art-desserty-ru.jpg",
+      "tg": "/img/covers/og-art-desserty-tg.jpg"
+    },
+    "kursy-konditera-dushanbe": {
+      "ru": "/img/covers/og-kursy-konditera-dushanbe-ru.jpg",
+      "tg": "/img/covers/og-kursy-konditera-dushanbe-tg.jpg"
+    },
+    "sertifikat": {
+      "ru": "/img/covers/og-sertifikat-ru.jpg",
+      "tg": "/img/covers/og-sertifikat-tg.jpg"
+    },
+    "otzyvy": {
+      "ru": "/img/covers/og-otzyvy-ru.jpg",
+      "tg": "/img/covers/og-otzyvy-tg.jpg"
+    },
+    "faq": {
+      "ru": "/img/covers/og-faq-ru.jpg",
+      "tg": "/img/covers/og-faq-tg.jpg"
+    },
+    "o-shirin": {
+      "ru": "/img/covers/og-o-shirin-ru.jpg",
+      "tg": "/img/covers/og-o-shirin-tg.jpg"
+    },
+    "politika-konfidentsialnosti": {
+      "ru": "/img/covers/og-politika-konfidentsialnosti-ru.jpg",
+      "tg": "/img/covers/og-politika-konfidentsialnosti-tg.jpg"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+node_modules/
+dist/
+.env
+*.db
+*.db-journal
+uploads/
+.claude/settings.local.json
+prisma/backup/
+
+# Локальные копии продовой базы — никогда в репозиторий
+backups/
+
+# Страницы сайта генерируются на сборке из apps/web/site-content (scripts/build-site-pages.mjs)
+apps/web/*.html
+!apps/web/index.html
+!apps/web/course.html
+apps/web/tg/
+apps/web/public/sitemap.xml
+apps/web/public/robots.txt
+
+# Private runtime data must never enter the public source repository.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.dump
+.env.*
+!.env.example
+!.env.*.example

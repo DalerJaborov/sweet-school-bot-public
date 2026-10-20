@@ -1,0 +1,5 @@
+<resources>
+    <!-- Малиновый бренд-цвет сайта — фон адаптивной иконки и заставки. -->
+    <color name="raspberry">#C9376B</color>
+    <color name="white">#FFFFFF</color>
+</resources>

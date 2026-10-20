@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <!-- Панель всегда светлая (решение владельца): фиксируем и на уровне
+         браузера, иначе телефон с тёмной системной темой на миг красит страницу
+         чёрным до загрузки скриптов. -->
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#FFF8F3" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Shirin — панель</title>
+    <!-- Те же шрифты, что у приложения ученицы (course.html): Inter для текста
+         (cyrillic-ext — таджикские ӣ ӯ ҳ қ ҷ ғ в никах и текстах учениц),
+         Onest 800 — дисплейный акцент цифр и заголовков. Один бренд на оба
+         экрана — см. src/tokens.css. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Onest:wght@800&display=swap&subset=cyrillic-ext"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Скрипт Telegram нужен, только когда панель открыта как мини-приложение;
+         в обычном браузере он просто ничего не делает. -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

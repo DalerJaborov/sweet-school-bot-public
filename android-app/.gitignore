@@ -1,0 +1,17 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+dist/
+
+# Боевой upload-keystore для Play Store и его пароли — НИКОГДА не в git.
+# CI получает тот же ключ через зашифрованные секреты GitHub Actions
+# (KEYSTORE_BASE64/KEYSTORE_PASSWORD/...), см. .secrets/README-KEYSTORE.txt.
+.secrets/

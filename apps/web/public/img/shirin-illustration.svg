@@ -1,0 +1,35 @@
+<svg viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Иллюстрация Ширин с тортом">
+  <rect width="400" height="500" fill="#FFF8F3"/>
+  <circle cx="200" cy="500" r="230" fill="#f7dbe4"/>
+  <!-- shoulders / dress -->
+  <path d="M90 500 C90 380 140 330 200 330 C260 330 310 380 310 500 Z" fill="#c9376b"/>
+  <path d="M120 500 C120 400 155 360 200 360 C245 360 280 400 280 500 Z" fill="#b02c5a"/>
+  <!-- neck -->
+  <rect x="182" y="255" width="36" height="45" rx="14" fill="#e7b89a"/>
+  <!-- head -->
+  <circle cx="200" cy="215" r="62" fill="#f0c6a3"/>
+  <!-- headscarf -->
+  <path d="M136 210 C132 150 165 105 200 105 C235 105 268 150 264 210 C264 178 245 150 200 150 C155 150 136 178 136 210 Z" fill="#c9376b"/>
+  <path d="M140 190 C160 230 150 265 120 280 C150 270 172 245 172 210 Z" fill="#a82650"/>
+  <path d="M260 190 C240 230 250 265 280 280 C250 270 228 245 228 210 Z" fill="#a82650"/>
+  <!-- arms holding cake -->
+  <path d="M150 430 C130 400 130 370 150 350 L175 365 C165 385 165 405 180 425 Z" fill="#c9376b"/>
+  <path d="M250 430 C270 400 270 370 250 350 L225 365 C235 385 235 405 220 425 Z" fill="#c9376b"/>
+  <!-- hands -->
+  <circle cx="150" cy="435" r="14" fill="#e7b89a"/>
+  <circle cx="250" cy="435" r="14" fill="#e7b89a"/>
+  <!-- cake plate -->
+  <ellipse cx="200" cy="450" rx="70" ry="12" fill="#ffffff"/>
+  <!-- cake -->
+  <rect x="150" y="405" width="100" height="45" rx="6" fill="#ffd7e6"/>
+  <rect x="150" y="405" width="100" height="10" rx="4" fill="#ffffff"/>
+  <!-- butterflies -->
+  <g fill="#f5c344">
+    <path d="M180 400 c-8-10-20-10-20 2 c0 10 12 12 20 2 z"/>
+    <path d="M180 400 c8-10 20-10 20 2 c0 10-12 12-20 2 z"/>
+  </g>
+  <g fill="#f5c344">
+    <path d="M225 415 c-6-8-16-8-16 2 c0 8 10 10 16 2 z"/>
+    <path d="M225 415 c6-8 16-8 16 2 c0 8-10 10-16 2 z"/>
+  </g>
+</svg>

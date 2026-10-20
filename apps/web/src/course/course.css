@@ -1,0 +1,2143 @@
+/**
+ * Стили платформы ученицы. Отдельные от панели: там таблицы и плотная сетка
+ * для владельца за компьютером, здесь — телефон в муке на кухне. Крупный
+ * текст, большие цели для пальца, никакой мелочи.
+ *
+ * ВИЗУАЛЬНАЯ СИСТЕМА (решение владельца 03.09.2026, вечер): светлый
+ * «современный» вид по образцу e-learning-приложений — белые карточки с
+ * мягкой тенью и радиусом 20–24px на очень светлом фоне, одна яркая
+ * малиновая «геройская» карточка с градиентом, кольца прогресса, пилюли.
+ * Малина (#C9376B) осталась акцентом: контраст с белым текстом 4.6:1.
+ *
+ * ТЕМА. Светлая — по умолчанию для всех, независимо от настроек телефона;
+ * тёмная — только по явному нажатию (theme.ts ставит data-theme="dark" на
+ * <html>). Автоматический prefers-color-scheme убран намеренно: ученица
+ * должна видеть тот же экран, что на скриншотах школы.
+ * Все цвета — токены; шкала отступов 4pt, радиусы 12/16/20/24, тап-цель 48px.
+ */
+
+/* Токены светлой темы — общие с панелью владельца (tokens.css): значения
+   те же, что были здесь, вид ученицы не меняется. Импорт стоит первым
+   правилом файла, как того требует CSS. */
+@import "../tokens.css";
+
+/* Тёмная тема — только по явному переключателю в шапке (см. theme.ts). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --c-bg: #111217;
+  --c-surface: #1b1c23;
+  --c-ink: #f3f4f7;
+  --c-muted: #9ca3af;
+  --c-line: #2a2c36;
+  --c-accent: #e8628f;
+  --c-accent-2: #c9376b;
+  --c-accent-ink: #ffffff;
+  --c-accent-soft: #3a2230;
+  --c-ok: #7fd39f;
+  --c-ok-soft: #1f3327;
+  --c-warn: #f2c56b;
+  --c-warn-soft: #3a2d15;
+  --c-danger: #ff8a80;
+  --c-danger-soft: #3f1f1d;
+  --c-focus: #a5b4fc;
+  --e-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.35);
+  --e-2: 0 10px 30px rgba(0, 0, 0, 0.55);
+  --e-hero: 0 12px 28px rgba(232, 98, 143, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--c-bg);
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-ink);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+/* ---- каркас страницы ---- */
+
+.page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: calc(12px + var(--safe-t)) 16px calc(24px + var(--safe-b));
+}
+.page.has-fab {
+  padding-bottom: calc(96px + var(--safe-b));
+}
+
+.page-head {
+  margin-bottom: 16px;
+}
+.page-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.page-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.greeting {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  margin-top: 16px;
+}
+.avatar {
+  flex: none;
+  width: var(--c-tap);
+  height: var(--c-tap);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+  font-size: 20px;
+  font-weight: 700;
+  box-shadow: var(--e-hero);
+}
+/* Круглая иконка-кнопка (тема и т. п.): 48px, белая, с мягкой тенью. */
+.icon-btn {
+  flex: none;
+  width: var(--c-tap);
+  height: var(--c-tap);
+  border: none;
+  border-radius: 50%;
+  background: var(--c-surface);
+  color: var(--c-ink);
+  box-shadow: var(--e-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform var(--dur) ease;
+}
+.icon-btn:active {
+  transform: scale(0.95);
+}
+.sub {
+  color: var(--c-muted);
+  margin: 8px 0 12px;
+}
+.empty-state {
+  color: var(--c-muted);
+  text-align: center;
+  padding: 40px 16px;
+}
+.muted {
+  color: var(--c-muted);
+}
+.section-h {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--c-ink);
+  margin: 8px 0 14px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 -8px 12px;
+}
+.topbar-title {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+  min-width: 0;
+}
+.back-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: var(--c-tap);
+  min-width: var(--c-tap);
+  padding: 0 12px 0 8px;
+  border: none;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--c-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.back-btn:active {
+  background: var(--c-accent-soft);
+}
+
+/* ---- центрированные экраны: заставка, ошибки, знакомство ---- */
+
+.center {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: calc(24px + var(--safe-t)) 24px calc(24px + var(--safe-b));
+  text-align: center;
+}
+.center h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.center p {
+  color: var(--c-muted);
+  max-width: 34ch;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--c-line);
+  border-top-color: var(--c-accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.illus {
+  display: block;
+}
+.illus-fill {
+  fill: var(--c-accent-soft);
+}
+.illus-accent {
+  fill: var(--c-accent);
+}
+.illus-stroke {
+  stroke: var(--c-accent);
+}
+
+/* ---- кнопки ---- */
+
+.btn {
+  min-height: var(--c-tap);
+  padding: 12px 20px;
+  border: none;
+  border-radius: var(--r-2);
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform var(--dur) ease, background var(--dur) ease;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn.ghost {
+  background: var(--c-surface);
+  color: var(--c-ink);
+  box-shadow: var(--e-1);
+  width: 100%;
+}
+
+/* Липкая «Спросить учительницу» — всегда под большим пальцем. */
+/* Круглая иконка-кнопка вопроса (владелец 05.09.2026: широкая плашка
+   «Спросить Ширин» по центру экрана закрывала номера и названия уроков
+   в новой сетке) — маленький круг в углу, как кнопка чата на сайте. */
+.fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + var(--safe-b));
+  z-index: 20;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--e-2);
+  cursor: pointer;
+  transition: transform var(--dur) ease;
+}
+.fab:active {
+  transform: scale(0.94);
+}
+
+/* ---- баннер состояния ---- */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-1);
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+.banner-warn {
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+}
+.banner-info {
+  background: var(--c-accent-soft);
+  color: var(--c-ink);
+}
+.banner-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ---- переключатель языка ---- */
+
+.lang-switch {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+}
+.lang-pill {
+  min-height: 40px;
+  min-width: var(--c-tap);
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-ink);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur) ease, color var(--dur) ease;
+}
+.lang-pill.on {
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+
+/* ---- карточки курсов ---- */
+
+.course-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.course-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  text-align: left;
+  padding: 22px 20px 22px 24px;
+  border: none;
+  border-radius: var(--r-4);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  box-shadow: var(--e-1);
+  cursor: pointer;
+  transition: transform var(--dur) ease;
+}
+.course-card:active {
+  transform: scale(0.99);
+}
+/* Геройская: градиент, белый текст, кольцо белое поверх полупрозрачной дорожки. */
+.course-card.hero {
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+  box-shadow: var(--e-hero);
+}
+.course-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.course-card-kicker {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
+}
+.course-card-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.course-card-desc {
+  font-size: 14px;
+  opacity: 0.85;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.course-card:not(.hero) .course-card-desc,
+.course-card:not(.hero) .course-card-kicker,
+.course-card:not(.hero) .course-card-meta {
+  color: var(--c-muted);
+  opacity: 1;
+}
+.course-card-meta {
+  font-size: 12px;
+  text-align: center;
+  opacity: 0.9;
+}
+.course-card-side {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.course-card-open {
+  margin-top: 8px;
+  align-self: flex-start;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+.course-card.hero .course-card-open {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--c-accent-ink);
+}
+.course-card.hero .ring-track {
+  stroke: rgba(255, 255, 255, 0.3);
+}
+.course-card.hero .ring-value,
+.course-card.hero .ring-check {
+  stroke: var(--c-accent-ink);
+}
+
+/* Строка прогресса над уроками — когда сертификата ещё нет. */
+.course-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 16px;
+  color: var(--c-muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.course-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--c-line);
+  overflow: hidden;
+}
+.course-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--g-hero);
+  transition: width var(--dur) ease;
+}
+
+/* ---- сертификат ---- */
+
+.cert-card {
+  background: var(--c-surface);
+  border-radius: var(--r-4);
+  box-shadow: var(--e-1);
+  padding: 20px;
+  margin: 4px 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cert-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.cert-badge {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+.cert-title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.cert-issued {
+  color: var(--c-muted);
+  font-size: 14px;
+  margin-top: 4px;
+}
+.cert-hint {
+  color: var(--c-muted);
+  font-size: 14px;
+}
+.cert-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cert-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 380px) {
+  .cert-fields {
+    grid-template-columns: 1fr;
+  }
+}
+.cert-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--c-muted);
+}
+.cert-fields input {
+  min-height: var(--c-tap);
+  padding: 10px 14px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-1);
+  background: var(--c-bg);
+  font: inherit;
+  color: var(--c-ink);
+  font-size: 16px;
+}
+.cert-lang {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.cert-lang legend {
+  font-size: 14px;
+  color: var(--c-muted);
+  padding: 0;
+  margin-bottom: 8px;
+}
+.radio-pills {
+  display: flex;
+  gap: 8px;
+}
+.radio-pill {
+  position: relative;
+  flex: 1;
+  min-height: var(--c-tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--c-line);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur) ease, color var(--dur) ease;
+}
+.radio-pill.on {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+/* Сама радиокнопка спрятана визуально, но остаётся в доступе с клавиатуры. */
+.radio-pill input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.radio-pill:has(input:focus-visible) {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 2px;
+}
+.cert-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cert-actions .btn {
+  flex: 1;
+}
+.cert-actions .btn.ghost {
+  width: auto;
+}
+
+/* ---- список уроков ---- */
+
+.module-h {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-muted);
+  margin: 20px 0 8px;
+}
+/*
+ * Журнальная сетка (визуальная система 04.09.2026, scratchpad/visual-ideas.md
+ * §3): 2 колонки по умолчанию, 1 — на совсем узких экранах, 3 — на планшете
+ * (720px — та же граница «планшет», что уже используется у .player-sticky).
+ * Следующий непройденный урок курса — .is-next, во всю ширину сетки.
+ */
+.lessons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+@media (max-width: 360px) {
+  .lessons {
+    grid-template-columns: 1fr;
+  }
+}
+@media (min-width: 720px) {
+  .lessons {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.lesson-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  border-radius: var(--r-3);
+  box-shadow: var(--e-1);
+  overflow: hidden;
+}
+.lesson-card.off {
+  opacity: 0.6;
+  box-shadow: none;
+}
+.lesson-card.is-next {
+  grid-column: 1 / -1;
+}
+
+.lesson-card-btn {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--dur) ease;
+}
+.lesson-card-btn:disabled {
+  cursor: default;
+}
+/* Нажатие — scale(.98), как и у остальных карточек приложения (§8 motion). */
+.lesson-card-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.lesson-cover {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--c-accent-soft);
+  overflow: hidden;
+  animation: lesson-cover-in var(--dur) ease both;
+}
+@keyframes lesson-cover-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* Стагер по индексу карточки в разделе — 40мс на карточку, максимум 6 (§8). */
+.lessons > li:nth-child(1) .lesson-cover {
+  animation-delay: 0ms;
+}
+.lessons > li:nth-child(2) .lesson-cover {
+  animation-delay: 40ms;
+}
+.lessons > li:nth-child(3) .lesson-cover {
+  animation-delay: 80ms;
+}
+.lessons > li:nth-child(4) .lesson-cover {
+  animation-delay: 120ms;
+}
+.lessons > li:nth-child(5) .lesson-cover {
+  animation-delay: 160ms;
+}
+.lessons > li:nth-child(n + 6) .lesson-cover {
+  animation-delay: 200ms;
+}
+
+.lesson-cover img,
+.lesson-cover-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.lesson-cover-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-accent);
+}
+/* Пройденный урок — обложка чуть приглушена, в обеих темах одинаково (§9:
+   градиент обложки читается на любом фоне, отдельного тёмного варианта нет). */
+.lesson-cover.is-done img,
+.lesson-cover.is-done .lesson-cover-media,
+.lesson-cover.is-done .lesson-cover-ph {
+  filter: saturate(0.8);
+}
+
+.lesson-number {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--c-cream);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+/* Лента «пройдено»: тонкая диагональ в правом верхнем углу, галочка кремовая.
+   Цвет — --c-ok текущей темы (тёмная палитра сама подставится через токен). */
+.lesson-ribbon {
+  position: absolute;
+  top: 14px;
+  right: -32px;
+  width: 110px;
+  padding: 3px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-ok);
+  color: var(--c-cream);
+  transform-origin: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  animation: lesson-ribbon-in var(--dur) cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes lesson-ribbon-in {
+  from {
+    transform: rotate(40deg) scale(0);
+  }
+  60% {
+    transform: rotate(40deg) scale(1.15);
+  }
+  to {
+    transform: rotate(40deg) scale(1);
+  }
+}
+
+/* Начатый (не пройденный) урок — тонкий прогресс-бар по низу обложки вместо
+   кольца прогресса. */
+.lesson-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--c-accent);
+}
+
+/* «Следующий» — метка только когда тизера нет: с тизером роль подсказки уже
+   играет само видео. */
+.lesson-eyebrow {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(23, 24, 28, 0.55);
+  color: var(--c-cream);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.lesson-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px 14px;
+}
+.lesson-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-wrap: balance;
+}
+.lesson-pill {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--c-line);
+  color: var(--c-muted);
+}
+.lesson-hint {
+  color: var(--c-warn);
+}
+.chip {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--c-line);
+  color: var(--c-muted);
+  margin-top: 2px;
+}
+.chip-ok {
+  background: var(--c-ok-soft);
+  color: var(--c-ok);
+}
+/* Карточки уроков в сетке узкие (2–3 колонки) — чипы «продолжить/сначала»
+   складываются в столбик, чтобы текст не резался; на карточке «следующий»
+   (во всю ширину) им хватает места в ряд. */
+.lesson-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+.lesson-card.is-next .lesson-chips {
+  flex-direction: row;
+}
+.chip-btn {
+  flex: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: 999px;
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lesson-card:not(.is-next) .chip-btn {
+  white-space: normal;
+  text-align: center;
+}
+.chip-btn.primary {
+  flex: 2;
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+
+/* ---- кольцо прогресса ---- */
+
+.ring {
+  flex: none;
+}
+.ring-track {
+  stroke: var(--c-line);
+}
+.ring-value {
+  stroke: var(--c-accent);
+  transition: stroke-dashoffset var(--dur) ease;
+}
+.ring-done .ring-value {
+  stroke: var(--c-ok);
+}
+.ring-check {
+  stroke: var(--c-ok);
+}
+
+/* ---- контакты и память ---- */
+
+.contacts {
+  margin-top: 32px;
+}
+.contacts h2 {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+.contacts-links {
+  display: flex;
+  gap: 8px;
+  justify-content: space-around;
+}
+.contact {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-radius: var(--r-2);
+  color: var(--c-ink);
+  text-decoration: none;
+}
+.contact:active .contact-icon {
+  transform: scale(0.95);
+}
+.contact-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface);
+  color: var(--c-accent);
+  box-shadow: var(--e-1);
+  transition: transform var(--dur) ease;
+}
+.contact-label {
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.3;
+}
+.storage-note {
+  color: var(--c-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 24px;
+}
+
+/* ---- экран урока ---- */
+
+.lesson-page {
+  padding-top: calc(4px + var(--safe-t));
+}
+.player-sticky {
+  position: sticky;
+  top: var(--safe-t);
+  z-index: 10;
+  margin: 0 -16px;
+  background: var(--c-bg);
+  padding: 0 0 4px;
+}
+@media (min-width: 720px) {
+  .player-sticky {
+    margin: 0;
+  }
+  .player-sticky .player {
+    border-radius: var(--r-2);
+  }
+}
+.lesson-state {
+  color: var(--c-muted);
+  font-size: 14px;
+  margin: 8px 2px 14px;
+}
+
+/* ---- геройский экран урока (§4 визуальной системы 04.09.2026) ---- */
+/* Тизер/обложка 9:16, высота ограничена 60% высоты экрана (dvh — тот же
+   выбор, что у .center/.chat-page в этом файле, устойчив к адресной строке
+   мобильного браузера), скруглённая рамка с малиновым «неоновым» свечением. */
+.lesson-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 12px;
+}
+.lesson-hero-frame {
+  position: relative;
+  display: block;
+  width: calc(60dvh * 9 / 16);
+  max-width: 100%;
+  height: 60dvh;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-4);
+  overflow: hidden;
+  background: var(--c-accent-soft);
+  box-shadow: 0 24px 60px rgba(201, 55, 107, 0.35);
+  cursor: pointer;
+}
+/* Тёмная тема — свечение слабее (§9: обложки читаются на любом фоне, но
+   яркое малиновое сияние на тёмном фоне било бы в глаза). */
+:root[data-theme="dark"] .lesson-hero-frame {
+  box-shadow: 0 24px 60px rgba(232, 98, 143, 0.22);
+}
+.lesson-hero-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.lesson-hero-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-accent-ink);
+  background: var(--g-hero);
+}
+.lesson-hero-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: linear-gradient(to top, rgba(23, 24, 28, 0.5), rgba(23, 24, 28, 0) 42%);
+}
+.lesson-hero-play {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--c-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--e-2);
+}
+.lesson-hero-play svg {
+  margin-left: 3px;
+}
+/* «Начать · 24 мин» — пилюля, не подпись на весь экран: номер и название
+   уже впечатаны в саму обложку сервером (storage/coverArt.ts). */
+.lesson-hero-cta {
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--c-ink);
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.lesson-hero-actions {
+  width: calc(60dvh * 9 / 16);
+  max-width: 100%;
+}
+.lesson-hero-actions .btn {
+  width: 100%;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+  margin-bottom: 14px;
+}
+.tab {
+  flex: 1;
+  min-height: 40px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur) ease, color var(--dur) ease;
+}
+.tab.on {
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: 600;
+}
+.tabpanel {
+  min-height: 120px;
+}
+
+/* Переносы строк — разметка владельца, её нельзя схлопывать. */
+.recipe-text {
+  white-space: pre-wrap;
+  font-size: 17px;
+  line-height: 1.6;
+}
+.photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.photos img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--r-1);
+  display: block;
+  background: var(--c-accent-soft);
+}
+
+/* ---- плеер ---- */
+
+.player {
+  position: relative;
+  background: var(--c-video);
+  overflow: hidden;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.player:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--c-focus);
+}
+.player.is-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+}
+.player-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--c-video);
+}
+/* iOS с экрана «Домой»: настоящего fullscreen нет, растягиваем сами. */
+.player.is-pseudo-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  width: 100vw;
+  height: 100dvh;
+}
+.player.is-fullscreen .player-video {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
+/* Знак не перехватывает касания: иначе он мешал бы управлять плеером. */
+.player-mark {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.45);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  transition: left 1.2s ease, top 1.2s ease;
+}
+
+.player-center {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 72px;
+  height: 72px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--c-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--e-2);
+}
+.player-center svg {
+  margin-left: 4px;
+}
+
+.player-controls {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 24px 8px calc(4px + var(--safe-b));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+  color: #fff;
+  transition: opacity var(--dur) ease, transform var(--dur) ease;
+}
+.player.hide-controls .player-controls {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+.pc-seek {
+  position: relative;
+  height: 28px;
+  margin: 0 8px 2px;
+}
+.pc-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+  overflow: hidden;
+}
+.pc-buffered {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.4);
+}
+.pc-played {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: var(--c-accent);
+}
+.pc-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+.pc-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+.pc-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--c-accent);
+}
+.pc-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+.pc-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--c-accent);
+}
+.pc-range:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+.pc-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.pc-btn {
+  min-width: var(--c-tap);
+  min-height: var(--c-tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+.pc-btn:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+.pc-text {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+.pc-time {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.pc-spacer {
+  flex: 1;
+}
+
+.player-overlay {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  background: rgba(12, 12, 12, 0.92);
+  color: #fff;
+}
+.player-overlay p {
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 34ch;
+}
+
+/* Слой жестов: над видео, под кнопками. touch-action: none — иначе Android
+   при зажатии начинал бы прокрутку страницы и отменял наш таймер 2×. */
+.player-gesture {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* «2×» при зажатии — сверху по центру, как в YouTube. */
+.player-badge {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  pointer-events: none;
+  animation: player-fade-in var(--dur) ease;
+}
+
+/* Всплеск «±10» у края, куда стукнули дважды. */
+.player-ripple {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  width: 96px;
+  height: 96px;
+  margin-top: -48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: player-ripple 0.6s ease-out forwards;
+}
+.player-ripple.is-left {
+  left: 8%;
+}
+.player-ripple.is-right {
+  right: 8%;
+}
+@keyframes player-ripple {
+  from {
+    transform: scale(0.6);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1.3);
+    opacity: 0;
+  }
+}
+@keyframes player-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Тихий спиннер при подгрузке — вместо большой кнопки «Смотреть». */
+.player-spinner {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.player-spinner span {
+  display: block;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  animation: player-spin 0.9s linear infinite;
+}
+@keyframes player-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .player-spinner span {
+    animation-duration: 2s;
+  }
+  .player-ripple {
+    animation-duration: 0.3s;
+  }
+}
+
+/* Меню скорости/качества — над кнопками, справа. */
+.pc-menu {
+  position: absolute;
+  right: 8px;
+  bottom: calc(var(--c-tap) + 36px + var(--safe-b));
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: 4px;
+  border-radius: var(--r-1);
+  background: rgba(20, 20, 20, 0.94);
+  box-shadow: var(--e-2);
+}
+.pc-menu-item {
+  min-height: var(--c-tap);
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.pc-menu-item[aria-pressed="true"] {
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: 600;
+}
+.pc-menu-item:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+/* Время над ползунком, пока его тянут. */
+.pc-preview {
+  position: absolute;
+  bottom: 100%;
+  transform: translateX(-50%);
+  margin-bottom: 2px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Подсказка о жестах — один раз. Вся подсказка — одна кнопка. */
+.player-hint {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border: none;
+  background: rgba(12, 12, 12, 0.86);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+.player-hint-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.player-hint-row svg {
+  flex: none;
+  color: var(--c-accent);
+}
+.player-hint-ok {
+  align-self: center;
+  margin-top: 6px;
+  padding: 8px 20px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.player-hint:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--c-focus);
+}
+@media (max-height: 420px), (max-width: 360px) {
+  .player-hint {
+    gap: 6px;
+    font-size: 13px;
+  }
+  .player-hint-row svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+/* ---- чат ---- */
+
+.chat-page {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--safe-b);
+  overflow: hidden;
+}
+.chat-page .topbar {
+  flex: none;
+}
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overscroll-behavior: contain;
+}
+/* Во вкладке урока ленте нужна своя высота: страница листается целиком. */
+.tabpanel .chat-log {
+  max-height: 50vh;
+  min-height: 160px;
+}
+.chat-empty {
+  color: var(--c-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 16px 8px;
+  max-width: 36ch;
+  align-self: center;
+}
+.msg {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--r-2);
+  border-bottom-left-radius: 4px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  align-self: flex-start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg.mine {
+  align-self: flex-end;
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+  color: var(--c-accent-ink);
+  border-bottom-left-radius: var(--r-2);
+  border-bottom-right-radius: 4px;
+}
+.msg.pending {
+  opacity: 0.7;
+}
+.msg-note {
+  display: block;
+  font-size: 12px;
+  opacity: 0.85;
+  margin-top: 4px;
+}
+
+.composer {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--c-line);
+  background: var(--c-bg);
+}
+.composer textarea {
+  flex: 1;
+  min-height: var(--c-tap);
+  max-height: 144px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-2);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  font: inherit;
+  /* 16px и не меньше: Safari на iPhone приближает страницу к любому полю с
+     мелким шрифтом, и вёрстка «уезжает» ровно в момент ввода. */
+  font-size: 16px;
+  line-height: 24px;
+  resize: none;
+}
+.composer-send {
+  flex: none;
+  width: var(--c-tap);
+  padding: 0;
+  border-radius: 50%;
+}
+
+/* ---- знакомство: язык и имя ---- */
+
+.onboarding {
+  gap: 16px;
+}
+.lang-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 320px;
+}
+.lang-grid .btn {
+  font-size: 18px;
+  min-height: 56px;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 320px;
+  text-align: left;
+}
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--c-muted);
+}
+.form input {
+  min-height: var(--c-tap);
+  padding: 10px 14px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-1);
+  background: var(--c-surface);
+  font: inherit;
+  color: var(--c-ink);
+  font-size: 16px;
+}
+.field-error {
+  color: var(--c-danger);
+  font-size: 14px;
+}
+
+/* ---- выход из встроенного браузера, лимит устройств, установка ---- */
+
+.btn-big {
+  min-height: 56px;
+  width: 100%;
+  max-width: 360px;
+  font-size: 17px;
+}
+.escape-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  max-width: 360px;
+  padding: 16px;
+  border-radius: var(--r-2);
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+}
+.escape-manual p {
+  font-size: 14px;
+}
+
+.devices {
+  list-style: none;
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+.device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--r-2);
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+}
+.device-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+.device-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.device-title {
+  font-weight: 600;
+}
+.device-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--c-muted);
+}
+.chip-danger {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+}
+.devices-screen .contacts {
+  margin-top: 8px;
+  width: 100%;
+  max-width: 360px;
+}
+
+.install-card {
+  margin-top: 24px;
+  padding: 16px;
+  border-radius: var(--r-3);
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.install-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.install-head h2 {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.install-head p {
+  font-size: 14px;
+}
+.install-icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+}
+.install-card .btn-big {
+  max-width: none;
+}
+.install-steps {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.install-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: var(--r-1);
+  background: var(--c-bg);
+  font-size: 15px;
+}
+.install-step-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+
+/* ---- Карточка рецепта v2 (визуальная система 04.09.2026, §2) ----
+   «Бумажная» карточка: цвета — литералы (кремовый фон, малина, тёмный текст
+   на кремовом), а не тема-зависимые токены, поэтому в тёмной теме она не
+   инвертируется (§9) — выглядит как оригинал из архива школы. */
+.recipe-card-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.recipe-card {
+  position: relative;
+  overflow: hidden;
+  background: var(--c-cream);
+  border-radius: var(--r-4);
+  box-shadow: var(--e-1);
+  padding: 22px 18px 46px;
+  color: #3a2230;
+}
+/* Копия для экспорта в PNG 1080×1920 — вне потока страницы, вне поля зрения,
+   но не display:none: html-to-image должен её измерить и отрисовать. */
+.recipe-card-export {
+  position: absolute;
+  left: -99999px;
+  top: 0;
+  width: 1080px;
+  height: 1920px;
+  padding: 64px 56px 140px;
+  box-shadow: none;
+}
+.recipe-corner {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0.9;
+}
+.recipe-corner-tl {
+  top: -24px;
+  left: -24px;
+}
+.recipe-corner-tr {
+  top: -24px;
+  right: -24px;
+  transform: scaleX(-1);
+}
+.recipe-corner-bl {
+  bottom: -24px;
+  left: -24px;
+  transform: scaleY(-1);
+}
+.recipe-corner-br {
+  bottom: -24px;
+  right: -24px;
+  transform: scale(-1, -1);
+}
+.recipe-card-export .recipe-corner {
+  width: 220px;
+  height: 220px;
+}
+.recipe-badge {
+  position: relative;
+  z-index: 1;
+  display: inline-block;
+  background: #f2c56b;
+  color: #3a2230;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  padding: 6px 14px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+}
+.recipe-card-export .recipe-badge {
+  font-size: 30px;
+  padding: 14px 30px;
+  margin-bottom: 28px;
+}
+.recipe-card-title {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 21px;
+  line-height: 1.25;
+  margin: 0 0 16px;
+}
+.recipe-card-export .recipe-card-title {
+  font-size: 52px;
+  margin-bottom: 36px;
+}
+.recipe-group {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 16px;
+}
+.recipe-group-h {
+  font-weight: 700;
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+.recipe-card-export .recipe-group-h {
+  font-size: 34px;
+  margin-bottom: 18px;
+}
+.recipe-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ingredient-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-1);
+  cursor: pointer;
+  transition: background var(--dur) ease, opacity var(--dur) ease;
+}
+span.ingredient-row {
+  cursor: default;
+}
+.ingredient-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  accent-color: #c9376b;
+}
+.ingredient-row.is-checked {
+  background: rgba(58, 34, 48, 0.08);
+  opacity: 0.6;
+}
+.ingredient-emoji {
+  flex: none;
+  font-size: 17px;
+}
+.ingredient-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ingredient-amount {
+  flex: none;
+  font-weight: 600;
+}
+.ingredient-note {
+  flex-basis: 100%;
+  font-size: 13px;
+  opacity: 0.7;
+}
+.recipe-card-export .ingredient-row {
+  padding: 14px 16px;
+  gap: 16px;
+}
+.recipe-card-export .ingredient-emoji,
+.recipe-card-export .ingredient-name,
+.recipe-card-export .ingredient-amount,
+.recipe-card-export .ingredient-note {
+  font-size: 30px;
+}
+.recipe-card-export .ingredient-row input[type="checkbox"] {
+  width: 32px;
+  height: 32px;
+}
+.recipe-watermark {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  z-index: 1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  opacity: 0.35;
+}
+.recipe-card-export .recipe-watermark {
+  right: 40px;
+  bottom: 36px;
+  font-size: 24px;
+}
+.recipe-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.portion-toggle {
+  display: flex;
+  gap: 6px;
+  background: var(--c-bg);
+  border-radius: 999px;
+  padding: 4px;
+}
+.portion-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--c-ink);
+  transition: background var(--dur) ease, color var(--dur) ease;
+}
+.portion-btn.on {
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+
+/* ---- Экран «Набор инструментов» (визуальная система 04.09.2026, §5) ---- */
+.tools-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  min-height: 40px;
+  padding: 8px 16px;
+  margin: 4px 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.tools-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+.tool-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--c-surface);
+  border-radius: var(--r-2);
+  box-shadow: var(--e-1);
+  padding: 10px;
+}
+.tool-photo {
+  display: block;
+  aspect-ratio: 1;
+  border-radius: var(--r-1);
+  overflow: hidden;
+  background: var(--c-accent-soft);
+}
+.tool-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.tool-photo-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-accent);
+}
+.tool-name {
+  font-weight: 700;
+  font-size: 14px;
+}
+.tool-number {
+  color: var(--c-muted);
+  font-size: 13px;
+}
+.tool-buy {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-accent);
+}

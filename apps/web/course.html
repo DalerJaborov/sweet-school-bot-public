@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Светлая и тёмная — вторая по prefers-color-scheme, полный набор
+         токенов в course.css. theme-color тоже два, по одному на тему. -->
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#FFF8F3" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1C1416" />
+    <!-- viewport-fit=cover — чтобы плеер занимал экран целиком на телефонах с
+         вырезом; safe-area учтена в стилях. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Shirin — мои уроки</title>
+    <!-- Манифест ЛИЧНЫЙ (дизайн доступа 03.09.2026): сервер кладёт в start_url
+         токен спаривания, чтобы установленное с экрана «Домой» приложение
+         вошло само — куки Safari в него не переезжают. crossorigin=
+         use-credentials — иначе браузер запросит манифест без куки сессии. -->
+    <link rel="manifest" href="/api/course/app.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+    <!-- Inter с кириллицей-ext: в ней есть ӣ ӯ ҳ қ ҷ ғ — без неё таджикские
+         буквы рисовались бы запасным шрифтом и «прыгали» в строке.
+         display=swap: текст виден сразу системным шрифтом, Inter доезжает
+         следом — на медленной связи это важнее, чем идеальный первый кадр.
+         Onest 800 — дисплейный акцент карточек уроков (номер, заголовок):
+         визуальная система 04.09.2026, scratchpad/visual-ideas.md §7. Полное
+         покрытие тех же таджикских букв проверено по cmap; запасной в CSS —
+         Montserrat (--font-display в course.css). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Onest:wght@800&display=swap&subset=cyrillic-ext"
+    />
+    <!-- iOS не читает manifest: без этих двух строк добавленная на экран
+         «Домой» страница открывается как обычная вкладка, а вместе с ней
+         теряются гарантии хранилища — то есть офлайн-уроки. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Shirin" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/course/main.tsx"></script>
+  </body>
+</html>

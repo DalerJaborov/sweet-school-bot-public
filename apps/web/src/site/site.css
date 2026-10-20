@@ -1,0 +1,1924 @@
+/**
+ * Стили публичного сайта shirinsweets.online.
+ *
+ * Токены скопированы из src/course/course.css (строки 1–60), чтобы сайт и
+ * приложение ученицы выглядели одним продуктом: та же малина #c9376b, те же
+ * радиусы 12/16/20/24, те же тени, Inter. Тёмной темы у сайта нет намеренно:
+ * сайт — витрина, и она должна совпадать со скриншотами в рекламе.
+ *
+ * Мобильный сначала: одна колонка, крупный текст, цели для пальца 48px;
+ * от 720px — две колонки в сетках, от 1024px — контейнер 1080px.
+ */
+
+:root {
+  color-scheme: light;
+
+  --c-bg: #fff8f3;
+  --c-surface: #ffffff;
+  --c-ink: #2b1d1f;
+  --c-muted: #7a6b6c;
+  --c-line: #f0e3da;
+  --c-accent: #c9376b;
+  --c-accent-2: #e8628f;
+  --c-accent-ink: #ffffff;
+  --c-accent-soft: #fbe8ef;
+  --c-gold: #c9a227;
+  --c-gold-soft: #f7efd8;
+  --c-ok: #1f8a4c;
+  --c-ok-soft: #e3f5ea;
+  --c-warn: #8a5a00;
+  --c-warn-soft: #fdf1dc;
+  --c-danger: #b3261e;
+  --c-danger-soft: #fbe3e1;
+  --c-focus: #4f46e5;
+  --g-hero: linear-gradient(135deg, var(--c-accent) 0%, var(--c-accent-2) 100%);
+
+  --r-1: 12px;
+  --r-2: 16px;
+  --r-3: 20px;
+  --r-4: 24px;
+  --e-1: 0 1px 2px rgba(23, 24, 28, 0.04), 0 6px 20px rgba(23, 24, 28, 0.06);
+  --e-2: 0 10px 30px rgba(23, 24, 28, 0.14);
+  --e-hero: 0 12px 28px rgba(201, 55, 107, 0.32);
+  --c-tap: 48px;
+  --dur: 180ms;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --container: 1080px;
+
+  /* Шрифты: Inter — текст (уже используется приложением ученицы), Montserrat —
+     заголовки/цены. Montserrat выбран как display-шрифт из-за проверенного
+     покрытия subset=cyrillic-ext, где живут таджикские буквы ғ ққ ҳ ҷ ӯ —
+     без этого подмножества они рисуются fallback-шрифтом и ломают ритм. */
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --font-display: "Montserrat", var(--font-body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--c-bg);
+  scroll-behavior: smooth;
+  scroll-padding-top: 72px;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-ink);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+figure {
+  margin: 0;
+}
+ul,
+ol {
+  padding: 0;
+}
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+/* <picture> — просто обёртка над <img>: не должна ломать flex/grid-раскладку. */
+picture {
+  display: contents;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+a {
+  color: var(--c-accent);
+  text-underline-offset: 3px;
+}
+:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -60px;
+  z-index: 100;
+  padding: 12px 16px;
+  background: var(--c-surface);
+  border-radius: var(--r-1);
+  box-shadow: var(--e-2);
+  font-weight: 600;
+}
+.skip-link:focus {
+  top: 12px;
+}
+
+.wrap {
+  width: min(100% - 32px, var(--container));
+  margin-inline: auto;
+}
+
+/* ---- типографика ---- */
+
+.h1,
+.h2 {
+  font-family: var(--font-display);
+  overflow-wrap: anywhere;
+}
+.h1 {
+  font-size: clamp(30px, 6vw, 48px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+}
+.h2 {
+  font-size: clamp(24px, 4.2vw, 34px);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+.h3 {
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.lead {
+  font-size: clamp(17px, 2.4vw, 20px);
+  color: var(--c-muted);
+  max-width: 60ch;
+}
+.muted {
+  color: var(--c-muted);
+}
+.eyebrow {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-accent);
+  margin-bottom: 12px;
+}
+.prose p + p {
+  margin-top: 12px;
+}
+.prose ul {
+  padding-left: 22px;
+  margin-top: 12px;
+}
+.prose li + li {
+  margin-top: 6px;
+}
+
+/* ---- кнопки ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--c-tap);
+  padding: 12px 22px;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: 700;
+  font-size: 16px;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(201, 55, 107, 0.28);
+  transition:
+    transform var(--dur) ease,
+    box-shadow var(--dur) ease,
+    background var(--dur) ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.btn:hover {
+  background: #b82f60;
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+.btn-ghost {
+  background: var(--c-surface);
+  color: var(--c-ink);
+  box-shadow: var(--e-1);
+  border: 1px solid var(--c-line);
+}
+.btn-ghost:hover {
+  background: var(--c-accent-soft);
+}
+.btn-soft {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  box-shadow: none;
+}
+.btn-soft:hover {
+  background: #f7d6e2;
+}
+.btn-lg {
+  min-height: 56px;
+  padding: 14px 28px;
+  font-size: 17px;
+}
+.btn-block {
+  width: 100%;
+}
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* ---- шапка ---- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: rgba(255, 248, 243, 0.86);
+  -webkit-backdrop-filter: saturate(160%) blur(12px);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-bottom: 1px solid var(--c-line);
+}
+.site-header .wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+}
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--c-ink);
+  text-decoration: none;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: 18px;
+  min-height: var(--c-tap);
+}
+.logo-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  box-shadow: var(--e-hero);
+}
+.logo small {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.site-nav {
+  display: none;
+  margin-left: auto;
+  gap: 4px;
+}
+.site-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--c-tap);
+  padding: 0 12px;
+  border-radius: var(--r-1);
+  color: var(--c-ink);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 15px;
+}
+.site-nav a:hover,
+.site-nav a[aria-current="page"] {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+.header-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.site-nav + .header-tools {
+  margin-left: 0;
+}
+.lang-switch {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  box-shadow: var(--e-1);
+}
+.lang-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--c-muted);
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.lang-pill.on {
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+.header-cta {
+  display: none;
+}
+.menu-btn {
+  width: var(--c-tap);
+  height: var(--c-tap);
+  border: none;
+  border-radius: var(--r-1);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.mobile-nav {
+  display: none;
+  border-top: 1px solid var(--c-line);
+  padding: 8px 0 12px;
+}
+.mobile-nav[data-open="true"] {
+  display: block;
+}
+.mobile-nav a {
+  display: flex;
+  align-items: center;
+  min-height: var(--c-tap);
+  padding: 0 8px;
+  border-radius: var(--r-1);
+  color: var(--c-ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+.mobile-nav a:hover,
+.mobile-nav a[aria-current="page"] {
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+
+@media (min-width: 900px) {
+  .site-nav {
+    display: flex;
+  }
+  .menu-btn,
+  .mobile-nav {
+    display: none !important;
+  }
+  .header-cta {
+    display: inline-flex;
+  }
+}
+
+/* ---- секции ---- */
+
+.section {
+  padding: 48px 0;
+}
+.section + .section {
+  padding-top: 8px;
+}
+.section-head {
+  margin-bottom: 24px;
+}
+.section-head .lead {
+  margin-top: 10px;
+}
+@media (min-width: 720px) {
+  .section {
+    padding: 64px 0;
+  }
+  .section + .section {
+    padding-top: 16px;
+  }
+}
+
+.card {
+  background: var(--c-surface);
+  border-radius: var(--r-4);
+  box-shadow: var(--e-1);
+  padding: 24px;
+}
+.card-soft {
+  background: var(--c-accent-soft);
+  box-shadow: none;
+}
+.grid {
+  display: grid;
+  gap: 16px;
+}
+.grid-1 {
+  max-width: 460px;
+  margin-inline: auto;
+}
+@media (min-width: 720px) {
+  .grid-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .grid-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) {
+  .grid-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .grid-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* ---- герой ---- */
+
+.hero {
+  padding: 32px 0 40px;
+}
+.hero-grid {
+  display: grid;
+  gap: 20px;
+}
+/* Фото — герой десктопного макета: карточка слева, кадр 4:5 справа.
+   На мобильном фото уходит под текст, чтобы CTA были видны сразу. */
+@media (min-width: 860px) {
+  .hero-grid.has-photo {
+    grid-template-columns: 1.15fr 0.85fr;
+    align-items: center;
+  }
+}
+.hero-photo {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  max-width: 420px;
+  margin-inline: auto;
+}
+.hero-photo img {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-4);
+  box-shadow: var(--e-2);
+  object-fit: cover;
+  background: var(--c-accent-soft);
+}
+/* Мягкое малиновое свечение позади фото десерта — брендовый акцент вместо
+   голой тени, брифом заявлено явно («soft raspberry glow»). Живёт в
+   отдельном слое без overflow:hidden, иначе его обрежет рамка фото. */
+.hero-photo-glow {
+  position: absolute;
+  inset: -12%;
+  z-index: 0;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(201, 55, 107, 0.5), rgba(201, 55, 107, 0) 72%);
+  filter: blur(10px);
+}
+.hero-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+  padding: 36px 24px 32px;
+  box-shadow: var(--e-hero);
+}
+.hero-card::after {
+  content: "";
+  position: absolute;
+  right: -80px;
+  top: -80px;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  pointer-events: none;
+}
+.hero-card .eyebrow {
+  color: rgba(255, 255, 255, 0.85);
+}
+.hero-card .lead {
+  color: rgba(255, 255, 255, 0.92);
+  margin-top: 14px;
+}
+.hero-card .btn-row {
+  margin-top: 24px;
+}
+.trust-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  list-style: none;
+  margin-top: 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.trust-row li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.hero-card .btn {
+  background: var(--c-surface);
+  color: var(--c-accent);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+}
+.hero-card .btn:hover {
+  background: #fff3f7;
+}
+.hero-card .btn-ghost {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--c-accent-ink);
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: none;
+}
+.hero-card .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* ---- герой-витрина одного курса (heroBold) — полноэкранное фото десерта,
+   крупный заголовок поверх, круглая печать-сертификат, бегущая строка фактов
+   снизу. Приём премиальных лендингов кондитерских брендов, в токенах бренда
+   Ширин (малиновый/золото), не донора-референса. */
+.hero.hero-bold {
+  position: relative;
+  padding: 0;
+}
+.hero-bold-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 640px;
+  overflow: hidden;
+  background: var(--c-ink);
+}
+@media (max-width: 640px) {
+  .hero-bold-media {
+    aspect-ratio: 4 / 5;
+  }
+}
+.hero-bold-media img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 62%;
+}
+.hero-bold-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(23, 14, 16, 0.88) 0%, rgba(23, 14, 16, 0.58) 36%, rgba(23, 14, 16, 0.1) 60%, rgba(23, 14, 16, 0.4) 100%);
+}
+.hero-bold-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+}
+.hero-bold-overlay .wrap {
+  position: relative;
+  width: 100%;
+}
+.hero-bold-card {
+  max-width: 620px;
+  color: #fff;
+}
+.eyebrow-light {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.hero-bold-card .h1 {
+  font-size: clamp(30px, 6vw, 54px);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+  margin-top: 14px;
+  color: #fff;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
+}
+.lead-light {
+  color: rgba(255, 255, 255, 0.94);
+  margin-top: 16px;
+  font-size: 17px;
+  max-width: 520px;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.35);
+}
+.hero-bold .btn-row {
+  margin-top: 26px;
+}
+.hero-bold .trust-row {
+  color: rgba(255, 255, 255, 0.88);
+}
+/* Круглая печать-сертификат — текст по кругу через SVG textPath, не
+   картинка: масштабируется без потери резкости на ретине. */
+.hero-stamp {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 104px;
+  height: 104px;
+  color: var(--c-gold);
+}
+.hero-stamp svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.hero-stamp text {
+  font-size: 8.4px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  fill: currentColor;
+}
+.hero-stamp-core {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+}
+@media (max-width: 640px) {
+  .hero-stamp {
+    display: none;
+  }
+}
+/* Бегущая строка фактов — сплошная полоса под героем, дорожка удвоена и
+   анимация уезжает ровно на половину своей ширины, стык копий незаметен. */
+.hero-ticker {
+  position: relative;
+  z-index: 1;
+  background: var(--c-ink);
+  color: #fff;
+  overflow: hidden;
+  padding: 12px 0;
+}
+.hero-ticker-track {
+  display: flex;
+  width: max-content;
+  gap: 16px;
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 14px;
+  animation: hero-ticker-scroll 26s linear infinite;
+}
+.hero-ticker .dot {
+  opacity: 0.5;
+}
+@keyframes hero-ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-ticker-track {
+    animation: none;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+  list-style: none;
+}
+.stat {
+  background: var(--c-surface);
+  border-radius: var(--r-3);
+  padding: 14px 12px;
+  text-align: center;
+  box-shadow: var(--e-1);
+}
+.stat b {
+  display: block;
+  font-size: clamp(22px, 5vw, 30px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--c-accent);
+  line-height: 1.1;
+}
+.stat span {
+  display: block;
+  font-size: 13px;
+  color: var(--c-muted);
+  margin-top: 4px;
+}
+@media (min-width: 720px) {
+  .hero {
+    padding: 48px 0 56px;
+  }
+  .hero-card {
+    padding: 56px 48px;
+  }
+  .hero-card .h1 {
+    max-width: 16ch;
+  }
+}
+
+/* ---- «обо мне» ---- */
+
+.about {
+  display: grid;
+  gap: 20px;
+  align-items: center;
+}
+.about-figure {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  max-width: 320px;
+  margin-inline: auto;
+  background: var(--c-accent-soft);
+  border-radius: var(--r-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Декоративное «пятно» позади рамки — брифом заявлено явно («illustration
+   in a rounded frame with a decorative blob»). Родитель без overflow:hidden,
+   иначе пятно обрежется по краю рамки. */
+.about-figure::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  width: 72%;
+  height: 72%;
+  right: -14%;
+  bottom: -14%;
+  border-radius: 42% 58% 63% 37% / 45% 40% 60% 55%;
+  background: var(--c-accent);
+  opacity: 0.18;
+}
+.about-figure img {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-4);
+  object-fit: cover;
+}
+.about-figure .emoji {
+  position: relative;
+  z-index: 1;
+}
+.about-figure .emoji {
+  font-size: 96px;
+  line-height: 1;
+}
+@media (min-width: 720px) {
+  .about {
+    grid-template-columns: 320px 1fr;
+    gap: 40px;
+  }
+}
+
+/* ---- форматы, факты, шаги ---- */
+
+.feature {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.feature-icon {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--r-2);
+  background: var(--c-accent-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+}
+.feature .h3 {
+  margin-bottom: 4px;
+}
+.feature p {
+  color: var(--c-muted);
+}
+.feature a {
+  font-weight: 600;
+}
+.facts {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.facts li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.facts .ico {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.steps {
+  list-style: none;
+  counter-reset: step;
+  display: grid;
+  gap: 14px;
+}
+.steps li {
+  counter-increment: step;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.steps li::before {
+  content: counter(step);
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.steps b {
+  display: block;
+}
+.steps p {
+  color: var(--c-muted);
+}
+
+/* ---- карточки курсов ---- */
+
+.course-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0;
+  overflow: hidden;
+}
+.course-cover {
+  aspect-ratio: 16 / 9;
+  background: var(--c-accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 52px;
+}
+.course-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--dur) ease;
+}
+.course-card {
+  transition:
+    transform var(--dur) ease,
+    box-shadow var(--dur) ease;
+}
+.course-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--e-2);
+}
+.course-card:hover .course-cover img {
+  transform: scale(1.03);
+}
+.course-body {
+  padding: 0 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+.course-body p {
+  color: var(--c-muted);
+}
+.course-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--c-bg);
+  color: var(--c-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.chip-ok {
+  background: var(--c-ok-soft);
+  color: var(--c-ok);
+}
+.price {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-top: auto;
+}
+.price s {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--c-muted);
+  margin-left: 8px;
+}
+/* Цена как крупная «таблетка» — брифом заявлено явно («price as a big
+   pill»), а не голая строка цифр среди чипов и текста. */
+.price-pill {
+  display: inline-flex;
+  align-items: baseline;
+  align-self: flex-start;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-family: var(--font-display);
+}
+.bundle-card .price-pill {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--c-accent-ink);
+}
+.bundle-card .price-pill s {
+  color: rgba(255, 255, 255, 0.75);
+}
+.bundle-card {
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+  box-shadow: var(--e-hero);
+}
+.bundle-card .course-body p,
+.bundle-card .chip {
+  color: rgba(255, 255, 255, 0.9);
+}
+.bundle-card .chip {
+  background: rgba(255, 255, 255, 0.18);
+}
+.bundle-card .btn {
+  background: var(--c-surface);
+  color: var(--c-accent);
+}
+.bundle-card .price s {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--c-line);
+  border-radius: var(--r-1);
+  min-height: 16px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+.skeleton-card {
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.notice {
+  padding: 12px 16px;
+  border-radius: var(--r-2);
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+  font-weight: 500;
+}
+.notice-danger {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+}
+.notice-ok {
+  background: var(--c-ok-soft);
+  color: var(--c-ok);
+}
+
+/* ---- аккордеон (меню, FAQ) — нативный details, без JS ---- */
+
+.acc {
+  display: grid;
+  gap: 10px;
+}
+.acc details {
+  background: var(--c-surface);
+  border-radius: var(--r-3);
+  box-shadow: var(--e-1);
+}
+.acc summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 18px;
+  font-weight: 700;
+  border-radius: var(--r-3);
+}
+.acc summary::-webkit-details-marker {
+  display: none;
+}
+.acc summary::after {
+  content: "";
+  margin-left: auto;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--c-muted);
+  border-bottom: 2px solid var(--c-muted);
+  transform: rotate(45deg);
+  transition: transform var(--dur) ease;
+}
+.acc details[open] summary::after {
+  transform: rotate(-135deg);
+}
+.acc .acc-body {
+  padding: 0 18px 18px;
+  color: var(--c-muted);
+}
+.dessert-grid {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.dessert-grid li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--c-tap);
+  padding: 8px 14px;
+  border-radius: var(--r-2);
+  background: var(--c-bg);
+  font-weight: 500;
+}
+.dessert-grid .ico {
+  font-size: 22px;
+}
+
+/* Фотокарусель меню: горизонтальный скролл на мобильном (snap по карточкам),
+   сетка от 720px — там уже есть место, скролл не нужен. */
+.dessert-scroll {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 4px;
+  margin: 0 -16px;
+  padding-inline: 16px;
+}
+.dessert-photo {
+  flex: none;
+  width: 42vw;
+  max-width: 180px;
+  scroll-snap-align: start;
+}
+.dessert-photo img,
+.dessert-photo .ico {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--r-3);
+  object-fit: cover;
+  background: var(--c-accent-soft);
+  box-shadow: var(--e-1);
+  transition:
+    transform var(--dur) ease,
+    box-shadow var(--dur) ease;
+}
+.dessert-photo:hover img,
+.dessert-photo:hover .ico {
+  transform: translateY(-3px);
+  box-shadow: var(--e-2);
+}
+/* Десерт без фото: та же плитка, эмодзи на кремовом градиенте — ряд ровный,
+   заглушка не выглядит «дыркой» рядом с фото. */
+.dessert-photo .ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  background: linear-gradient(160deg, var(--c-surface), var(--c-accent-soft));
+  border: 1px solid var(--c-line);
+}
+/* «Показать все 21» докручивает недостающие десерты сюда — уже сеткой, а
+   не горизонтальным скроллом, раз все карточки теперь на виду. */
+.dessert-more {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+}
+.dessert-more .dessert-photo {
+  width: auto;
+  max-width: none;
+}
+.dessert-photo figcaption {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+@media (min-width: 720px) {
+  .dessert-scroll {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    overflow: visible;
+    margin: 0;
+    padding: 0;
+  }
+  .dessert-photo {
+    width: auto;
+    max-width: none;
+  }
+}
+
+/* «Что понадобится»: 2 колонки на мобильном, 5 — от 1024px (бриф). */
+.tools-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 1024px) {
+  .tools-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+.tool-card {
+  text-align: center;
+  padding: 16px;
+  transition:
+    transform var(--dur) ease,
+    box-shadow var(--dur) ease;
+}
+.tool-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--e-2);
+}
+.tool-card img {
+  border-radius: var(--r-2);
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  margin-inline: auto;
+}
+.tool-card figcaption {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--c-muted);
+}
+
+/* ---- офлайн-курс и форма ---- */
+
+.offline {
+  display: grid;
+  gap: 20px;
+}
+@media (min-width: 900px) {
+  .offline {
+    grid-template-columns: 1.1fr 1fr;
+    align-items: start;
+  }
+}
+.price-tag {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0 16px;
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.price-tag small {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--c-muted);
+}
+.form {
+  display: grid;
+  gap: 14px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field label {
+  font-weight: 600;
+  font-size: 15px;
+}
+.field input {
+  min-height: 52px;
+  padding: 12px 16px;
+  border-radius: var(--r-2);
+  border: 1.5px solid var(--c-line);
+  background: var(--c-surface);
+  font-size: 17px;
+  width: 100%;
+}
+.field input:focus {
+  border-color: var(--c-accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--c-accent-soft);
+}
+.field input[aria-invalid="true"] {
+  border-color: var(--c-danger);
+}
+.field-err {
+  color: var(--c-danger);
+  font-size: 14px;
+}
+.form-note {
+  font-size: 13px;
+  color: var(--c-muted);
+}
+
+/* ---- сертификат ---- */
+
+.cert {
+  display: grid;
+  gap: 20px;
+  align-items: center;
+}
+.cert-art {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--r-4);
+  background: var(--g-hero);
+  box-shadow: var(--e-hero);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 80px;
+  overflow: hidden;
+  border: 3px solid var(--c-gold);
+}
+/* Стилизованная «печать» вместо фото — декоративные кольца по углам,
+   намёк на сертификатную розетку без реального изображения, тонкий золотой
+   акцент вместо белого — подчёркивает «премиальность» документа. */
+.cert-art::before,
+.cert-art::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid rgba(201, 162, 39, 0.55);
+}
+.cert-art::before {
+  width: 140px;
+  height: 140px;
+  left: -40px;
+  bottom: -40px;
+}
+.cert-art::after {
+  width: 90px;
+  height: 90px;
+  right: -20px;
+  top: -20px;
+}
+@media (min-width: 720px) {
+  .cert {
+    grid-template-columns: 1fr 1.2fr;
+    gap: 40px;
+  }
+}
+
+/* ---- отзывы ---- */
+
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.review blockquote {
+  margin: 0;
+  font-size: 17px;
+}
+.review figcaption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--c-muted);
+  font-size: 14px;
+  margin-top: auto;
+}
+.review-who {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.review-who b {
+  color: var(--c-ink);
+  font-weight: 700;
+}
+.review .avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.stars {
+  color: #f0a500;
+  letter-spacing: 2px;
+}
+
+/* ---- контакты ---- */
+
+.contacts {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+.contact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 10px 16px;
+  border-radius: var(--r-3);
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+  color: var(--c-ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+.contact:hover {
+  background: var(--c-accent-soft);
+}
+.contact .ico {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+}
+.contact .ico svg {
+  display: block;
+}
+.contact small {
+  display: block;
+  color: var(--c-muted);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+/* ---- CTA-полоса ---- */
+
+.cta-band {
+  text-align: center;
+  padding: 40px 24px;
+}
+.cta-band .lead {
+  margin: 10px auto 22px;
+}
+.cta-band .btn-row {
+  justify-content: center;
+}
+
+/* ---- крошки ---- */
+
+.crumbs {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--c-muted);
+  padding: 16px 0 0;
+}
+.crumbs li + li::before {
+  content: "›";
+  margin-right: 6px;
+}
+.crumbs a {
+  color: var(--c-muted);
+}
+
+/* ---- подвал ---- */
+
+.site-footer {
+  margin-top: 40px;
+  padding: 36px 0 calc(100px + var(--safe-b));
+  border-top: 1px solid var(--c-line);
+  color: var(--c-muted);
+  font-size: 15px;
+}
+.site-footer .wrap {
+  display: grid;
+  gap: 20px;
+}
+.footer-phone {
+  margin-top: 10px;
+}
+.footer-phone a {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--c-ink);
+  text-decoration: none;
+}
+.footer-phone a:hover {
+  color: var(--c-accent);
+}
+/* 4 круглые кнопки соцсетей с инлайн-SVG (бриф п.12). */
+.social-row {
+  list-style: none;
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.social {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-surface);
+  color: var(--c-accent);
+  box-shadow: var(--e-1);
+  transition:
+    transform var(--dur) ease,
+    background var(--dur) ease;
+}
+.social:hover {
+  background: var(--c-accent-soft);
+  transform: translateY(-2px);
+}
+.social:active {
+  transform: scale(0.95);
+}
+.footer-links {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.footer-links a {
+  color: var(--c-ink);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+}
+.footer-links a:hover {
+  color: var(--c-accent);
+}
+@media (min-width: 720px) {
+  .site-footer .wrap {
+    grid-template-columns: 1fr auto;
+    align-items: start;
+  }
+}
+
+/* ---- плавающая кнопка чата и виджет ---- */
+
+.chat-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + var(--safe-b));
+  z-index: 60;
+  min-height: 56px;
+  padding: 0 20px 0 16px;
+  border-radius: 999px;
+  border: none;
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  font-weight: 700;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(201, 55, 107, 0.4);
+  transition: transform var(--dur) ease;
+}
+.chat-fab:active {
+  transform: scale(0.96);
+}
+.chat-fab[hidden] {
+  display: none;
+}
+/* На телефоне подпись прячем — круглая кнопка-иконка (как у WhatsApp/Intercom)
+   перекрывает намного меньше контента, чем широкая плашка с текстом; имя
+   кнопки для скринридера остаётся через aria-label. С 720px места достаточно,
+   возвращаем подпись и обычную форму пилюли. Раньше здесь FAB поднимался над
+   нижней липкой CTA-панелью — панель убрана (владелец 04.09.2026), поднимать
+   больше не над чем. */
+@media (max-width: 719px) {
+  .chat-fab {
+    width: 56px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  .chat-fab-label {
+    display: none;
+  }
+}
+
+.chat-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(23, 24, 28, 0.35);
+}
+.chat-panel {
+  position: fixed;
+  z-index: 80;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: min(92dvh, 720px);
+  background: var(--c-surface);
+  border-radius: var(--r-4) var(--r-4) 0 0;
+  box-shadow: var(--e-2);
+  display: flex;
+  flex-direction: column;
+  animation: sheet-in var(--dur) ease-out;
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+@media (min-width: 720px) {
+  .chat-panel {
+    left: auto;
+    right: 24px;
+    bottom: 24px;
+    width: 400px;
+    height: min(80dvh, 640px);
+    border-radius: var(--r-4);
+  }
+  .chat-backdrop {
+    background: transparent;
+  }
+}
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 18px;
+  border-bottom: 1px solid var(--c-line);
+}
+.chat-head .avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--g-hero);
+  color: var(--c-accent-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+.chat-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.chat-head p {
+  font-size: 13px;
+  color: var(--c-muted);
+}
+.chat-head .icon-btn {
+  margin-left: auto;
+}
+.icon-btn {
+  flex: none;
+  width: var(--c-tap);
+  height: var(--c-tap);
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--c-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.icon-btn:hover {
+  background: var(--c-bg);
+}
+.chat-log {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--c-bg);
+}
+.chat-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--c-muted);
+  max-width: 30ch;
+}
+.msg {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+  font-size: 15px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg a {
+  font-weight: 600;
+}
+.msg-client {
+  align-self: flex-end;
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+  border-bottom-right-radius: 6px;
+  box-shadow: none;
+}
+.msg-client a {
+  color: inherit;
+}
+.msg-bot,
+.msg-owner {
+  align-self: flex-start;
+  border-bottom-left-radius: 6px;
+}
+.msg img {
+  border-radius: 12px;
+  margin-top: 6px;
+  max-height: 240px;
+  width: auto;
+}
+.msg time {
+  display: block;
+  font-size: 11px;
+  opacity: 0.65;
+  margin-top: 4px;
+  text-align: right;
+}
+.msg-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--c-accent);
+  color: var(--c-accent-ink) !important;
+  text-decoration: none;
+  font-weight: 700;
+}
+.typing {
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--c-surface);
+  box-shadow: var(--e-1);
+}
+.typing i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-muted);
+  animation: blink 1.2s infinite;
+}
+.typing i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.chat-err {
+  margin: 0 16px;
+  padding: 10px 14px;
+  border-radius: var(--r-1);
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  font-size: 14px;
+}
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 12px calc(10px + var(--safe-b));
+  border-top: 1px solid var(--c-line);
+  background: var(--c-surface);
+}
+.composer textarea {
+  flex: 1;
+  min-height: var(--c-tap);
+  max-height: 144px;
+  padding: 12px 14px;
+  border-radius: var(--r-3);
+  border: 1.5px solid var(--c-line);
+  background: var(--c-bg);
+  font-size: 16px;
+  line-height: 24px;
+  resize: none;
+}
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+.composer .icon-btn {
+  background: var(--c-bg);
+}
+.composer .send {
+  background: var(--c-accent);
+  color: var(--c-accent-ink);
+}
+.composer .send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.attach-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-size: 14px;
+  color: var(--c-muted);
+  border-top: 1px solid var(--c-line);
+}
+.attach-preview img {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+.attach-preview button {
+  margin-left: auto;
+  min-height: 40px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-bg);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* ---- липучий CTA снизу (мобильный) ---- */
+
+/* Нижняя панель ОТКЛЮЧЕНА (владелец, 04.09): вместе с кнопкой чата и
+   кнопками в hero три кнопки внизу телефона съедали четверть экрана.
+   Кнопка чата «Спросить / Купить» покрывает оба сценария. */
+.sticky-cta {
+  display: none !important;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px calc(10px + var(--safe-b));
+  background: var(--c-surface);
+  border-top: 1px solid var(--c-line);
+  box-shadow: 0 -6px 20px rgba(23, 24, 28, 0.08);
+}
+.sticky-cta .btn {
+  flex: 1;
+  min-width: 0;
+  padding-inline: 12px;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (min-width: 720px) {
+  .sticky-cta {
+    display: none;
+  }
+}
+/* Чат открыт (data-chat-open="1" на <html>, выставляет чат-виджет) — не
+   перекрываем его своей панелью. */
+:root[data-chat-open="1"] .sticky-cta {
+  display: none;
+}
+/* Резерв места снизу под липучую панель на мобильном, чтобы контент/подвал
+   не оказались под ней. */
+@media (max-width: 719px) {
+  body {
+    padding-bottom: calc(64px + var(--safe-b));
+  }
+}

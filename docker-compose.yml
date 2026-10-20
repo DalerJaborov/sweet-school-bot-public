@@ -1,0 +1,43 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      # connection_limit=1 — у SQLite один писатель физически. Пул из
+      # нескольких соединений не ускоряет запись, а превращает её в гонку с
+      # ошибками "database is locked"; очередь лучше держать в Prisma.
+      DATABASE_URL: file:/data/bot.db?connection_limit=1&socket_timeout=15
+      PORT: "4100"
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      IG_PROXY_BASE: ${IG_PROXY_BASE:-}
+      IG_PROXY_KEY: ${IG_PROXY_KEY:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # Временные файлы перекодировки — на том же томе, что и данные. /tmp
+      # контейнера живёт на оверлее корневого диска, и HLS двухгигабайтного
+      # урока (исходник + две дорожки) забил бы его целиком.
+      TMPDIR: /data/tmp
+    volumes:
+      - bot-data:/data
+    expose:
+      - "4100"
+    # Дать время дослать ответы клиенткам и закрыть базу: по умолчанию Docker
+    # шлёт SIGKILL через 10 с, ровно когда наш собственный аварийный выход
+    # тоже срабатывает (index.ts gracefulShutdown).
+    stop_grace_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    # Наружу не смотрит: снаружи стоит Caddy, он и держит TLS.
+    ports:
+      - "127.0.0.1:8091:80"
+
+volumes:
+  bot-data:

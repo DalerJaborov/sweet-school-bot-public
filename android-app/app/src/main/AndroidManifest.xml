@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Загрузка страницы курса и проверка наличия сети — больше ничего не -->
+    <!-- нужно: ни камеры, ни микрофона, ни доступа к файлам напрямую. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.ShirinSweets.Splash"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:theme="@style/Theme.ShirinSweets.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Android App Links: ссылка на курс из Instagram-директ/WhatsApp/чата
+                 сайта (https://shirinsweets.online/course, /course/..., короткие
+                 /l/<код>) открывается прямо в приложении, а не в браузере — если
+                 приложение установлено И Google подтвердил владение доменом
+                 (android:autoVerify="true" сверяет это с
+                 apps/web/public/.well-known/assetlinks.json на сервере).
+                 Без подтверждения система просто покажет диалог выбора приложения,
+                 ничего не сломается. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="shirinsweets.online" android:path="/course" />
+                <data android:scheme="https" android:host="shirinsweets.online" android:pathPrefix="/course/" />
+                <data android:scheme="https" android:host="shirinsweets.online" android:pathPrefix="/l/" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,0 +1,42 @@
+{
+  "name": "@sweet-school/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run pages && vite",
+    "pages": "node scripts/build-site-pages.mjs",
+    "build": "npm run pages && tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src/",
+    "format": "prettier --write src/",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "images": "node scripts/enhance-images.mjs && node scripts/make-covers.mjs"
+  },
+  "dependencies": {
+    "hls.js": "^1.7.2",
+    "html-to-image": "^1.11.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.8",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@typescript-eslint/eslint-plugin": "^8.69.0",
+    "@typescript-eslint/parser": "^8.69.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.9.6",
+    "puppeteer-core": "^25.10.0",
+    "sharp": "^0.35.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^3.2.7"
+  }
+}

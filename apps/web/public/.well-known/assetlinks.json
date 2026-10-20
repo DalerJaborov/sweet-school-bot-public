@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "online.shirinsweets.course",
+      "sha256_cert_fingerprints": [
+        "6D:39:A4:FD:99:F1:08:D7:B2:A0:14:D3:7A:F4:43:9B:D6:5C:A8:1C:AA:20:EF:F2:4A:0D:04:91:29:2D:87:9A"
+      ]
+    }
+  }
+]

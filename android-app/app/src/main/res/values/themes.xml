@@ -1,0 +1,18 @@
+<resources>
+    <!-- Обычная тема приложения — сам WebView перекрывает экран целиком, так
+         что фон темы виден лишь на долю секунды между запуском и отрисовкой. -->
+    <style name="Theme.ShirinSweets" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/white</item>
+        <item name="colorPrimary">@color/raspberry</item>
+        <item name="colorPrimaryDark">@color/raspberry</item>
+    </style>
+
+    <!-- Заставка для API ниже 31 (нет системного Splash Screen API): просто
+         фон темы активности на момент холодного старта — фирменный малиновый
+         цвет с логотипом по центру, до отрисовки первого кадра WebView.
+         На API 31+ эта тема переопределена в values-v31/themes.xml и вместо
+         неё используется настоящий android:style/Theme.SplashScreen. -->
+    <style name="Theme.ShirinSweets.Splash" parent="Theme.ShirinSweets">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
+</resources>
