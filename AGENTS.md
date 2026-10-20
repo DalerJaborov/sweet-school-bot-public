@@ -5,4 +5,3 @@ Use DalerJaborov/sweet-school-bot-public, branch from current origin/main. Histo
 The existing production checkout now tracks this public main. Verify production health separately from GitHub checks. Preserve persistent Docker volumes and server configuration.
 
 The Android APK is retained as a separate server artifact; copy the operator-provided APK to apps/web/public/app/shirin-sweets.apk before a production web build. The Git source and cloud tests intentionally exclude this binary.
-
