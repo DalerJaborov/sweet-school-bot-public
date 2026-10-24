@@ -107,6 +107,16 @@ function contentTypeFor(pathname) {
   return "video/mp2t";
 }
 
+function savedLessonAllowed(view, pathname) {
+  const match = /^\/offline\/(?:manifest|key|poster)\/([A-Za-z0-9_-]+)$|^\/offline\/seg\/([A-Za-z0-9_-]+)\/\d+\.ts$|^\/offline\/photo\/([A-Za-z0-9_-]+)\/\d+$/.exec(pathname);
+  const lessonId = match && (match[1] || match[2] || match[3]);
+  if (!lessonId) return false;
+  const courses = Array.isArray(view?.courses) && view.courses.length ? view.courses : view?.course ? [view.course] : [];
+  return courses.some((course) => Array.isArray(course?.modules) && course.modules.some((module) =>
+    Array.isArray(module?.lessons) && module.lessons.some((lesson) => lesson?.id === lessonId && lesson.ready === true)
+  ));
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
@@ -115,7 +125,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       readBlob("me", "meta").then(async (saved) => {
         const until = saved?.view?.offlineUntil;
-        if (typeof until !== "string" || !(Date.parse(until) > Date.now())) {
+        if (typeof until !== "string" || !(Date.parse(until) > Date.now()) || !savedLessonAllowed(saved?.view, url.pathname)) {
           return new Response("Reconnect to renew lesson access", { status: 403, headers: { "Cache-Control": "no-store" } });
         }
         const data = await readBlob(url.pathname);

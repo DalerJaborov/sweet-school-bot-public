@@ -78,6 +78,7 @@ const FORWARDED_TO_OWNER_TEXT: Record<ClientLanguage, string> = {
 };
 
 export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: { id: string }): Promise<void> {
+  if (await isBotFrozen()) return;
   // Отметка ДО отправки и атомарно (условие в самом UPDATE): два разбора того
   // же чека почти одновременно — второй получит count=0 и промолчит. Лучше не
   // прислать сообщение вовсе, чем прислать дважды.
@@ -93,6 +94,7 @@ export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: 
     select: { text: true },
   });
   const text = FORWARDED_TO_OWNER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  if (await isBotFrozen()) return;
   await sendToContact(contact, text)
     .then((mid) => {
       if (mid) return recordOutgoingMessage(contact.id, text, mid);
@@ -115,6 +117,7 @@ async function askOwner(
   verdict: { amount: number | null; receiptAt: Date | null; imageUrl: string | null },
   reason: string
 ): Promise<void> {
+  if (await isBotFrozen()) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken || !verdict.imageUrl) return;
 
@@ -137,6 +140,7 @@ async function askOwner(
 
   const needsCourseChoice = verdict.amount == null;
   for (const chatId of recipients) {
+    if (await isBotFrozen()) return;
     await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice });
   }
 }
@@ -242,6 +246,9 @@ export async function handleReceiptVerdict(
   let linkSent = false;
   if (isClean && plan && plan.grant.length > 0) {
     const granted = await grantCourses(contact, plan, amount as number, verdict);
+    // grantCourses can pause and roll back its own new purchase. Do not turn
+    // that pause into a processed receipt, escalation or screenshot request.
+    if (await isBotFrozen()) return;
     linkSent = granted.length > 0;
     if (linkSent) {
       reason = `${reason} (${plan.note})`;
@@ -268,6 +275,7 @@ export async function handleReceiptVerdict(
   };
 
   let saved: { id: string } | null = null;
+  if (await isBotFrozen()) return;
   if (existingId) {
     saved = await prisma.receiptCheck.update({ where: { id: existingId }, data });
   } else {
@@ -277,6 +285,7 @@ export async function handleReceiptVerdict(
       if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") throw err;
       const existing = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
       if (!existing) throw err;
+      if (await isBotFrozen()) return;
       if (existing.contactId === contact.id) {
         saved = await prisma.receiptCheck.update({ where: { id: existing.id }, data });
       } else {
@@ -286,12 +295,14 @@ export async function handleReceiptVerdict(
     }
   }
 
+  if (await isBotFrozen()) return;
   if (linkSent && contact.askedAltScreenshotAt) {
     await prisma.contact.update({ where: { id: contact.id }, data: { askedAltScreenshotAt: null } }).catch((err) => {
       logError("receiptVerdict:resetAltFlag", err);
     });
   }
 
+  if (await isBotFrozen()) return;
   if (saved && askClientFirst) {
     const lastIn = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "IN", text: { not: null } },
@@ -299,11 +310,13 @@ export async function handleReceiptVerdict(
       select: { text: true },
     });
     const text = ALT_SCREENSHOT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    if (await isBotFrozen()) return;
     await sendToContact(contact, text)
       .then((mid) => {
         if (mid) return recordOutgoingMessage(contact.id, text, mid);
       })
       .catch((err) => logError("receiptVerdict:askAltScreenshot", err));
+    if (await isBotFrozen()) return;
     await prisma.contact.update({ where: { id: contact.id }, data: { askedAltScreenshotAt: new Date() } }).catch((err) => {
       logError("receiptVerdict:setAltFlag", err);
     });
@@ -314,9 +327,11 @@ export async function handleReceiptVerdict(
       select: { text: true },
     });
     const text = DUPLICATE_PAYMENT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    if (await isBotFrozen()) return;
     await sendToContact(contact, text)
       .then((mid) => (mid ? recordOutgoingMessage(contact.id, text, mid) : undefined))
       .catch((err) => logError("receiptVerdict:duplicateNotice", err));
+    if (await isBotFrozen()) return;
     await askOwner(contact, saved.id, verdict, reason);
   } else if (saved && needsOwner) {
     if (contact.askedAltScreenshotAt) {

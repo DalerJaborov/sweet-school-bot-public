@@ -13,6 +13,7 @@ vi.mock("../../src/course/delivery.js", () => ({
 }));
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact }));
 import { grantCourses } from "../../src/ai/grantCourses.js";
+import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 
 let db: PrismaMock;
 let frozen = false;
@@ -35,6 +36,38 @@ const contact = fakeContact({ channel: "WEB", paid: true }) as unknown as Contac
 const plan = { grant: ["COURSE70" as const], note: "70" };
 
 describe("in-flight course grants", () => {
+  it.each([undefined, "unchecked-original"])("late grant freeze leaves receipt %s and customer flags untouched", async (existingId) => {
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("purchase").create.mockImplementation(async () => {
+      frozen = true;
+      return { id: "new-purchase-only" };
+    });
+    db.model("receiptCheck").create.mockResolvedValue({ id: "should-not-create" });
+    db.model("receiptCheck").update.mockResolvedValue({ id: "unchecked-original" });
+    await handleReceiptVerdict(contact, {
+      kind: "valid", confidence: 98, amount: 70, receiptAt: null,
+      reason: "valid", imageHash: "original-hash", imageUrl: "/media/original.jpg",
+    }, existingId);
+    expect(db.model("purchase").delete).toHaveBeenCalledExactlyOnceWith({ where: { id: "new-purchase-only" } });
+    expect(db.model("receiptCheck").create).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").update).not.toHaveBeenCalled();
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
+
+  it("freeze during receipt save stops later alternative-screenshot side effects", async () => {
+    db.model("receiptCheck").create.mockImplementation(async () => {
+      frozen = true;
+      return { id: "saved-before-freeze" };
+    });
+    await handleReceiptVerdict(contact, {
+      kind: "suspicious", confidence: 30, amount: null, receiptAt: null,
+      reason: "unclear", imageHash: "original-hash", imageUrl: "/media/original.jpg",
+    });
+    expect(db.model("receiptCheck").create).toHaveBeenCalledOnce();
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
   it("late token-issuance freeze rolls back only the new purchase", async () => {
     issueCourseLink.mockImplementation(async () => {
       frozen = true;
