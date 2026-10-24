@@ -454,7 +454,10 @@ a {
   }
 }
 
-@media (min-width: 1360px) {
+@media (min-width: 1400px) {
+  .site-header .wrap {
+    width: min(100% - 32px, 1360px);
+  }
   .site-nav {
     display: flex;
   }
