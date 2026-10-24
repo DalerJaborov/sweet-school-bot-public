@@ -11,7 +11,7 @@ import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../help
 
 const contact = fakeContact({ id: "ct-1" });
 const purchase = { id: "p1", contactId: "ct-1", courseId: "c1", course: "COURSE70", createdAt: new Date() };
-const device = { id: "d1", contactId: "ct-1", blockedAt: null, offlineKeyExpiresAt: null };
+const device = { id: "d1", contactId: "ct-1", blockedAt: null, offlineKeyExpiresAt: new Date(Date.now() + 86400_000) };
 
 vi.mock("../../src/course/access.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/course/access.js")>();
@@ -59,6 +59,7 @@ describe("ученица и корзина", () => {
     db.model("course").findMany.mockResolvedValue([]);
     const res = await fetch(`${base}/api/course/me`);
     expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     const arg = db.model("course").findMany.mock.calls[0][0] as {
       include: { modules: { include: { lessons: { where: unknown } } } };
     };
@@ -69,7 +70,18 @@ describe("ученица и корзина", () => {
     db.model("lesson").findFirst.mockResolvedValue(null);
     const res = await fetch(`${base}/api/course/lessons/l-trashed/manifest`);
     expect(res.status).toBe(404);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(db.model("lesson").findFirst.mock.calls[0][0]).toMatchObject({ where: { id: "l-trashed", deletedAt: null } });
     expect(db.model("lesson").findUnique).not.toHaveBeenCalled();
+  });
+
+  it("encryption keys are not reused from an HTTP cache after access is revoked", async () => {
+    db.model("lesson").findFirst.mockResolvedValue({
+      id: "l1", module: { courseId: "c1" }, encryptionKey: Buffer.alloc(16).toString("base64"),
+    });
+    const res = await fetch(`${base}/api/course/lessons/l1/key`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect((await res.arrayBuffer()).byteLength).toBe(16);
   });
 });

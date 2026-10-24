@@ -21,7 +21,9 @@ const siteInputs = Object.fromEntries(
 export default defineConfig({
   plugins: [react()],
   build: {
-    rollupOptions: {
+    // Keep the previous device coverage when upgrading the build tools.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
+    rolldownOptions: {
       input: {
         index: resolve(__dirname, "index.html"),
         course: resolve(__dirname, "course.html"),

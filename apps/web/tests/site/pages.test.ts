@@ -62,7 +62,7 @@ describe("Статичные страницы сайта", () => {
     const body = files.get("site.html")!;
     // LCP: прелоад совпадает с кандидатами <img> (imagesrcset/imagesizes), иначе качается дважды.
     expect(body).toMatch(
-      /<link rel="preload" as="image" href="\/img\/covers\/hero\.webp" imagesrcset="[^"]+" imagesizes="[^"]+" fetchpriority="high" \/>/,
+      /<link rel="preload" as="image" href="\/img\/covers\/hero\.avif" type="image\/avif" imagesrcset="[^"]+" imagesizes="[^"]+" fetchpriority="high" \/>/,
     );
     expect(body).toContain(
       '<picture><source type="image/avif" srcset="/img/covers/hero-sm.avif 500w, /img/covers/hero.avif 1000w"',
@@ -88,13 +88,16 @@ describe("Статичные страницы сайта", () => {
     }
   });
 
-  it("курс-страницы: Course с courseMode; у офлайна offers 700 TJS, у онлайна offers нет", () => {
+  it("курс-страницы: Course без выдуманных часов и наличия мест", () => {
     const on = files.get("online-kurs.html")!;
     const off = files.get("kursy-konditera-dushanbe.html")!;
     expect(on).toContain('"courseMode":"online"');
     expect(on).not.toContain('"offers"');
     expect(off).toContain('"courseMode":"onsite"');
-    expect(off).toContain('"price":700,"priceCurrency":"TJS"');
+    expect(off).not.toContain('"offers"');
+    expect(off).not.toContain('"courseSchedule"');
+    expect(on).not.toContain('"courseWorkload"');
+    expect(on).toContain('"inLanguage":"tg"');
   });
 
   it("таджикское зеркало ссылается на /tg/, а приложения — без префикса", () => {
@@ -108,15 +111,46 @@ describe("Статичные страницы сайта", () => {
     expect(localHref("#offline", "tg")).toBe("#offline");
   });
 
-  it("sitemap: все адреса с xhtml:link; robots закрывает приложения", () => {
+  it("sitemap: все адреса с xhtml:link без ложной даты обновления; noindex доступен роботу", () => {
     const sm = files.get("public/sitemap.xml")!;
     expect((sm.match(/<loc>/g) ?? []).length).toBe(18);
     expect(sm).toContain('xhtml:link rel="alternate" hreflang="tg" href="https://shirinsweets.online/tg/faq"');
-    expect(sm).toContain("<lastmod>2026-09-03</lastmod>");
+    expect(sm).not.toContain("<lastmod>");
     const robots = files.get("public/robots.txt")!;
     expect(robots).toContain("Disallow: /api/");
-    expect(robots).toContain("Disallow: /panel");
+    expect(robots).not.toContain("Disallow: /panel");
+    expect(robots).not.toContain("Disallow: /course");
     expect(robots).toContain("Sitemap: https://shirinsweets.online/sitemap.xml");
+  });
+
+  it("noindex страницы исключены из sitemap", () => {
+    const withHidden = { ...content, pages: content.pages.map((p: { slug: string }) => ({ ...p, noindex: p.slug === "faq" })) };
+    const sitemap = renderSite(withHidden).get("public/sitemap.xml")!;
+    expect(sitemap).not.toContain("/faq");
+    expect((sitemap.match(/<loc>/g) ?? []).length).toBe(16);
+  });
+
+  it("прелоад использует обложку самой страницы и её AVIF, а не главную", () => {
+    const body = files.get("online-kurs.html")!;
+    const entry = content.media.heroPages["online-kurs"];
+    const preload = body.match(/<link rel="preload" as="image"[^>]+>/)![0];
+    expect(preload).toContain(`href="${entry.avif || entry.src}"`);
+    expect(preload).not.toContain('href="/img/covers/hero.avif"');
+  });
+
+  it("оплата вручную, реальная программа арт-десертов и актуальные часы", () => {
+    const art = files.get("art-desserty.html")!;
+    expect(art).toContain("10 уроков");
+    expect(art).toContain("Начинки: манго, лимон, клубника");
+    expect(art).not.toMatch(/макарон|Три шоколада|Бот проверяет чек|чек в чат на сайте/i);
+    expect(files.get("tg/art-desserty.html")).toContain("10 дарс");
+    for (const [, body] of html) {
+      expect(body).not.toMatch(/14:00|17:00|Рудаки|Пример отзыва|Мадина|Нигора|Фарзона/);
+    }
+    expect(files.get("kursy-konditera-dushanbe.html")).toContain("13:40–16:30");
+    expect(files.get("site.html")).toContain("Клубника в шоколаде");
+    expect(files.get("tg/index.html")).toContain("Тути фаранг дар шоколад");
+    expect(files.get("404.html")).not.toContain('rel="alternate"');
   });
 
   it("mini-markdown экранирует HTML и локализует ссылки", () => {

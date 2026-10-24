@@ -18,9 +18,10 @@ vi.mock("../../src/funnel.js", () => ({
 }));
 const aiReply = vi.fn(async () => undefined);
 const rescueIncomingImages = vi.fn(async () => []);
+const registerOfflineIfAsked = vi.fn(async () => false);
 vi.mock("../../src/ai.js", () => ({
   aiReply: (...a: unknown[]) => aiReply(...a),
-  registerOfflineIfAsked: vi.fn(async () => false),
+  registerOfflineIfAsked: (...a: unknown[]) => registerOfflineIfAsked(...a),
   rescueIncomingImages: (...a: unknown[]) => rescueIncomingImages(...a),
 }));
 const debounceMessage = vi.fn();
@@ -51,6 +52,7 @@ beforeEach(() => {
   aiReply.mockClear();
   debounceMessage.mockClear();
   rescueIncomingImages.mockClear();
+  registerOfflineIfAsked.mockClear();
 });
 afterEach(() => {
   restorePrisma();
@@ -58,6 +60,19 @@ afterEach(() => {
 });
 
 describe("Фото пришло, но не скачалось — честный ответ, а не молчаливая потеря", () => {
+  it("frozen: preserves funnel routing without receipt intake, signup or AI", async () => {
+    db.model("setting").findUnique.mockImplementation(async (args) => {
+      const key = (args as { where: { key: string } }).where.key;
+      return key === "botFrozen" ? { value: "true" } : null;
+    });
+    await handleMessage({ ...photoEvent, message: { ...photoEvent.message, text: "Вот чек, хочу офлайн 900123456" } });
+    const { handleIncomingDm } = await import("../../src/funnel.js");
+    expect(handleIncomingDm).toHaveBeenCalled();
+    expect(registerOfflineIfAsked).not.toHaveBeenCalled();
+    expect(rescueIncomingImages).not.toHaveBeenCalled();
+    expect(debounceMessage).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
   it("ГЛАВНОЕ: только картинка, без текста, rescue вернул пусто — просим прислать ещё раз и НЕ зовём модель", async () => {
     rescueIncomingImages.mockResolvedValue([]);
     await handleMessage(photoEvent);

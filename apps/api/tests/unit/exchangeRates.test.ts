@@ -20,6 +20,7 @@ describe("toSomoni", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-03T08:00:00Z"));
     invalidateRateCache();
+    vi.mocked(getSetting).mockReset().mockResolvedValue(null);
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
   });

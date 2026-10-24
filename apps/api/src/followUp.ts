@@ -16,6 +16,7 @@ const META_WINDOW_HOURS = 24;
 /** Кому пора отправить догоняющее — и отправка. Дёргается тем же тиком, что и
  *  разносчик шагов воронки. */
 export async function runDueFollowUps(): Promise<void> {
+  if ((await getSetting("botFrozen")) === "true") return;
   // ОБЩИЙ РУБИЛЬНИК, по умолчанию ВЫКЛЮЧЕН. Решение владельца 21.08: никаких
   // напоминаний не слать вовсе — даже в пределах суток. Отдельный флаг у каждого
   // догоняющего оставлен, но без этой настройки не сработает ни один: иначе
@@ -42,6 +43,7 @@ export async function runDueFollowUps(): Promise<void> {
     });
 
     for (const delivery of candidates) {
+      if ((await getSetting("botFrozen")) === "true") return;
       // Уже слали это догоняющее — второй раз нельзя (уникальность в базе).
       try {
         await prisma.followUpSend.create({

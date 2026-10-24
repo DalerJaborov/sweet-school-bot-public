@@ -29,6 +29,9 @@ describe("OfflineForm", () => {
     expect(validatePhone("12345")).toBe(false);
     expect(validatePhone("+992 905 355 355")).toBe(true);
     expect(validatePhone("abc905355355")).toBe(false);
+    expect(validatePhone("+992 (90) 535-53-55")).toBe(true);
+    expect(validatePhone("+++905355355")).toBe(false);
+    expect(validatePhone("1234567890123456")).toBe(false);
   });
 
   it("не отправляет пустую форму, показывает ошибки полей", async () => {
@@ -76,7 +79,9 @@ describe("OfflineForm", () => {
   });
 
   it("429 → подсказка про лимит", async () => {
-    mockFetch((url) => (String(url).includes("/courses") ? json(catalog) : json({ error: "limit", retryAfterSec: 3600 }, 429)));
+    mockFetch((url) =>
+      String(url).includes("/courses") ? json(catalog) : json({ error: "limit", retryAfterSec: 3600 }, 429),
+    );
     render(<OfflineForm t={dict("tg")} lang="tg" priceFallback={700} />);
     fireEvent.change(screen.getByLabelText(dict("tg").formName), { target: { value: "Мадина" } });
     fireEvent.change(screen.getByLabelText(dict("tg").formPhone), { target: { value: "905355355" } });

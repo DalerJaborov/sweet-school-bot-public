@@ -1,10 +1,8 @@
 /**
  * Язык сайта. Каждая страница статична и уже на своём языке (<html lang>,
  * /tg/… — таджикские зеркала), поэтому «переключить язык» = перейти на
- * зеркало. Здесь только память выбора: ssb_site_lang в localStorage, и
- * мягкий перевод на выбранный язык, когда человек пришёл извне (из поиска,
- * из рекламы) на страницу не своего языка. Внутри сайта — не дёргаем:
- * переход по ссылке шапки уже означает выбор.
+ * зеркало. Выбор запоминается при нажатии переключателя. Язык ссылки
+ * всегда сохраняется, в том числе при переходе из поиска и закладок.
  */
 
 import { LANG_STORAGE_KEY, isLang, type Lang } from "./i18n";
@@ -31,16 +29,6 @@ export function rememberLang(lang: Lang): void {
   }
 }
 
-function cameFromThisSite(): boolean {
-  const ref = document.referrer;
-  if (!ref) return false;
-  try {
-    return new URL(ref).origin === location.origin;
-  } catch {
-    return false;
-  }
-}
-
 /** Ссылка на ту же страницу на другом языке — из <link rel="alternate" hreflang>. */
 export function alternateHref(lang: Lang): string | null {
   const link = document.querySelector<HTMLLinkElement>(`link[rel="alternate"][hreflang="${lang}"]`);
@@ -52,17 +40,9 @@ export function alternateHref(lang: Lang): string | null {
  * другой язык (дальше страницу можно не оживлять).
  */
 export function syncLangOnEntry(): boolean {
-  const current = pageLang();
-  const wanted = storedLang();
-  // Запоминаем язык ТОЛЬКО по клику переключателя (bindLangSwitch) — не по
-  // первой открытой странице. Раньше первый визит на русский корень навсегда
-  // помечался как «предпочтение», и прямая ссылка на /tg/… из поиска или от
-  // подруги молча возвращала на русский (найдено дизайн-ревизией 04.09.2026).
-  if (!wanted || wanted === current || cameFromThisSite()) return false;
-  const href = alternateHref(wanted);
-  if (!href) return false;
-  location.replace(href);
-  return true;
+  // The URL is an explicit language choice, including links from search,
+  // bookmarks and shared messages. Stored preferences must not override it.
+  return false;
 }
 
 /** Клик по переключателю в шапке: запоминаем язык, переход делает сама ссылка. */

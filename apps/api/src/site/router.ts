@@ -197,6 +197,22 @@ siteRouter.get(`${API_BASE}/courses`, async (_req: Request, res: Response) => {
 
 // ---------- чат ----------
 
+// Stop before multipart parsing, image rescue and contact creation. The existing
+// Instagram funnels are independent of this customer-chat endpoint.
+siteRouter.use(`${API_BASE}/chat`, async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const [frozen, enabled] = await Promise.all([getSetting("botFrozen"), getSetting("aiEnabled")]);
+    if (frozen === "true" || enabled === "false") {
+      res.setHeader("Cache-Control", "no-store");
+      res.status(503).json({ error: "chat_disabled", salesMode: "manual" });
+      return;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 const LANG = z.enum(["ru", "tg"]);
 
 type Msg = { id: string; from: "client" | "bot" | "owner"; text: string | null; imageUrl: string | null; at: string };
@@ -385,14 +401,15 @@ const signupSchema = z.object({
     .trim()
     .min(9)
     .max(20)
-    .regex(/^[\d+ ]+$/, "цифры, плюс и пробелы"),
+    .regex(/^[\d+\s()-]+$/, "цифры и форматирование телефона")
+    .refine((value) => /^\+?\d{9,15}$/.test(value.replace(/[\s()-]/g, "")), "от 9 до 15 цифр, плюс только в начале"),
   lang: LANG.optional(),
 });
 
 siteRouter.post(`${API_BASE}/offline-signup`, async (req: Request, res: Response) => {
   const parsed = signupSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
-    res.status(400).json({ error: "Нужны имя (2–80 знаков) и телефон (9–20 знаков: цифры, + и пробелы)" });
+    res.status(400).json({ error: "Нужны имя (2–80 знаков) и телефон (9–15 цифр, можно +, пробелы, скобки и дефисы)" });
     return;
   }
   const ip = clientIp(req) ?? "unknown";

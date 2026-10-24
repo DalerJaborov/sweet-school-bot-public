@@ -192,20 +192,19 @@ setInterval(() => {
     // Экстренная пауза (владелец 13.09.2026): «всё, кроме воронки». Разносчик
     // отложенных шагов воронки (runDueDeliveries) — это и есть «воронка», не
     // гасим. followUp/joinReminder/offlineReminder/learningCheckIn пишут
-    // клиентам вне воронки — гасим. dailyReport/receiptRetry/aiReplyRetry/
-    // nightlyLearning/profiles никого из клиентов не трогают напрямую
-    // (aiReplyRetry лишь дёргает aiReply, которая сама молчит при заморозке) —
-    // оставлены как есть.
+    // клиентам вне воронки — гасим. Receipt/AI retry queues also pause:
+    // they must neither issue access nor consume retry attempts while frozen.
+    // Owner reports, learning maintenance and profile refresh remain separate.
     const tasks = [
       withTimeout("worker", runDueDeliveries().catch((err) => logError("worker", err))),
       withTimeout("dailyReport", maybeSendDailyReport().catch((err) => logError("dailyReport", err))),
-      withTimeout("receiptRetry", retryUncheckedReceipts().catch((err) => logError("receiptRetry", err))),
-      withTimeout("aiReplyRetry", retryPendingAiReplies().catch((err) => logError("aiReplyRetry", err))),
       withTimeout("nightlyLearning", maybeRunNightlyLearning().catch((err) => logError("nightlyLearning", err))),
       withTimeout("profiles", refreshProfiles().catch((err) => logError("profiles", err))),
     ];
     if (!frozen) {
       tasks.push(
+        withTimeout("receiptRetry", retryUncheckedReceipts().catch((err) => logError("receiptRetry", err))),
+        withTimeout("aiReplyRetry", retryPendingAiReplies().catch((err) => logError("aiReplyRetry", err))),
         withTimeout("followUp", runDueFollowUps().catch((err) => logError("followUp", err))),
         withTimeout("joinReminder", runJoinReminders().catch((err) => logError("joinReminder", err))),
         withTimeout("offlineReminder", runOfflineReminders().catch((err) => logError("offlineReminder", err))),

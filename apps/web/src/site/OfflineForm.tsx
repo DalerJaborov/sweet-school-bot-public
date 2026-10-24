@@ -24,7 +24,7 @@ export function validateName(v: string): boolean {
 }
 export function validatePhone(v: string): boolean {
   const s = v.trim();
-  return PHONE_RE.test(s) && (s.match(/\d/g)?.length ?? 0) >= 9;
+  return PHONE_RE.test(s) && /^\+?\d{9,15}$/.test(s.replace(/[\s()-]/g, ""));
 }
 
 export function OfflineForm({ t, lang, priceFallback }: { t: Dict; lang: Lang; priceFallback: number }) {

@@ -11,6 +11,7 @@ import { isSettingKey, readSettingsMasked, writeSetting, writeSettings } from ".
 import { styleImportJob, archiveTestimonialsImportJob } from "./services/importService.js";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
 import { courseAdminRouter } from "./course/adminRoutes.js";
+import { manualEnrollmentRouter } from "./course/manualEnrollment.js";
 import { importRouter } from "./course/importRoutes.js";
 import { textsRouter } from "./textsRoutes.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
@@ -1287,6 +1288,7 @@ adminRouter.post("/admin/upload", upload.single("file"), handleUpload);
 // рецепты, устройства и вопросы учениц — это самостоятельный раздел, а admin.ts
 // и так был god-file. Пароль уже проверен выше, повторно не проверяем.
 adminRouter.use(courseAdminRouter);
+adminRouter.use(manualEnrollmentRouter);
 adminRouter.use(importRouter);
 // «Тексты и цены» — цены, реквизиты, сертификат, офлайн (textsRoutes.ts).
 adminRouter.use(textsRouter);
@@ -1375,7 +1377,8 @@ adminRouter.post("/admin/test-send", async (req, res) => {
     return;
   }
   try {
-    const mid = await sendText(parsed.data.igUserId, parsed.data.text);
+    const { withMessagingPermission } = await import("./messaging/automation.js");
+    const mid = await withMessagingPermission("human", () => sendText(parsed.data.igUserId, parsed.data.text));
     res.json({ ok: true, mid });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });

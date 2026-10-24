@@ -2,6 +2,7 @@ import { prisma, getSetting, logError } from "../db.js";
 import { issueMagicLink } from "./access.js";
 import { courseByCode } from "../services/courseCatalog.js";
 import type { Course } from "../courses.js";
+import { assertAutomationAllowed } from "../messaging/automation.js";
 
 /**
  * ЧТО ИМЕННО ОТПРАВИТЬ ЧЕЛОВЕКУ ПОСЛЕ ОПЛАТЫ.
@@ -46,9 +47,12 @@ export async function deliveryModeFor(contact: { channel: string }): Promise<Del
  * сразу перестаёт работать. Так «вернуть доступ» после ошибочного отзыва не
  * оживляет старое письмо, которое могли переслать.
  */
-export async function issueCourseLink(contactId: string): Promise<string | null> {
+export async function issueCourseLink(contactId: string, opts: { automatic?: boolean } = {}): Promise<string | null> {
   const base = await courseLinkBase();
   if (!base) return null;
+  // Fail closed for forgotten flags in future automated callers. Only an
+  // explicitly authorized owner operation may bypass the automation pause.
+  if (opts.automatic !== false) await assertAutomationAllowed();
   // Ссылка — на ЧЕЛОВЕКА: одна на все купленные курсы (см. access.ts).
   const { url, jti } = issueMagicLink(contactId);
   await prisma.contact.update({

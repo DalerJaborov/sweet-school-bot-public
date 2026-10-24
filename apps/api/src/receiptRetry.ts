@@ -8,6 +8,7 @@ import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { handleReceiptVerdict } from "./ai.js";
 import { confirmRequisitesToCustomer } from "./ai/receiptVerdict.js";
 import { MEDIA_DIR } from "./upload.js";
+import { isBotFrozen } from "./messaging/automation.js";
 
 /**
  * Очередь недосмотренных чеков.
@@ -43,6 +44,7 @@ export async function queueUncheckedReceipt(
   imageHash: string,
   imageUrl: string
 ): Promise<string | null> {
+  if (await isBotFrozen()) return null;
   const already = await prisma.receiptCheck.findFirst({ where: { imageHash } });
   if (already) return already.kind === UNCHECKED ? already.id : null;
   try {
@@ -94,6 +96,7 @@ export async function retryUncheckedReceipts(): Promise<void> {
 }
 
 async function runQueue(): Promise<void> {
+  if (await isBotFrozen()) return;
   const pending = await prisma.receiptCheck.findMany({
     where: { kind: UNCHECKED, createdAt: { lt: new Date(Date.now() - RETRY_DELAY_MS) } },
     include: { contact: true },
@@ -111,6 +114,7 @@ async function runQueue(): Promise<void> {
   const model = (await getSetting("aiModel"))?.trim() || "gemini-3.7-flash";
 
   for (const row of pending) {
+    if (await isBotFrozen()) return;
     // confidence переиспользован как счётчик попыток: пока чек не разобран, своего
     // смысла у него нет, а лишняя колонка в схеме ради счётчика — перебор.
     const attempt = row.confidence + 1;
@@ -130,6 +134,9 @@ async function runQueue(): Promise<void> {
       return null;
     });
     const verdict = part ? await checkReceipt(part, model, apiKeys) : null;
+    // A freeze may be enabled while Gemini is working. Leave the original
+    // unchecked row and its retry budget untouched for the owner's review.
+    if (await isBotFrozen()) return;
 
     if (!verdict) {
       // Попытка не удалась — двигаем createdAt, иначе следующий тик возьмёт эту же

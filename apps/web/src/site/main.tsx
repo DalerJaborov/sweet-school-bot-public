@@ -3,8 +3,6 @@ import { createRoot } from "react-dom/client";
 import "./site.css";
 import { dict } from "./i18n";
 import { bindLangSwitch, pageLang, syncLangOnEntry } from "./lang";
-import { openChat } from "./chat/bus";
-import { ChatLauncher } from "./chat/ChatLauncher";
 import { CoursesIsland } from "./CoursesIsland";
 import { OfflineForm } from "./OfflineForm";
 
@@ -45,22 +43,21 @@ if (!syncLangOnEntry()) {
     );
   }
 
-  const chatRoot = document.createElement("div");
-  chatRoot.id = "chat-root";
-  document.body.appendChild(chatRoot);
-  createRoot(chatRoot).render(
-    <StrictMode>
-      <ChatLauncher t={t} lang={lang} />
-    </StrictMode>,
-  );
-
-  /** Кнопки «Купить онлайн-курс» в статичной разметке: data-chat="prefill text". */
+  // Продажи ведёт человек: старые CTA ведут к выбору курса, без запуска бота.
   function bindChatButtons() {
     document.addEventListener("click", (e) => {
       const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-chat]");
       if (!target) return;
       e.preventDefault();
-      openChat(target.dataset.chat || t.chatPrefillDefault);
+      const courseSection = document.getElementById("courses-island");
+      if (courseSection) {
+        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        courseSection.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+        courseSection.setAttribute("tabindex", "-1");
+        courseSection.focus({ preventScroll: true });
+      } else {
+        location.href = `${lang === "tg" ? "/tg" : ""}/online-kurs#kupit`;
+      }
     });
   }
 }

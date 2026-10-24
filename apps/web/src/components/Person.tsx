@@ -43,6 +43,7 @@ export function personTitle(p: PersonLike): string {
 
 /** Подпись под именем: ник, если он есть и уже не занял место имени. */
 export function personSubtitle(p: PersonLike): string {
+  if (p.channel === "MANUAL") return p.igUserId;
   return p.name && p.username ? `@${p.username}` : "";
 }
 
@@ -73,6 +74,7 @@ export function Avatar({ person, size = 40 }: { person: PersonLike; size?: numbe
 
 /** Значок канала — сразу видно, откуда человек пишет. */
 export function ChannelMark({ channel }: { channel?: string | null }) {
+  if (channel === "MANUAL") return <span className="channel channel-web" title="Ручная продажа">✓</span>;
   // Чат на сайте shirinsweets.online: у такого человека нет ни Instagram, ни
   // Messenger — подписываем словом, чтобы владелец не искал его в директе.
   if (channel === "WEB") {

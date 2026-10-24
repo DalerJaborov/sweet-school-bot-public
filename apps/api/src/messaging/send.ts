@@ -3,6 +3,7 @@ import { prisma, WEB_MID_PREFIX } from "../db.js";
 import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
 import { stripRepeatGreeting } from "../greeting.js";
 import { toOwnerVoice } from "../voice.js";
+import { assertMessagingAllowed, withMessagingPermission } from "./automation.js";
 
 /**
  * ЕДИНАЯ ДВЕРЬ НАРУЖУ: «написать этому человеку», где бы он ни писал.
@@ -43,6 +44,13 @@ export async function sendToContact(
   buttons: QuickButton[] = [],
   opts: SendOptions = {}
 ): Promise<string | null> {
+  return opts.byHuman
+    ? withMessagingPermission("human", () => sendContact(contact, text, buttons, opts))
+    : sendContact(contact, text, buttons, opts);
+}
+
+async function sendContact(contact: Recipient, text: string, buttons: QuickButton[], opts: SendOptions): Promise<string | null> {
+  await assertMessagingAllowed();
   const channel = channelOf(contact);
   if (channel !== "WEB") return sendText(contact.igUserId, text, buttons, channel);
 
@@ -51,6 +59,7 @@ export async function sendToContact(
   // Задержки «печатает…» нет нарочно: на сайте ответ и так ждут с спиннером,
   // а лишние секунды — это лишние секунды.
   const clean = toOwnerVoice(await stripRepeatGreeting(contact.id, text).catch(() => text));
+  await assertMessagingAllowed();
   return persistWebOutgoing(contact.id, { text: clean, byHuman: opts.byHuman === true });
 }
 
@@ -61,6 +70,7 @@ export async function sendAttachmentToContact(
   url: string,
   type: "video" | "image" | "audio" | "file" = "image"
 ): Promise<string | null> {
+  await assertMessagingAllowed();
   const channel = channelOf(contact);
   if (channel !== "WEB") return sendAttachment(contact.igUserId, url, type, channel);
   return type === "image"

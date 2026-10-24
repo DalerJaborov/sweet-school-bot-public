@@ -7,6 +7,7 @@ import { SkeletonList } from "../components/Skeleton";
 import { toast } from "../components/Toast";
 import { plural, shortWho, timeAgo } from "../format";
 import { usePaged } from "../hooks/usePaged";
+import { ManualEnrollment } from "../components/ManualEnrollment";
 
 /**
  * КЛИЕНТЫ — список людей, а не таблица данных.
@@ -27,6 +28,8 @@ type Client = {
   id: string;
   igUserId: string;
   username?: string | null;
+  name?: string | null;
+  channel?: string | null;
   paid: boolean;
   paidAt?: string | null;
   personal: boolean;
@@ -42,6 +45,8 @@ type Client = {
   inGroup?: boolean;
   accessRevokedAt?: string | null;
 };
+
+const clientWho = (c: Client) => c.channel === "MANUAL" ? c.name || c.igUserId : shortWho(c.username, c.igUserId);
 
 const STATE_LABEL: Record<string, string> = {
   ACTIVE: "воронка идёт",
@@ -100,7 +105,7 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
   }
 
   async function revoke(c: Client) {
-    const who = shortWho(c.username, c.igUserId);
+    const who = clientWho(c);
     const ok = await confirmDialog({
       title: `Отобрать доступ у ${who}?`,
       message: "Его выгонит из групп курса, отметка об оплате снимется.",
@@ -120,7 +125,7 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
   }
 
   async function restore(c: Client) {
-    const who = shortWho(c.username, c.igUserId);
+    const who = clientWho(c);
     const ok = await confirmDialog({
       title: `Вернуть доступ ${who}?`,
       message: "Ему уйдёт новая ссылка на купленные курсы.",
@@ -150,6 +155,7 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
     <div className="card">
       <h2>{Icons.clients} Ученицы</h2>
       <p className="hint">Кто писал и на каком она шаге. «Личный» — бот с этим человеком молчит навсегда.</p>
+      <ManualEnrollment onSaved={reload} onOpenStudent={onOpenStudent} />
 
       <label className="field" style={{ marginBottom: 10 }}>
         {/* Плейсхолдер — не замена подписи для программ чтения с экрана (он
@@ -192,11 +198,11 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
                 {/* Тап по нику — карточка ученицы: прогресс, устройства, новая
                     ссылка (StudentPage). Кнопка, а не div: нужна с клавиатуры. */}
                 {onOpenStudent ? (
-                  <button type="button" className="linklike" onClick={() => onOpenStudent(c.id)} aria-label={`Открыть карточку ${shortWho(c.username, c.igUserId)}`}>
-                    {shortWho(c.username, c.igUserId)}
+                  <button type="button" className="linklike" onClick={() => onOpenStudent(c.id)} aria-label={`Открыть карточку ${clientWho(c)}`}>
+                    {clientWho(c)}
                   </button>
                 ) : (
-                  shortWho(c.username, c.igUserId)
+                  clientWho(c)
                 )}
               </div>
               <div className="list-sub">
@@ -208,7 +214,8 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
                 {c.spamBlockedAt && <span className="chip chip-err" title={c.spamReason ?? ""}>спам · бот молчит</span>}
                 {c.accessRevokedAt && <span className="chip chip-err">доступ отобран</span>}
                 {c.paid && !c.accessRevokedAt && <span className="chip chip-ok">оплатил</span>}
-                {c.paid && !c.joinedGroupAt && !c.accessRevokedAt && <span className="chip chip-warn">не вошёл в группу</span>}
+                {c.channel === "MANUAL" && c.paid && !c.accessRevokedAt && <span className="chip">платформа курсов</span>}
+                {c.channel !== "MANUAL" && c.paid && !c.joinedGroupAt && !c.accessRevokedAt && <span className="chip chip-warn">не вошёл в группу</span>}
                 {c.joinedGroupAt && <span className="chip chip-ok">в группе</span>}
               </div>
             </div>

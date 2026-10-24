@@ -49,6 +49,7 @@ const TEXT_RU_WEB = "Вижу, что вы ещё не открыли свои �
  *  сообщения клиенту ("Название\nссылка" на каждый курс) — пусто, если выпустить
  *  ничего не вышло (нет токена бота или chatId группы не настроен). */
 async function reissueLinks(contactId: string, botToken: string | undefined, mode: DeliveryMode): Promise<string[]> {
+  if ((await getSetting("botFrozen")) === "true") return [];
   // Режим доставки решает, КУДА зовём: в привычную группу, на платформу или
   // и туда, и туда (см. course/delivery.ts). В веб-режиме токен бота не нужен
   // вовсе — раньше без него функция сразу возвращала пустой список.
@@ -62,7 +63,7 @@ async function reissueLinks(contactId: string, botToken: string | undefined, mod
   // Ссылку на платформу перевыпускаем всегда заново: прошлая гаснет, и
   // пересланная кому-то старая перестаёт работать. Одна на человека — окно
   // одно на все курсы, и одной строки в напоминании достаточно.
-  const sharedWebLink = wantWeb ? await issueCourseLink(contactId) : null;
+  const sharedWebLink = wantWeb ? await issueCourseLink(contactId, { automatic: true }) : null;
   if (wantWeb && !wantTelegram) return sharedWebLink ? [sharedWebLink] : [];
 
   const lines: string[] = [];
@@ -70,6 +71,7 @@ async function reissueLinks(contactId: string, botToken: string | undefined, mod
     const course = purchase.course as Course;
     const webLink = sharedWebLink;
     const chatId = wantTelegram && botToken ? await chatIdFor(course) : null;
+    if ((await getSetting("botFrozen")) === "true") return lines;
     const tgLink = chatId && botToken ? await createOneTimeInviteLink(botToken, chatId) : null;
 
     if (webLink && !tgLink) {
@@ -96,6 +98,7 @@ export async function runJoinReminders(): Promise<void> {
 }
 
 async function sweep(): Promise<void> {
+  if ((await getSetting("botFrozen")) === "true") return;
   const since = new Date(Date.now() - AFTER_HOURS * 3_600_000);
   const mode = await deliveryMode();
   const waiting = await prisma.contact.findMany({
@@ -122,6 +125,7 @@ async function sweep(): Promise<void> {
   const sisterChat = (await ownerAlertChatIds())[0];
 
   for (const contact of waiting) {
+    if ((await getSetting("botFrozen")) === "true") return;
     // Отметку ставим ПЕРВОЙ: напоминание обещано одно, и лучше пропустить его
     // при сбое, чем послать дважды.
     await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
@@ -137,6 +141,7 @@ async function sweep(): Promise<void> {
     // Пришедшая с сайта получает платформу при любом режиме (deliveryModeFor).
     const contactMode = await deliveryModeFor(contact);
     const links = await reissueLinks(contact.id, botToken, contactMode);
+    if ((await getSetting("botFrozen")) === "true") return;
 
     if (windowOpen) {
       // Язык берём по последнему сообщению человека — писать по-русски той, кто

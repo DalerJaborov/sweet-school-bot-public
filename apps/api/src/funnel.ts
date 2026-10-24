@@ -1,6 +1,7 @@
 import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, replyToComment, deleteComment, metaChannelOf, mediaPermalink, type QuickButton, type Channel, type MetaChannel } from "./instagram.js";
 import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
+import { isBotFrozen, withMessagingPermission } from "./messaging/automation.js";
 import { instagramShortcode } from "./ownMedia.js";
 import { aiReplyToComment } from "./ai.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -100,16 +101,16 @@ async function sendStep(
   // выглядел бы как сбой, да и Meta его не примет.
   if (text || buttons.length > 0) {
     if (privateReplyCommentId) {
-      mid = await sendPrivateReply(privateReplyCommentId, text, buttons, metaChannelOf(delivery.contact));
+      mid = await withMessagingPermission("funnel", () => sendPrivateReply(privateReplyCommentId, text, buttons, metaChannelOf(delivery.contact)));
     } else {
-      mid = await sendToContact(delivery.contact, text, buttons);
+      mid = await withMessagingPermission("funnel", () => sendToContact(delivery.contact, text, buttons));
     }
     await recordOutgoingMessage(delivery.contactId, text, mid);
   }
 
   if (step.mediaUrl && step.mediaType) {
     try {
-      await sendAttachmentToContact(delivery.contact, step.mediaUrl, step.mediaType as "video" | "image" | "file");
+      await withMessagingPermission("funnel", () => sendAttachmentToContact(delivery.contact, step.mediaUrl!, step.mediaType as "video" | "image" | "file"));
     } catch (err) {
       // Текст уже ушёл — падение вложения не должно ронять всю цепочку.
       logError("funnel:attachment", err);
@@ -330,6 +331,7 @@ export async function handleComment(input: {
   // Комментарий из одних эмодзи ("❤️🔥", "😍😍😍") — не начало разговора, а реакция.
   // Публичное сердечко в ответ, без запуска всей воронки с кнопками курсов.
   if (isEmojiOnly(input.text)) {
+    if (await isBotFrozen()) return;
     const emoji = THANK_YOU_EMOJI[Math.floor(Math.random() * THANK_YOU_EMOJI.length)];
     await replyToComment(input.commentId, emoji, channel).catch((err) => logError("funnel:emojiReply", err));
     return;

@@ -506,6 +506,12 @@ const SECTIONS = {
   reviews(s, lang, ctx) {
     const { site, ui } = ctx;
     const r = site.reviews;
+    if (r.placeholder) {
+      const text = lang === "tg"
+        ? "Корҳои Ширин ва нашрияҳоро дар саҳифаи расмии Instagram бинед. Пеш аз харид метавонед ба Ширин савол диҳед."
+        : "Посмотрите работы Ширин и публикации на официальной странице Instagram. Перед покупкой можно задать Ширин вопросы о курсе.";
+      return wrap(s, `${sectionHead(s, lang)}<div class="card prose"><p>${esc(text)}</p><p><a class="btn btn-soft" href="${esc(site.contacts.instagram)}" target="_blank" rel="noopener">Instagram · ${esc(site.contacts.instagramHandle)}</a></p></div>`, ctx);
+    }
     const cards = r.items
       .map(
         (it) => `<figure class="card review">
@@ -657,7 +663,7 @@ function ldCourse(site, page, lang, mode) {
     description: L(page.description, lang),
     url,
     provider: { "@id": `${site.origin}/#org` },
-    inLanguage: ["ru", "tg"],
+    inLanguage: "tg",
     educationalCredentialAwarded: lang === "tg" ? "Сертификати Shirin Sweets" : "Сертификат Shirin Sweets",
   };
   if (mode === "online") {
@@ -665,18 +671,11 @@ function ldCourse(site, page, lang, mode) {
     // offers здесь намеренно нет: устаревшая цена в разметке хуже её отсутствия.
     return {
       ...base,
-      hasCourseInstance: { "@type": "CourseInstance", courseMode: "online", courseWorkload: "PT10H" },
+      hasCourseInstance: { "@type": "CourseInstance", courseMode: "online" },
     };
   }
   return {
     ...base,
-    offers: {
-      "@type": "Offer",
-      price: site.offline.price,
-      priceCurrency: site.offline.currency,
-      availability: "https://schema.org/InStock",
-      url,
-    },
     hasCourseInstance: {
       "@type": "CourseInstance",
       courseMode: "onsite",
@@ -690,7 +689,6 @@ function ldCourse(site, page, lang, mode) {
           addressCountry: "TJ",
         },
       },
-      courseSchedule: { "@type": "Schedule", repeatCount: site.offline.days, startTime: "14:00", endTime: "17:00" },
     },
   };
 }
@@ -762,11 +760,17 @@ function renderHead(site, page, lang, ctx) {
   // imagesrcset/imagesizes — чтобы прелоад совпал с тем, что выберет <img>
   // (иначе браузер скачает и прелоад, и другой кандидат). Все герой-страницы
   // (главная, курсы, FAQ…) начинаются с секции hero — прелоадим на каждой.
-  const heroEntry = page.sections[0]?.type === "hero" ? heroMedia(ctx.media) : null;
+  const heroType = page.sections[0]?.type;
+  const heroEntry = ["hero", "heroBold"].includes(heroType) ? heroMedia(ctx.media, page) : null;
+  const preloadSizes = heroType === "heroBold" ? "100vw" : HERO_SIZES;
+  // Preload the same format and candidates as <picture>, avoiding a second
+  // WebP download when the browser selects the AVIF source.
+  const preloadSrc = heroEntry?.avif || heroEntry?.src;
+  const preloadSm = heroEntry?.avif ? heroEntry.avifSm : heroEntry?.srcSm;
   const heroPreload = heroEntry
-    ? `<link rel="preload" as="image" href="${esc(heroEntry.src)}"${
-        heroEntry.srcSm
-          ? ` imagesrcset="${esc(heroEntry.srcSm)} ${Math.round((heroEntry.width || 800) / 2)}w, ${esc(heroEntry.src)} ${heroEntry.width || 800}w" imagesizes="${HERO_SIZES}"`
+    ? `<link rel="preload" as="image" href="${esc(preloadSrc)}"${heroEntry.avif ? ' type="image/avif"' : ""}${
+        preloadSm
+          ? ` imagesrcset="${esc(preloadSm)} ${Math.round((heroEntry.width || 800) / 2)}w, ${esc(preloadSrc)} ${heroEntry.width || 800}w" imagesizes="${preloadSizes}"`
           : ""
       } fetchpriority="high" />`
     : "";
@@ -779,8 +783,7 @@ function renderHead(site, page, lang, ctx) {
     <meta name="description" content="${esc(desc)}" />
     ${page.noindex ? '<meta name="robots" content="noindex, follow" />' : ""}
     <link rel="canonical" href="${esc(url)}" />
-    ${alts}
-    <link rel="alternate" hreflang="x-default" href="${esc(pageUrl(site, page.slug, "ru"))}" />
+    ${page.noindex ? "" : `${alts}\n    <link rel="alternate" hreflang="x-default" href="${esc(pageUrl(site, page.slug, "ru"))}" />`}
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="${esc(site.brand)}" />
     <meta property="og:locale" content="${lang === "tg" ? "tg_TJ" : "ru_RU"}" />
@@ -903,14 +906,14 @@ function renderNotFound(site, pages, now) {
   return renderPage(site, page, "ru", now);
 }
 
-function renderSitemap(site, pages, now) {
-  const lastmod = now.toISOString().slice(0, 10);
-  const urls = pages.flatMap((p) =>
+function renderSitemap(site, pages) {
+  // Build time is not evidence of a substantive content change.
+  const urls = pages.filter((p) => !p.noindex).flatMap((p) =>
     LANGS.map((lang) => {
       const alts = [...LANGS.map((l) => [l, pageUrl(site, p.slug, l)]), ["x-default", pageUrl(site, p.slug, "ru")]]
         .map(([l, href]) => `    <xhtml:link rel="alternate" hreflang="${l}" href="${esc(href)}" />`)
         .join("\n");
-      return `  <url>\n    <loc>${esc(pageUrl(site, p.slug, lang))}</loc>\n    <lastmod>${lastmod}</lastmod>\n${alts}\n  </url>`;
+      return `  <url>\n    <loc>${esc(pageUrl(site, p.slug, lang))}</loc>\n${alts}\n  </url>`;
     }),
   );
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -925,10 +928,7 @@ function renderRobots(site) {
 Allow: /
 Disallow: /api/
 Disallow: /admin/
-Disallow: /course
-Disallow: /l/
-Disallow: /panel
-Disallow: /*?utm_
+# Private application HTML uses noindex; allow crawling to read that rule.
 Sitemap: ${site.origin}/sitemap.xml
 `;
 }

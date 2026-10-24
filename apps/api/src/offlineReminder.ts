@@ -75,6 +75,7 @@ export async function runOfflineReminders(): Promise<void> {
 }
 
 async function sweep(): Promise<void> {
+  if ((await getSetting("botFrozen")) === "true") return;
   const startAt = await courseStartAt();
   if (!startAt) return;
 
@@ -97,6 +98,7 @@ async function sweep(): Promise<void> {
   let reachedInInstagram = 0;
 
   for (const signup of signups) {
+    if ((await getSetting("botFrozen")) === "true") return;
     // Отметку ставим ПЕРВОЙ: напоминание обещано одно, и лучше пропустить его
     // при сбое, чем прислать дважды.
     await prisma.offlineSignup.update({ where: { id: signup.id }, data: { reminderSentAt: new Date() } });

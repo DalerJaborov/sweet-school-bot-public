@@ -44,6 +44,14 @@ export const courseRouter = Router();
 
 const API_BASE = "/api/course";
 
+// Student profiles, device tokens and signed media manifests must not be
+// reused across sessions by browsers or proxies. Explicit offline storage
+// remains in IndexedDB; it does not depend on the HTTP cache.
+courseRouter.use(API_BASE, (_req, res, next) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  next();
+});
+
 /** Ссылка на фото рецепта. Шесть часов: человек читает рецепт на кухне долго,
  *  а перезагружать страницу посреди готовки не должен. */
 const PHOTO_TTL_SEC = 6 * 3600;
@@ -617,9 +625,9 @@ courseRouter.get(`${API_BASE}/lessons/:id/key`, async (req: Request, res: Respon
   const key = Buffer.from(found.lesson.encryptionKey, "base64");
   res
     .type("application/octet-stream")
-    // Ключ кешируется телефоном ради офлайна, но не промежуточными узлами:
-    // private запрещает CDN и прокси держать его у себя.
-    .setHeader("Cache-Control", `private, max-age=${30 * 86400}`);
+    // Offline downloads explicitly save the key to IndexedDB. HTTP caching
+    // must not bypass the next session/device access check after revocation.
+    .setHeader("Cache-Control", "private, no-store");
   res.send(key);
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { renderHook, waitFor, cleanup } from "@testing-library/react";
+import { act, renderHook, waitFor, cleanup } from "@testing-library/react";
 import type { CourseView } from "../src/course/api";
 
 const api = vi.hoisted(() => ({
@@ -128,5 +128,21 @@ describe("useCourse без сети", () => {
     await waitFor(() => expect(result.current.error?.reason).toBe("revoked"));
     expect(offline.clearMe).toHaveBeenCalled();
     expect(result.current.view).toBeNull();
+  });
+
+  it("a background reconnect revocation closes an already open cached course", async () => {
+    const { CourseError } = await import("../src/course/api");
+    api.loadCourse.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    offline.loadMe.mockResolvedValue({ view, savedAt: Date.now() });
+    const { result } = renderHook(() => useCourse());
+    await waitFor(() => expect(result.current.source).toBe("cache"));
+    expect(result.current.view).not.toBeNull();
+
+    api.loadCourse.mockRejectedValue(new CourseError(403, "Доступ закрыт", "revoked"));
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    act(() => { window.dispatchEvent(new Event("online")); });
+    await waitFor(() => expect(result.current.error?.reason).toBe("revoked"));
+    expect(result.current.view).toBeNull();
+    expect(result.current.offline).toEqual({});
   });
 });

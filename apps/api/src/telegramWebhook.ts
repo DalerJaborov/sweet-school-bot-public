@@ -92,8 +92,8 @@ export async function handleTelegramUpdate(rawBody: unknown, secretHeader: strin
   // Runtime-валидация верхней структуры: Telegram иногда меняет формат,
   // и без проверки неожиданные поля приводят к silent undefined-access.
   const BodySchema = z.object({
-    chat_member: z.record(z.unknown()).optional(),
-    message: z.record(z.unknown()).optional(),
+    chat_member: z.record(z.string(), z.unknown()).optional(),
+    message: z.record(z.string(), z.unknown()).optional(),
     callback_query: z.object({
       id: z.string().optional(),
       data: z.string().optional(),

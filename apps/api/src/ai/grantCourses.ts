@@ -12,6 +12,7 @@ import {
   coursePlatformReady,
 } from "../course/delivery.js";
 import type { Contact } from "@prisma/client";
+import { isBotFrozen } from "../messaging/automation.js";
 
 /**
  * Выдача доступа к курсам после подтверждения оплаты.
@@ -24,8 +25,10 @@ export async function grantCourses(
   contact: Contact,
   plan: Allocation,
   amount: number,
-  verdict: { amount: number | null; currency?: string | null }
+  verdict: { amount: number | null; currency?: string | null },
+  opts: { byHuman?: boolean } = {}
 ): Promise<Course[]> {
+  if (!opts.byHuman && (await isBotFrozen())) return [];
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const done: Course[] = [];
 
@@ -48,11 +51,22 @@ export async function grantCourses(
   // чек на уже купленный курс): сообщение не уходило, а прежняя, ещё не
   // открытая ссылка ученицы уже была мертва (ревью 03.09.2026).
   let sharedWebLink: string | null = null;
-  const webLinkOnce = async () => (sharedWebLink ??= wantWeb ? await issueCourseLink(contact.id) : null);
+  const webLinkOnce = async () => {
+    if (!opts.byHuman && (await isBotFrozen())) return null;
+    return (sharedWebLink ??= wantWeb ? await issueCourseLink(contact.id, { automatic: !opts.byHuman }) : null);
+  };
   const webOnly = wantWeb && !wantTelegram;
   const pendingWeb: { purchaseId: string; course: Course }[] = [];
+  const stopIfFrozen = async (): Promise<boolean> => {
+    if (opts.byHuman || !(await isBotFrozen())) return false;
+    if (pendingWeb.length > 0) {
+      await prisma.purchase.deleteMany({ where: { id: { in: pendingWeb.map((p) => p.purchaseId) } } });
+    }
+    return true;
+  };
 
   for (const course of plan.grant) {
+    if (await stopIfFrozen()) return done;
     let purchaseId: string | null = null;
     try {
       const purchase = await prisma.purchase.create({
@@ -73,16 +87,38 @@ export async function grantCourses(
     // показать уроки. Пока backfill не проходил, тихо пропускается.
     await linkPurchaseToCourse(purchaseId, course);
 
+    // Only roll back a new purchase from this invocation; preserve paid access.
+    if (!opts.byHuman && (await isBotFrozen())) {
+      await prisma.purchase.delete({ where: { id: purchaseId } });
+      await stopIfFrozen();
+      return done;
+    }
+
     const chatId = wantTelegram ? await chatIdFor(course) : null;
-    const telegramLink = wantTelegram
-      ? botToken && chatId
-        ? await createOneTimeInviteLink(botToken, chatId)
-        : (await getSetting("courseAccessLink"))?.trim() || null
-      : null;
+    if (!opts.byHuman && (await isBotFrozen())) {
+      await prisma.purchase.delete({ where: { id: purchaseId } });
+      await stopIfFrozen();
+      return done;
+    }
+    let telegramLink: string | null;
+    let webLink: string | null;
+    try {
+      telegramLink = wantTelegram
+        ? botToken && chatId
+          ? await createOneTimeInviteLink(botToken, chatId)
+          : (await getSetting("courseAccessLink"))?.trim() || null
+        : null;
     // Пустой курс (материалы ещё не завезли) не должен уходить как «готово» —
     // если веб-ссылки для него нет, ниже сработает штатное «ссылки нет» и
     // покупка уйдёт на ручную проверку владельцу, а не пропадёт молча.
-    const webLink = wantWeb && (await coursePlatformReady(course)) ? await webLinkOnce() : null;
+      webLink = wantWeb && (await coursePlatformReady(course)) ? await webLinkOnce() : null;
+    } catch (err) {
+      // A late freeze can reject token issuance. It must not leave a newly
+      // granted purchase behind, or delete any pre-existing paid course.
+      await prisma.purchase.delete({ where: { id: purchaseId } });
+      if (await stopIfFrozen()) return done;
+      throw err;
+    }
     const link = telegramLink ?? webLink;
     if (!link) {
       await prisma.purchase.delete({ where: { id: purchaseId } }).catch((err) => {
@@ -97,7 +133,6 @@ export async function grantCourses(
     // Только платформа: сообщение ОДНО на все курсы, отправляем после цикла.
     if (webOnly) {
       pendingWeb.push({ purchaseId, course });
-      done.push(course);
       continue;
     }
 
@@ -109,7 +144,7 @@ export async function grantCourses(
           webLink,
           withTitle: plan.grant.length > 1,
         }) ?? link;
-      const mid = await sendToContact(contact, text);
+      const mid = await sendToContact(contact, text, [], opts);
       if (mid) await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.update({ where: { id: purchaseId }, data: { inviteLink: telegramLink ?? link } });
       // Связь «ссылка → человек» нужна, чтобы узнать его в Telegram при входе.
@@ -153,12 +188,13 @@ export async function grantCourses(
         added: hadBefore > 0,
       }) ?? sharedWebLink;
     try {
-      const mid = await sendToContact(contact, text);
+      const mid = await sendToContact(contact, text, [], opts);
       if (mid) await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.updateMany({
         where: { id: { in: pendingWeb.map((p) => p.purchaseId) } },
         data: { inviteLink: sharedWebLink },
       });
+      done.push(...pendingWeb.map((p) => p.course));
     } catch (err) {
       // Не ушло — откатываем все покупки этой выдачи: деньги не должны быть
       // приняты молча (см. ветку Telegram выше).

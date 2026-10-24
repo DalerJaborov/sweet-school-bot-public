@@ -88,6 +88,7 @@ async function downloadMedia(botToken: string, msg: TgGroupMessage): Promise<Med
  * сырой лог уже копится.
  */
 export async function handleQaGroupMessage(msg: TgGroupMessage): Promise<void> {
+  if ((await getSetting("botFrozen")) === "true") return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
 
@@ -186,6 +187,7 @@ const AUTO_REPLY_PREFIX = "📋 Похожий вопрос уже был:\n\n";
 const AUTO_REPLY_VOICE_ONLY = "📋 Похожий вопрос уже был — голосовой ответ:";
 
 async function attemptAutoReply(botToken: string, msg: TgGroupMessage, studentText: string): Promise<void> {
+  if ((await getSetting("botFrozen")) === "true") return;
   if ((await getSetting("qaAutoReplyEnabled")) !== "true") return;
   const match = await findQaAnswer(studentText);
   if (!match) return;
@@ -194,6 +196,7 @@ async function attemptAutoReply(botToken: string, msg: TgGroupMessage, studentTe
   if (!ownerText && !hasVoice) return;
 
   const chatId = String(msg.chat?.id);
+  if ((await getSetting("botFrozen")) === "true") return;
   await sendTelegramMessage(
     botToken,
     chatId,
@@ -204,6 +207,7 @@ async function attemptAutoReply(botToken: string, msg: TgGroupMessage, studentTe
   // проверенное", что и с текстом. Идёт вторым сообщением следом за меткой,
   // тот же порядок, что у grantCourses/sendReusedMedia (текст, потом файл).
   if (hasVoice) {
+    if ((await getSetting("botFrozen")) === "true") return;
     await sendTelegramVoice(botToken, chatId, match.mediaUrl as string).catch((err) =>
       logError("qaGroup:autoReplyVoice", err)
     );

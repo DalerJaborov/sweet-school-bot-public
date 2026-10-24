@@ -84,12 +84,12 @@ function openDb() {
   });
 }
 
-function readBlob(key) {
+function readBlob(key, store = STORE) {
   return openDb().then(
     (db) =>
       new Promise((resolve) => {
-        const t = db.transaction(STORE, "readonly");
-        const req = t.objectStore(STORE).get(key);
+        const t = db.transaction(store, "readonly");
+        const req = t.objectStore(store).get(key);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => resolve(undefined);
         t.oncomplete = () => db.close();
@@ -113,7 +113,12 @@ self.addEventListener("fetch", (event) => {
   // Сохранённое видео и картинки: отдаём из памяти телефона.
   if (url.origin === self.location.origin && url.pathname.startsWith("/offline/")) {
     event.respondWith(
-      readBlob(url.pathname).then((data) => {
+      readBlob("me", "meta").then(async (saved) => {
+        const until = saved?.view?.offlineUntil;
+        if (typeof until !== "string" || !(Date.parse(until) > Date.now())) {
+          return new Response("Reconnect to renew lesson access", { status: 403, headers: { "Cache-Control": "no-store" } });
+        }
+        const data = await readBlob(url.pathname);
         if (!data || data.byteLength === 0) {
           // Урока в памяти нет — честный 404, чтобы плеер сразу перешёл к
           // сетевому источнику, а не ждал таймаута.

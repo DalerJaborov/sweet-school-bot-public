@@ -16,6 +16,7 @@ export default defineConfig({
     // Модульное состояние (кэш курсов, флаги воркеров) не должно течь между
     // файлами — каждый файл в своём изоляте.
     isolate: true,
+    clearMocks: true,
     restoreMocks: true,
   },
 });

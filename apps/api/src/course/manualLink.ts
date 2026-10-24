@@ -135,7 +135,7 @@ async function answer(argument: string, reply: (body: string) => Promise<unknown
   }
 
   // Ссылка одна на человека: внутри все его курсы.
-  const url = await issueCourseLink(contact.id);
+  const url = await issueCourseLink(contact.id, { automatic: false });
   if (!url) {
     await reply("Адрес платформы не задан в настройках — ссылку собрать не из чего.");
     return;

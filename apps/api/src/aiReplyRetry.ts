@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
+import { isBotFrozen } from "./messaging/automation.js";
 
 /**
  * Очередь ответов, которые ИИ НИ РАЗУ не дал — все ключи/модели Gemini отказали.
@@ -37,6 +38,7 @@ function delayFor(attempt: number): number {
 /** Кладёт ход в очередь — вызывать сразу после провала aiReply (сам текст —
  *  то же, что было передано в неё, включая склейку дебаунса). */
 export async function queuePendingAiReply(contactId: string, text: string): Promise<void> {
+  if (await isBotFrozen()) return;
   if (!text) return;
   const lastIn = await prisma.message.findFirst({
     where: { contactId, direction: "IN" },
@@ -57,6 +59,7 @@ export async function retryPendingAiReplies(): Promise<void> {
 }
 
 async function runQueue(): Promise<void> {
+  if (await isBotFrozen()) return;
   const due = await prisma.pendingAiReply.findMany({
     where: { nextAttemptAt: { lte: new Date() } },
     include: { contact: true },
@@ -65,6 +68,7 @@ async function runQueue(): Promise<void> {
   });
 
   for (const row of due) {
+    if (await isBotFrozen()) return;
     // Пришло более свежее входящее с момента постановки — эта попытка устарела:
     // новое сообщение либо уже своя запись в очереди, либо на него уже ответили
     // обычным ходом. Повторять СТАРЫЙ текст поверх нового разговора нельзя.
@@ -102,6 +106,7 @@ async function runQueue(): Promise<void> {
       logError("aiReplyRetry:attempt", err);
     }
 
+    if (await isBotFrozen()) return;
     const sentNow = await prisma.message.findFirst({
       where: { contactId: row.contactId, direction: "OUT", createdAt: { gt: row.snapshotAt } },
     });

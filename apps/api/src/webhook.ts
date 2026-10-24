@@ -185,8 +185,8 @@ webhookRouter.post(["/webhooks/instagram", "/webhooks/messenger"], async (req, r
     object: z.enum(["instagram", "page"]),
     entry: z.array(z.object({
       id: z.string().optional(),
-      messaging: z.array(z.record(z.unknown())).optional(),
-      changes: z.array(z.record(z.unknown())).optional(),
+      messaging: z.array(z.record(z.string(), z.unknown())).optional(),
+      changes: z.array(z.record(z.string(), z.unknown())).optional(),
     }).passthrough()),
   }).passthrough();
   const parsed = BodySchema.safeParse(req.body);
@@ -461,7 +461,8 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
    */
   const voice = attachments.find((a) => a.kind === "audio");
   let recognized: string | null = null;
-  if (!text && voice) {
+  const frozen = (await getSetting("botFrozen")) === "true";
+  if (!frozen && !text && voice) {
     recognized = await voiceToText(voice.url).catch((err) => {
       logError("webhook:incomingVoice", err);
       return null;
@@ -523,6 +524,13 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
       where: { id: contact.id },
       data: { personal: true, personalReason: `Похоже на личную переписку: «${textOrVoice.slice(0, 100)}»` },
     });
+    return;
+  }
+
+  // Frozen means funnel-only, including before receipt intake and signup.
+  // Preserve the incoming history and human takeover rules, then stop here.
+  if (frozen || (await getSetting("botFrozen")) === "true") {
+    if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload);
     return;
   }
 

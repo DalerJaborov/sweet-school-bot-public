@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
+import { isBotFrozen } from "../messaging/automation.js";
 import { sendReceiptForReview } from "../telegram.js";
 import { allocate } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
@@ -155,6 +156,7 @@ export async function handleReceiptVerdict(
   },
   existingId?: string
 ): Promise<void> {
+  if (await isBotFrozen()) return;
   let kind = verdict.kind;
   let reason = verdict.reason;
 
@@ -235,6 +237,7 @@ export async function handleReceiptVerdict(
   }
 
   const isClean = kind === "valid" && verdict.confidence >= RECEIPT_CONFIDENCE_THRESHOLD && amount != null;
+  if (await isBotFrozen()) return;
 
   let linkSent = false;
   if (isClean && plan && plan.grant.length > 0) {

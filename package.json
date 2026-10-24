@@ -14,5 +14,8 @@
     "lint": "npm run lint --workspace=apps/api && npm run lint --workspace=apps/web",
     "typecheck": "npm run typecheck --workspace=apps/api && npm run typecheck --workspace=apps/web",
     "test": "npm test --workspace=apps/api && npm test --workspace=apps/web"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
