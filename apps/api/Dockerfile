@@ -5,7 +5,7 @@ WORKDIR /app
 ARG DEBIAN_MIRROR=deb.debian.org
 # Prisma определяет нужный движок по openssl в системе — без него на этапе
 # сборки она выберет чужую сборку движка.
-RUN sed -i "s|http://deb.debian.org|https://${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+RUN sed -i "s|http://deb.debian.org|http://${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
  && apt-get update && apt-get install -y --no-install-recommends openssl \
  && rm -rf /var/lib/apt/lists/*
 
@@ -27,7 +27,7 @@ ARG DEBIAN_MIRROR=deb.debian.org
 # Prisma для SQLite нужен OpenSSL; в slim-образе его нет.
 # ffmpeg/ffprobe — транскодинг уроков в HLS (src/storage/videoPipeline.ts):
 # без них загруженное видео навсегда остаётся в статусе FAILED.
-RUN sed -i "s|http://deb.debian.org|https://${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+RUN sed -i "s|http://deb.debian.org|http://${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
  && apt-get update && apt-get install -y --no-install-recommends openssl ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
