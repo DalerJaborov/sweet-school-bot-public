@@ -5,6 +5,7 @@ import { findQaAnswer } from "../ai/qaGroupReply.js";
 import { answerFromRecipes } from "./assistant.js";
 import { detectClientLanguage } from "../ai/clientLanguage.js";
 import type { CourseChatMessage, Purchase } from "@prisma/client";
+import { isBotFrozen } from "../messaging/automation.js";
 
 /**
  * ЧАТ УЧЕНИЦЫ С УЧИТЕЛЬНИЦЕЙ.
@@ -54,7 +55,9 @@ export async function receiveQuestion(
     data: { purchaseId: purchase.id, lessonId, fromStudent: true, text, queuedOffline },
   });
 
+  if (await isBotFrozen()) return chatHistory(historyFor);
   const auto = await autoAnswer(purchase, text, lessonId);
+  if (await isBotFrozen()) return chatHistory(historyFor);
   if (auto) {
     await prisma.courseChatMessage.create({
       data: { purchaseId: purchase.id, lessonId, fromStudent: false, text: auto, byBot: true },
@@ -75,6 +78,7 @@ export async function receiveQuestion(
 const HOURLY_CAP = 20;
 
 async function autoAnswer(purchase: Purchase, text: string, lessonId: string | null): Promise<string | null> {
+  if (await isBotFrozen()) return null;
   const enabled = (await getSetting("qaAutoReplyEnabled"))?.trim() === "true";
   if (!enabled) return null;
 

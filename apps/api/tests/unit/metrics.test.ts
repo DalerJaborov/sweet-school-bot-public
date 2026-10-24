@@ -273,6 +273,15 @@ describe("metrics: карточка ученицы", () => {
     ]);
   });
 
+  it("manual sales show the student's name and WhatsApp without inventing an Instagram handle", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ ...contact, channel: "MANUAL", username: null, name: "Ученица", igUserId: "+992901234567", offlineSignup: null });
+    db.model("courseChatMessage").count.mockResolvedValue(0);
+    const s = (await buildStudent("c1")) as StudentResponse;
+    expect(s.contact.handle).toBe("Ученица");
+    expect(s.contact.whatsappUrl).toBe("https://wa.me/992901234567");
+    expect(s.contact.instagramUrl).toBeNull();
+  });
+
   it("GET /admin/metrics/student/:id — 404 для чужого id", async () => {
     db.model("contact").findUnique.mockResolvedValue(null);
     const res = await fetch(`${base}/admin/metrics/student/nope`);
@@ -284,7 +293,7 @@ describe("metrics: карточка ученицы", () => {
     const ok = await fetch(`${base}/admin/metrics/student/c1/link`, { method: "POST" });
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ url: "https://school.tj/course?t=new" });
-    expect(issueCourseLink).toHaveBeenCalledWith("c1");
+    expect(issueCourseLink).toHaveBeenCalledWith("c1", { automatic: false });
 
     db.model("purchase").count.mockResolvedValue(0);
     const no = await fetch(`${base}/admin/metrics/student/c1/link`, { method: "POST" });

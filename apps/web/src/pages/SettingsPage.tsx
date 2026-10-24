@@ -42,7 +42,7 @@ function defineFields<const K extends string>(fields: readonly FieldDef<K>[]): r
   return fields;
 }
 
-type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled";
+type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "botFrozen";
 
 /**
  * `checkable` — рядом с полем появляется кнопка «Проверить»: она спрашивает у Google
@@ -57,7 +57,7 @@ type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled";
 const FIELDS = defineFields([
   { key: "igToken", label: "Маркер доступа Instagram", secret: true, hint: "Получим при подключении аккаунта Ширин" },
   { key: "verifyToken", label: "Проверочное слово вебхука", hint: "Любая строка — её же вбиваем в настройках приложения Meta" },
-  { key: "appSecret", label: "Секрет приложения Meta", secret: true, hint: "Для проверки подписи вебхука (можно оставить пустым)" },
+  { key: "appSecret", label: "Секрет приложения Meta", secret: true, hint: "Нужен для проверки подлинности вебхуков. Возьмите App Secret из настроек подключённого приложения Meta" },
   { key: "geminiKey", label: "Ключ Gemini", secret: true, hint: "Для ИИ-консультанта" },
   {
     key: "geminiKeysExtra",
@@ -295,6 +295,16 @@ export function SettingsPage() {
       <h2>{Icons.settings} Настройки</h2>
       <p className="hint">Ключи и промт ИИ. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}
+      {values.botFrozen === "true" && (
+        <div className="msg" role="status">
+          <strong>Бот работает только по воронкам.</strong> Свободные ответы, проверка чеков,
+          автоматическая выдача доступа и напоминания покупателям отключены. Покупки
+          обрабатываются вручную в WhatsApp. Оплаченные уроки доступны ученицам.
+        </div>
+      )}
+      {original.current && !values.appSecret && (
+        <p className="msg err">Секрет Meta не задан: подлинность входящих вебхуков не проверяется. Нужен App Secret подключённого приложения.</p>
+      )}
       {/* Первым делом — хранилище видео: без него платформа курсов не работает
           вовсе, а четыре отдельных поля ниже владелец уже пробовал и застрял.
           Поля ниже после вставки заполнятся масками — панель их перечитает
@@ -349,7 +359,7 @@ export function SettingsPage() {
       ))}
       <div className="row" style={{ marginBottom: 14 }}>
         <label className="toggle">
-          <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)} />
+          <input type="checkbox" checked={aiEnabled} disabled={values.botFrozen === "true"} onChange={(e) => setAiEnabled(e.target.checked)} />
           ИИ-консультант отвечает на свободные вопросы
         </label>
       </div>
@@ -368,6 +378,7 @@ export function SettingsPage() {
           <input
             type="checkbox"
             checked={qaAutoReplyEnabled}
+            disabled={values.botFrozen === "true"}
             onChange={(e) => setQaAutoReplyEnabled(e.target.checked)}
           />
           Автоответ в учебной группе — бот повторяет её же прошлый ответ на близко совпавший повторный вопрос

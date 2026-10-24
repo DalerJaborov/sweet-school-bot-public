@@ -43,8 +43,8 @@ import { Watermark } from "./Watermark";
  *    экрана другой камерой; лежит в обёртке, поэтому виден и в полноэкране;
  *  • пауза, когда вкладку свернули, и запрет контекстного меню;
  *  • экран не гаснет, пока идёт видео (Wake Lock, см. useWakeLock);
- *  • попытка записи экрана глушит воспроизведение — на Android и десктопе; на
- *    iOS Apple такой возможности не даёт, там остаётся только знак.
+ *  • вызов getDisplayMedia самой этой страницей ставит урок на паузу.
+ *    Запись из ОС или другой вкладки браузер обнаруживать не позволяет.
  * Настоящая защита купленного файла — шифрование сегментов и срок ключа, они
  * на сервере. Здесь — то, что видно глазами.
  */
@@ -160,9 +160,9 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
     };
   }, [report]);
 
-  // Запись экрана. getDisplayMedia — единственный способ узнать о ней из
-  // браузера, и он есть не везде: на iOS Apple его закрыла, там остаётся
-  // только водяной знак. Подменяем метод, чтобы поймать момент запуска.
+  // This only observes capture initiated by this page. It cannot detect OS
+  // recorders or getDisplayMedia calls in other tabs; the watermark remains
+  // the visible deterrent. Android's native wrapper separately uses FLAG_SECURE.
   useEffect(() => {
     const media = navigator.mediaDevices as MediaDevices | undefined;
     const original = media?.getDisplayMedia;
@@ -289,6 +289,9 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
         ref={videoRef}
         className="player-video"
         playsInline
+        disablePictureInPicture
+        disableRemotePlayback
+        controlsList="nodownload noremoteplayback"
         preload={preloadMode()}
         aria-label={t.videoLabel(title)}
         onContextMenu={(e) => e.preventDefault()}

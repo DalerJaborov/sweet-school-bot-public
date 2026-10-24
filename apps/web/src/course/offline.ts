@@ -151,7 +151,9 @@ export async function saveMe(view: CourseView): Promise<void> {
 }
 
 export async function loadMe(): Promise<CachedMe | undefined> {
-  return getMeta<CachedMe>(META_ME);
+  const saved = await getMeta<CachedMe>(META_ME);
+  const until = saved?.view.offlineUntil;
+  return typeof until === "string" && Date.parse(until) > Date.now() ? saved : undefined;
 }
 
 /** Доступ отобрали или устройство заблокировали — сохранённая картина лжёт, стираем. */

@@ -28,6 +28,15 @@ describe("deliveryMode", () => {
 });
 
 describe("issueCourseLink", () => {
+  it("frozen: automatic issuance cannot rotate an existing student's access", async () => {
+    const db = mockPrisma();
+    db.model("setting").findUnique.mockResolvedValue({ value: "true" });
+    await expect(issueCourseLink("contact-1", { automatic: true })).rejects.toThrow("Bot automation is frozen");
+    await expect(issueCourseLink("contact-1")).rejects.toThrow("Bot automation is frozen");
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    await expect(issueCourseLink("contact-1", { automatic: false })).resolves.toEqual(expect.any(String));
+    expect(db.model("contact").update).toHaveBeenCalledOnce();
+  });
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();

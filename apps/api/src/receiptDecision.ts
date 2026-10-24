@@ -91,7 +91,7 @@ export async function decideReceipt(
     // Запись в историю — даже если отправка не удалась (как и раньше): владелец
     // должен видеть в переписке, что отказ был. Для сайта sendToContact сам
     // кладёт строку и отдаёт mid с префиксом — recordOutgoingMessage не дублирует.
-    const mid = await sendToContact(receipt.contact, rejectText).catch((err) => {
+    const mid = await sendToContact(receipt.contact, rejectText, [], { byHuman: true }).catch((err) => {
       logError("receiptDecision:rejectNotify", err);
       return null;
     });
@@ -141,7 +141,7 @@ export async function decideReceipt(
     return { ok: true, status: "approved_no_link", message: `Ссылка не отправлена: ${plan.note}` };
   }
 
-  const granted = await grantCourses(receipt.contact, plan, amount, { amount: receipt.amount, currency: "TJS" });
+  const granted = await grantCourses(receipt.contact, plan, amount, { amount: receipt.amount, currency: "TJS" }, { byHuman: true });
   if (granted.length === 0) {
     return { ok: false, reason: "no_access_configured", message: "Не настроена группа/ссылка доступа" };
   }

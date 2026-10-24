@@ -92,7 +92,7 @@ describe("Ручная выдача ссылки командой из Telegram"
     await handleManualLinkCommand(msg("/ссылка @malika"));
 
     // Ссылка — на человека: одна на все его курсы.
-    expect(issueCourseLink).toHaveBeenCalledWith("contact-1");
+    expect(issueCourseLink).toHaveBeenCalledWith("contact-1", { automatic: false });
     expect(lastReply()).toContain("token=НОВАЯ");
     expect(lastReply()).toContain("@malika");
     expect(lastReply()).toContain("Малика");

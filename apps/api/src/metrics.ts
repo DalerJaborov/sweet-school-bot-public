@@ -430,12 +430,12 @@ export async function buildStudent(contactId: string): Promise<StudentResponse |
   return {
     contact: {
       id: c.id,
-      handle: c.username ? `@${c.username}` : c.igUserId.length > 8 ? `ID ···${c.igUserId.slice(-6)}` : `ID ${c.igUserId}`,
+      handle: c.channel === "MANUAL" ? c.name || c.igUserId : c.username ? `@${c.username}` : c.igUserId.length > 8 ? `ID ···${c.igUserId.slice(-6)}` : `ID ${c.igUserId}`,
       name: c.name,
       studentName: [c.studentFirstName, c.studentLastName].filter(Boolean).join(" ") || null,
       channel: c.channel,
       instagramUrl: instagramUrlOf(c),
-      whatsappUrl: whatsappUrl(c.offlineSignup?.phone),
+      whatsappUrl: whatsappUrl(c.channel === "MANUAL" ? c.igUserId : c.offlineSignup?.phone),
       paidAt: c.paidAt?.toISOString() ?? null,
       accessRevokedAt: c.accessRevokedAt?.toISOString() ?? null,
       accessIssuedAt: c.accessIssuedAt?.toISOString() ?? null,
@@ -513,7 +513,7 @@ metricsRouter.post("/admin/metrics/student/:contactId/link", async (req, res) =>
     res.status(409).json({ error: "У неё нет действующего курса — ссылку выдавать не за что" });
     return;
   }
-  const url = await issueCourseLink(req.params.contactId);
+  const url = await issueCourseLink(req.params.contactId, { automatic: false });
   if (!url) {
     res.status(409).json({ error: "Адрес платформы не задан в настройках — ссылку собрать не из чего" });
     return;

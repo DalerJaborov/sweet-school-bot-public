@@ -20,8 +20,34 @@ export const LANGUAGES: { code: Lang; label: string; short: string }[] = [
 
 export const LANG_STORAGE_KEY = "ssb_site_lang";
 
-const MONTHS_RU = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
-const MONTHS_TG = ["январ", "феврал", "март", "апрел", "май", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"];
+const MONTHS_RU = [
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
+];
+const MONTHS_TG = [
+  "январ",
+  "феврал",
+  "март",
+  "апрел",
+  "май",
+  "июн",
+  "июл",
+  "август",
+  "сентябр",
+  "октябр",
+  "ноябр",
+  "декабр",
+];
 
 /** Разбор ГГГГ-ММ-ДД без Date: toLocaleDateString для «tg-TJ» в браузерах
  *  непредсказуем, а падеж месяца должен совпадать с карточкой бота. */
@@ -46,13 +72,30 @@ const RU = {
 
   // Карточки онлайн-курсов
   coursesTitle: "Онлайн-курсы",
-  coursesEmpty: "Курсы скоро появятся — напишите нам в чат, подскажем.",
+  coursesEmpty: "Курсы сейчас недоступны. Уточните ближайший набор в WhatsApp.",
+  courseTitle: (_code: string, fallback: string) => fallback,
+  courseDescription: (_code: string, fallback: string | null) => fallback,
+  purchaseTitle: "Как купить курс",
+  purchaseSteps: [
+    "Выберите курс и напишите Ширин в WhatsApp.",
+    "Уточните сумму и способ оплаты у Ширин перед переводом.",
+    "После ручной проверки оплаты Ширин поможет открыть ваши уроки.",
+  ],
+  purchaseNote:
+    "Здесь нет автоматического приёма чеков. Заказ и доступ подтверждает человек в WhatsApp; мгновенный ответ не гарантируется.",
+  orderCourse: (title: string, amount: string) =>
+    `Здравствуйте! Хочу купить онлайн-курс «${title}». На сайте указана цена ${amount}. Подтвердите, пожалуйста, сумму, способ оплаты и как я получу доступ к урокам.`,
+  orderBundle: (titles: string, amount: string) =>
+    `Здравствуйте! Хочу купить комплект: ${titles}. На сайте указана цена ${amount}. Подтвердите, пожалуйста, состав, сумму, способ оплаты и как я получу доступ к урокам.`,
+  whatsappBuy: "Оформить в WhatsApp",
+  whatsappContact: "Спросить в WhatsApp",
   lessonsCount: (n: number) => `${n} ${plural(n, "видеоурок", "видеоурока", "видеоуроков")}`,
-  durationMin: (min: number) => `${Math.round(min / 60)} ч видео`,
+  durationMin: (min: number) =>
+    min < 60 ? `${min} мин видео` : `${Math.floor(min / 60)} ч${min % 60 ? ` ${min % 60} мин` : ""} видео`,
   foreverChip: "навсегда",
   certificateChip: "сертификат",
   buyCourse: "Купить онлайн-курс",
-  buyCourseAria: (title: string) => `Купить курс «${title}» через чат`,
+  buyCourseAria: (title: string) => `Купить курс «${title}» в WhatsApp`,
   bundleTitle: "Оба курса вместе",
   bundleSave: (save: number) => `выгода ${save} сомони`,
   bundleFullPrice: (full: number) => `вместо ${full} сомони`,
@@ -78,7 +121,7 @@ const RU = {
   formSubmit: "Записаться",
   formSending: "Отправляю…",
   formErrName: "Напишите имя — от 2 до 80 букв",
-  formErrPhone: "Проверьте номер: от 9 до 20 знаков, только цифры, «+» и пробелы",
+  formErrPhone: "Проверьте номер: от 9 до 15 цифр, «+» только в начале. Можно пробелы, скобки и дефисы.",
   formErrLimit: "Слишком много заявок с этого устройства. Попробуйте через час или напишите в WhatsApp.",
   formErrGeneric: "Не получилось отправить. Попробуйте ещё раз или напишите в WhatsApp.",
   formSuccessTitle: "Заявка отправлена",
@@ -125,13 +168,34 @@ const TG: Dict = {
   currency: (amount: number, currency: string) => `${amount} ${currency === "TJS" ? "сомонӣ" : currency}`,
 
   coursesTitle: "Курсҳои онлайн",
-  coursesEmpty: "Курсҳо ба зудӣ пайдо мешаванд — дар чат нависед, маслиҳат медиҳем.",
+  coursesEmpty: "Курсҳо ҳоло дастрас нестанд. Дар бораи қабули нав дар WhatsApp пурсед.",
+  courseTitle: (code: string, fallback: string) =>
+    (({ COURSE50: "Арт-десертҳо", COURSE70: "21 навъи ширинӣ" }) as Record<string, string>)[code] ?? fallback,
+  courseDescription: (code: string, fallback: string | null) =>
+    ["COURSE50", "COURSE70"].includes(code)
+      ? "Видеодарсҳои қаннодии Ширин. Бо суръати худ омӯзед ва дар ошхонаи худ такрор кунед."
+      : fallback,
+  purchaseTitle: "Курсро чӣ тавр харидан мумкин аст",
+  purchaseSteps: [
+    "Курсро интихоб кунед ва ба Ширин дар WhatsApp нависед.",
+    "Пеш аз интиқол маблағ ва тарзи пардохтро бо Ширин аниқ кунед.",
+    "Пас аз санҷиши пардохт Ширин барои кушодани дарсҳо кӯмак мекунад.",
+  ],
+  purchaseNote:
+    "Дар ин ҷо чекҳо ба таври автоматӣ қабул намешаванд. Фармоиш ва дастрасиро шахс дар WhatsApp тасдиқ мекунад; ҷавоби фаврӣ кафолат дода намешавад.",
+  orderCourse: (title: string, amount: string) =>
+    `Ассалому алейкум! Мехоҳам курси онлайни «${title}»-ро харам. Нарх дар сайт ${amount} аст. Лутфан маблағ, тарзи пардохт ва чӣ тавр ба дарсҳо дастрасӣ мегирам, тасдиқ кунед.`,
+  orderBundle: (titles: string, amount: string) =>
+    `Ассалому алейкум! Мехоҳам маҷмӯи курсҳоро харам: ${titles}. Нарх дар сайт ${amount} аст. Лутфан таркиб, маблағ, тарзи пардохт ва чӣ тавр ба дарсҳо дастрасӣ мегирам, тасдиқ кунед.`,
+  whatsappBuy: "Фармоиш дар WhatsApp",
+  whatsappContact: "Дар WhatsApp пурсидан",
   lessonsCount: (n: number) => `${n} видеодарс`,
-  durationMin: (min: number) => `${Math.round(min / 60)} соат видео`,
+  durationMin: (min: number) =>
+    min < 60 ? `${min} дақиқа видео` : `${Math.floor(min / 60)} соат${min % 60 ? ` ${min % 60} дақиқа` : ""} видео`,
   foreverChip: "барои ҳамеша",
   certificateChip: "сертификат",
   buyCourse: "Курси онлайнро харидан",
-  buyCourseAria: (title: string) => `Курси «${title}»-ро тавассути чат харидан`,
+  buyCourseAria: (title: string) => `Курси «${title}»-ро дар WhatsApp харидан`,
   bundleTitle: "Ҳар ду курс якҷоя",
   bundleSave: (save: number) => `${save} сомонӣ сарфа мекунед`,
   bundleFullPrice: (full: number) => `ба ҷои ${full} сомонӣ`,
@@ -155,7 +219,7 @@ const TG: Dict = {
   formSubmit: "Сабти ном",
   formSending: "Мефиристам…",
   formErrName: "Номро нависед — аз 2 то 80 ҳарф",
-  formErrPhone: "Рақамро санҷед: аз 9 то 20 аломат, танҳо рақамҳо, «+» ва фосила",
+  formErrPhone: "Рақамро санҷед: аз 9 то 15 рақам, «+» танҳо дар аввал. Фосила, қавс ва тире мумкин аст.",
   formErrLimit: "Аз ин дастгоҳ дархостҳо аз ҳад зиёданд. Пас аз як соат кӯшиш кунед ё дар WhatsApp нависед.",
   formErrGeneric: "Фиристода нашуд. Боз кӯшиш кунед ё дар WhatsApp нависед.",
   formSuccessTitle: "Дархост фиристода шуд",

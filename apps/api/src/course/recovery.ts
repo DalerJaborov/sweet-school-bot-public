@@ -5,6 +5,7 @@ import { ownerAlertChatIds, sendTelegramMessage } from "../telegram.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact } from "@prisma/client";
+import { isBotFrozen } from "../messaging/automation.js";
 
 /**
  * САМОВОССТАНОВЛЕНИЕ ДОСТУПА — «не открывается курс, дайте ссылку заново».
@@ -93,6 +94,7 @@ export function looksLikeAccessRequest(text: string): boolean {
  * что-то своё, и человек получит два разных ответа на один вопрос.
  */
 export async function maybeRestoreAccess(contact: Contact, text: string): Promise<RecoveryResult> {
+  if (await isBotFrozen()) return { handled: false };
   if (!looksLikeAccessRequest(text)) return { handled: false };
 
   const purchases = await prisma.purchase.findMany({
@@ -144,8 +146,10 @@ export async function maybeRestoreAccess(contact: Contact, text: string): Promis
   // Освобождаем место под новый телефон: человек пишет как раз потому, что
   // старое устройство ему больше недоступно. Самое давнее уходит первым.
   // Устройства и ссылка — на человека, поэтому по одному разу, не по курсам.
+  if (await isBotFrozen()) return { handled: false };
   await releaseOldestDevice(contact.id);
-  const url = await issueCourseLink(contact.id);
+  if (await isBotFrozen()) return { handled: false };
+  const url = await issueCourseLink(contact.id, { automatic: true });
   const links: string[] = url ? [url] : [];
   for (const purchase of active) {
     await prisma.purchase

@@ -6,26 +6,23 @@ type OrientationLock = ScreenOrientation & {
   unlock?: () => void;
 };
 
-type IosVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
-
 /**
  * Полный экран ОБЁРТКИ, а не <video>: так поверх видео остаются водяной знак
  * и наши кнопки. При входе — поворот в альбомную (телефон в держателе на
  * кухне часто лежит боком, и крутить его руками в муке неудобно). На iOS
  * полноэкран элемента запрещён — остаётся системный `webkitEnterFullscreen`
- * у самого видео, там знак пропадает, зато ничего не ломается.
+ * у самого видео, но он убирает именной водяной знак.
  *
- * ИСКЛЮЧЕНИЕ — iOS С ЭКРАНА «ДОМОЙ» (дизайн доступа 03.09.2026): в
- * установленном приложении и так нет адресной строки, поэтому «весь экран»
- * делаем сами — обёртка растягивается на окно (класс is-pseudo-fullscreen),
+ * На iOS, включая обычный Safari, «весь экран» делаем сами —
+ * обёртка растягивается на окно (класс is-pseudo-fullscreen),
  * а водяной знак и наши кнопки остаются на месте. Системный плеер тут не
  * зовём: он прячет знак, а ради чего тогда защита.
  */
-export function useFullscreen(wrapperRef: RefObject<HTMLElement>, videoRef: RefObject<HTMLVideoElement>) {
+export function useFullscreen(wrapperRef: RefObject<HTMLElement>, _videoRef: RefObject<HTMLVideoElement>) {
   const [active, setActive] = useState(false);
   const pseudo = useMemo(() => {
     const env = environment();
-    return env.platform === "ios" && env.standalone;
+    return env.platform === "ios";
   }, []);
 
   useEffect(() => {
@@ -67,9 +64,7 @@ export function useFullscreen(wrapperRef: RefObject<HTMLElement>, videoRef: RefO
       }
       return;
     }
-    const video = videoRef.current as IosVideo | null;
-    video?.webkitEnterFullscreen?.();
-  }, [pseudo, wrapperRef, videoRef]);
+  }, [pseudo, wrapperRef]);
 
   return { active, pseudo, toggle };
 }

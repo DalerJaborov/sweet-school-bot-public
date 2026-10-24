@@ -29,6 +29,14 @@ describe("receiveQuestion", () => {
   });
   afterEach(restorePrisma);
 
+  it("frozen: stores a student question but sends no automatic answer or group notification", async () => {
+    db.model("setting").findUnique.mockImplementation(settings({ botFrozen: "true", qaAutoReplyEnabled: "true", telegramBotToken: "token", telegramQaGroupId: "group" }));
+    await receiveQuestion(purchase, "Можно заменить сливки?", null, false);
+    expect(db.model("courseChatMessage").create).toHaveBeenCalledOnce();
+    expect(findQaAnswer).not.toHaveBeenCalled();
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
   it("автоответ выключен — бот молчит и зовёт Ширин", async () => {
     db.model("setting").findUnique.mockImplementation(
       settings({ telegramBotToken: "token", telegramOwnerChatId: "chat" })

@@ -36,6 +36,7 @@ async function checkInDays(): Promise<number> {
 }
 
 async function sweep(): Promise<void> {
+  if ((await getSetting("botFrozen")) === "true") return;
   const days = await checkInDays();
   const since = new Date(Date.now() - days * 86_400_000);
   const waiting = await prisma.purchase.findMany({
@@ -51,6 +52,7 @@ async function sweep(): Promise<void> {
   if (waiting.length === 0) return;
 
   for (const purchase of waiting) {
+    if ((await getSetting("botFrozen")) === "true") return;
     const contact = purchase.contact;
 
     // Отметку ставим ПЕРВОЙ: проверочное сообщение обещано одно, и лучше

@@ -332,7 +332,7 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
   // link оставался null, revokedAt не снимался, и доступ не возвращался
   // НИКОГДА. Ссылка на платформу — ОДНА на человека и обязательно новая,
   // иначе ожила бы старая, которую могли раздать за время «продажи».
-  const webLink = mode === "telegram" ? null : await issueCourseLink(contactId);
+  const webLink = mode === "telegram" ? null : await issueCourseLink(contactId, { automatic: false });
 
   const issued: string[] = [];
   for (const purchase of revokedPurchases) {
@@ -350,7 +350,7 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
     });
     try {
       const text = revokedPurchases.length > 1 ? `${COURSE_TITLE[course]}\n${link}` : link;
-      const mid = await sendToContact(contact, text);
+      const mid = await sendToContact(contact, text, [], { byHuman: true });
       await recordOutgoingMessage(contactId, text, mid);
       issued.push(COURSE_TITLE[course]);
     } catch (err) {

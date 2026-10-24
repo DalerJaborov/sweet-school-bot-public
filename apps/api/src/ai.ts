@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
+import { isBotFrozen, assertAutomationAllowed } from "./messaging/automation.js";
 import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
@@ -116,6 +117,7 @@ export type RescuedImage = {
  * просто не замечали.
  */
 export async function rescueIncomingImages(contact: Contact, attachments: Attachment[]): Promise<RescuedImage[]> {
+  if (await isBotFrozen()) return [];
   const out: RescuedImage[] = [];
   for (const att of attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
     if (att.kind !== "image") continue;
@@ -135,6 +137,7 @@ export async function rescueIncomingImages(contact: Contact, attachments: Attach
  * формы — скачивать его по ссылке, как у Instagram, там нечего и незачем.
  */
 export async function rescueImage(contact: Contact, buffer: Buffer, mimeType: string): Promise<RescuedImage> {
+  await assertAutomationAllowed();
   // Отпечаток КАРТИНКИ, а не ссылки — тот же чек, пересланный другому человеку
   // и загруженный заново, даёт другой URL, но те же самые байты.
   const hash = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -446,6 +449,7 @@ export async function aiReply(
   }
 
   const picked = await receiptPromise;
+  if (await isBotFrozen()) return;
   const verdict = picked?.verdict ?? null;
   const firstImage = picked?.image ?? null;
   // Остальные фото сообщения (не выбранные) больше не чеки в очереди — иначе
@@ -505,6 +509,7 @@ export async function aiReply(
  * кнопок: человек просто спросил что-то под роликом, продавать ему нечего.
  */
 export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<void> {
+  if (await isBotFrozen()) return;
   // Свой флаг, не aiEnabled — владелец 13.09.2026 попросил заглушить обычный
   // ИИ-ответ в директе, но оставить живыми ответы под комментариями; общий
   // флаг гасил бы оба сразу.
@@ -734,6 +739,7 @@ function webChannelBlock(contact: Contact): string {
  * недавних сообщениях.
  */
 export async function registerOfflineIfAsked(contact: Contact, text: string | null): Promise<boolean> {
+  if (await isBotFrozen()) return false;
   if (!text || contact.paid) return false;
   if (!WANTS_OFFLINE_RE.test(text) && !(await recentIncomingWantsOffline(contact.id))) return false;
   return registerOfflineSignup(contact, text);

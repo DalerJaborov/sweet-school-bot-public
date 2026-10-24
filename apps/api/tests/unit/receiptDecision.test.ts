@@ -101,7 +101,8 @@ describe("decideReceipt", () => {
       expect.anything(),
       expect.objectContaining({ grant: ["COURSE50"] }),
       50,
-      { amount: null, currency: "TJS" }
+      { amount: null, currency: "TJS" },
+      { byHuman: true }
     );
   });
 

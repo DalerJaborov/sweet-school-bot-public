@@ -2,6 +2,7 @@ import { env } from "./env.js";
 import { getSetting, prisma, logWarn } from "./db.js";
 import { stripRepeatGreeting } from "./greeting.js";
 import { toOwnerVoice } from "./voice.js";
+import { assertMessagingAllowed } from "./messaging/automation.js";
 
 const GRAPH_VERSION = "v23.0";
 const TIMEOUT_MS = 15_000;
@@ -75,6 +76,9 @@ async function callGraph(
       : buildRequest(path, await igToken());
 
   const controller = new AbortController();
+  // Tokens/settings and the typing animation can outlive the owner's switch.
+  // Check at the actual transport boundary as well as at each entry point.
+  await assertMessagingAllowed();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
@@ -166,6 +170,7 @@ export async function sendText(
   buttons: QuickButton[] = [],
   channel: MetaChannel = "INSTAGRAM"
 ): Promise<string | null> {
+  await assertMessagingAllowed();
   const clean = await withoutRepeatGreeting(igUserId, text, channel);
   // Прочитали → набираем → отвечаем: порядок как у живого человека (см. senderAction).
   await senderAction(igUserId, "mark_seen", channel);
@@ -177,6 +182,7 @@ export async function sendText(
   // обоснование, что у sendAttachment ниже: это самый частый путь отправки
   // (текст, не вложение), раньше единственный без ретрая при обрыве соединения.
   for (let attempt = 0; attempt < 2; attempt++) {
+    await assertMessagingAllowed();
     try {
       const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel);
       return typeof res.message_id === "string" ? res.message_id : null;
@@ -211,6 +217,7 @@ export async function sendPrivateReply(
   buttons: QuickButton[] = [],
   channel: MetaChannel = "INSTAGRAM"
 ): Promise<string | null> {
+  await assertMessagingAllowed();
   const res = await callGraph(
     `/${GRAPH_VERSION}/me/messages`,
     { recipient: { comment_id: commentId }, message: buildMessage(toOwnerVoice(text), buttons) },
@@ -286,6 +293,7 @@ export async function replyToComment(
   text: string,
   channel: MetaChannel = "INSTAGRAM"
 ): Promise<string | null> {
+  await assertMessagingAllowed();
   const res = await callGraph(`/${commentId}/replies`, { message: text }, channel);
   return typeof res.id === "string" ? res.id : null;
 }
@@ -310,6 +318,7 @@ export async function sendAttachment(
   type: "video" | "image" | "audio" | "file",
   channel: MetaChannel = "INSTAGRAM"
 ): Promise<string | null> {
+  await assertMessagingAllowed();
   const payload = { recipient: { id: igUserId }, message: { attachment: { type, payload: { url } } } };
 
   /**
@@ -323,6 +332,7 @@ export async function sendAttachment(
    * причина не во времени, и второй запрос лишь потратит лимит.
    */
   for (let attempt = 0; attempt < 2; attempt++) {
+    await assertMessagingAllowed();
     try {
       const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS);
       return typeof res.message_id === "string" ? res.message_id : null;

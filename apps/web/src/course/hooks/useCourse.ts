@@ -151,8 +151,13 @@ export function useCourse() {
     } catch (err) {
       if (err instanceof CourseError) {
         // Отказ сервера — не сеть: сохранённая копия тут лжёт, её убираем.
-        if (err.reason === "revoked" || err.reason === "blocked") void clearMe().catch(() => undefined);
-        if (!silent) setError({ message: err.message, reason: err.reason });
+        const denied = err.reason === "revoked" || err.reason === "blocked";
+        if (denied) {
+          void clearMe().catch(() => undefined);
+          setView(null);
+          setOffline({});
+        }
+        if (!silent || denied) setError({ message: err.message, reason: err.reason });
         return;
       }
       const cached = await loadMe().catch(() => undefined);
@@ -191,6 +196,10 @@ export function useCourse() {
   // каждые 10 секунд, и перечитывать базу из-за этого незачем.
   const lessonIds = lessons.map((l) => l.id).join(",");
   useEffect(() => {
+    if (!lessonIds) {
+      setOffline({});
+      return;
+    }
     let cancelled = false;
     void listLessons()
       .then((saved) => {

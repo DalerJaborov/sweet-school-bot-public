@@ -65,6 +65,24 @@ describe("sendToContact — маршрутизация по каналу", () =>
     expect(db.model("message").create).toHaveBeenCalledTimes(1);
   });
 
+  it("frozen bot blocks automatic text and attachments on both channels", async () => {
+    db.model("setting").findUnique.mockResolvedValue({ value: "true" });
+    for (const channel of ["WEB", "INSTAGRAM"]) {
+      const contact = fakeContact({ channel }) as Recipient;
+      await expect(sendToContact(contact, "automatic")).rejects.toThrow("Bot automation is frozen");
+      await expect(sendImageToContact(contact, "https://x/1.jpg")).rejects.toThrow("Bot automation is frozen");
+    }
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendAttachment).not.toHaveBeenCalled();
+    expect(db.model("message").create).not.toHaveBeenCalled();
+  });
+
+  it("frozen bot preserves explicit owner messages", async () => {
+    db.model("setting").findUnique.mockResolvedValue({ value: "true" });
+    const mid = await sendToContact(fakeContact({ channel: "WEB" }) as Recipient, "От Ширин", [], { byHuman: true });
+    expect(mid?.startsWith(WEB_MID_PREFIX)).toBe(true);
+  });
+
   it("картинка: Meta — sendAttachment, WEB — строка с imageUrl", async () => {
     await sendImageToContact(fakeContact() as Recipient, "https://x/1.jpg");
     expect(sendAttachment).toHaveBeenCalledWith("ig-1", "https://x/1.jpg", "image", "INSTAGRAM");
