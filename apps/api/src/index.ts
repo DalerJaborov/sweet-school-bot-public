@@ -33,6 +33,7 @@ import { flushAllPending } from "./debounce.js";
 import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
 import { checkDisk } from "./diskWatch.js";
+import { checkIgToken } from "./igTokenWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
 import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
 
@@ -250,6 +251,11 @@ setTimeout(() => void checkDisk().catch((err) => logError("disk:check", err)), 6
 setInterval(() => {
   void checkDisk().catch((err) => logError("disk:check", err));
 }, 60 * 60_000);
+// МАРКЕР INSTAGRAM (igTokenWatch.ts): живёт 60 дней. 20.10.2026 истёк, и бот
+// шесть дней молчал для всех. Раз в 6 часов продлеваем, если пора, и заранее
+// предупреждаем владельца, если продлить не выходит.
+setTimeout(() => void checkIgToken().catch((err) => logError("igToken", err)), 4 * 60_000);
+setInterval(() => void checkIgToken().catch((err) => logError("igToken", err)), 6 * 60 * 60_000);
 setInterval(() => pollMissedComments().catch((err) => logError("commentBackfill", err)), 10 * 60_000);
 
 // СТОРОЖ ВХОДЯЩИХ (inboundWatch.ts): Instagram перестал присылать сообщения —
