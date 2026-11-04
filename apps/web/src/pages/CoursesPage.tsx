@@ -7,6 +7,7 @@ import { EmptyState } from "../components/Illustrations";
 import { Sheet } from "../components/Sheet";
 import { toast } from "../components/Toast";
 import { haptic, useTelegramClosingGuard } from "../telegram";
+import { uploadLessonVideo } from "../videoUpload";
 
 /**
  * КУРСЫ — наполнение собственной платформы: разделы, уроки, видео и рецепты.
@@ -501,36 +502,16 @@ function LessonEditor(props: { lesson: Lesson; onClose: () => void; onSaved: () 
    * ролик на сотни мегабайт по мобильному интернету идёт минутами — без
    * полоски владелец решит, что всё зависло, и закроет вкладку.
    */
-  function uploadVideo(file: File) {
+  async function uploadVideo(file: File) {
     setErr(null);
     setUploading({ what: "video", percent: 0 });
-    const form = new FormData();
-    form.append("file", file);
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/admin/lessons/${lesson.id}/video`);
-    const token = localStorage.getItem("ssb_token");
-    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) setUploading({ what: "video", percent: Math.round((e.loaded / e.total) * 100) });
-    };
-    xhr.onload = () => {
-      setUploading(null);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        toast("Видео принято, идёт перекодировка");
-        onSaved();
-      } else {
-        try {
-          setErr((JSON.parse(xhr.responseText) as { error?: string }).error ?? "Не получилось загрузить");
-        } catch {
-          setErr("Не получилось загрузить видео");
-        }
-      }
-    };
-    xhr.onerror = () => {
-      setUploading(null);
-      setErr("Связь оборвалась во время загрузки");
-    };
-    xhr.send(form);
+    try {
+      await uploadLessonVideo(lesson.id, file, localStorage.getItem("ssb_token") ?? "", (percent) => setUploading({ what: "video", percent }));
+      toast("Видео принято, идёт перекодировка");
+      onSaved();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Не получилось загрузить видео");
+    } finally { setUploading(null); }
   }
 
   async function addPhoto(file: File) {

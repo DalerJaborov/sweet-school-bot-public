@@ -26,6 +26,7 @@ import { parsePastedCredentials, missingParts, summarize } from "../storage/past
 import { writeSettings } from "../services/settingsService.js";
 import { resetTodayCache } from "../today.js";
 import { softDeleteLesson, restoreLesson, listTrash, vacateTrashedOrder } from "./lessonTrash.js";
+import { createVideoChunkRouter } from "./videoChunks.js";
 
 /**
  * АДМИНКА ПЛАТФОРМЫ — курсы, уроки, видео, рецепты, устройства и вопросы.
@@ -505,6 +506,27 @@ export async function resumeUnfinishedTranscodes(): Promise<number> {
   transcodeJob.start();
   return stuck.length;
 }
+
+courseAdminRouter.use(createVideoChunkRouter({
+  dir: `${TMP_DIR}/sessions`,
+  check: async (lessonId) => {
+    if (!(await prisma.lesson.findUnique({ where: { id: lessonId } }))) throw new Error("Урок не найден");
+    if (!(await storageConfig())) throw new Error("Хранилище не подключено");
+    if (!(await ffmpegAvailable())) throw new Error("ffmpeg недоступен");
+  },
+  accept: async ({ id, lessonId, file, mime }) => {
+    const cfg = await storageConfig();
+    if (!cfg) throw new Error("Хранилище не подключено");
+    const key = `sources/${lessonId}-${id}${VIDEO_MIME[mime]}`;
+    const lesson = await prisma.lesson.findUnique({ where: { id: lessonId } });
+    // Lost completion response/restart: never enqueue the same accepted source twice.
+    if (lesson?.sourcePath === key) return;
+    await putObjectStream(cfg, key, file, mime);
+    await prisma.lesson.update({ where: { id: lessonId }, data: { sourcePath: key, status: "UPLOADED" } });
+    enqueueTranscode(lessonId);
+  },
+  log: (error) => logError("courseAdmin:videoChunks", error),
+}));
 
 courseAdminRouter.post("/admin/lessons/:id/video", videoUpload.single("file"), async (req: Request, res: Response) => {
   const file = req.file;
