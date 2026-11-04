@@ -10,6 +10,12 @@ services:
       # ошибками "database is locked"; очередь лучше держать в Prisma.
       DATABASE_URL: file:/data/bot.db?connection_limit=1&socket_timeout=15
       PORT: "4100"
+      NODE_ENV: production
+      SCHOOL_ACCESS_REQUIRED: "1"
+      SCHOOL_ACCESS_TEAM_DOMAIN: ${SCHOOL_ACCESS_TEAM_DOMAIN:?Set the Cloudflare Access team domain}
+      SCHOOL_ACCESS_AUDIENCE: ${SCHOOL_ACCESS_AUDIENCE:?Set the school Access audience}
+      SCHOOL_ADMIN_EMAIL: ${SCHOOL_ADMIN_EMAIL:?Set the single admin email}
+      SCHOOL_ADMIN_ORIGINS: ${SCHOOL_ADMIN_ORIGINS:?Set allowed admin HTTPS origins}
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       IG_PROXY_BASE: ${IG_PROXY_BASE:-}

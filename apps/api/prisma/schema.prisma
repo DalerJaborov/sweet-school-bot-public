@@ -13,6 +13,13 @@ generator client {
   binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
+/// Only SHA-256 fingerprints of explicitly logged-out Access sessions.
+model AdminSessionRevocation {
+  hash      String   @id
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+
 /// Журнал отказов интеграций — персистентный, переживает перезапуск контейнера
 /// (30.08.2026, разбор живого случая: реклама привела человека в директ, ответа
 /// не было, а причину узнать не вышло — `logError` писал только в docker logs,
