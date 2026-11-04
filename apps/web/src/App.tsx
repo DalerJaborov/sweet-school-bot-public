@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, setToken, hasToken, logout, type Today } from "./api";
+import { api, setToken, hasToken, checkAdminSession, signOut, type Today } from "./api";
 import { isInsideTelegram, loginViaTelegram, applyTelegramChrome } from "./telegram";
 import { Logo, Icons } from "./components/Brand";
 import { BakeryHero } from "./components/Illustrations";
@@ -81,7 +81,7 @@ function isTab(id: string): id is Tab {
 }
 
 export function App() {
-  const [authed, setAuthed] = useState(hasToken());
+  const [authed, setAuthed] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [moreOpen, setMoreOpen] = useState(false);
   /** Проверка OCR-рецептов (§13): null — список уроков на проверку, id — карточка. */
@@ -90,20 +90,30 @@ export function App() {
   const [studentId, setStudentId] = useState<string | null>(null);
   /** Бейдж на «Задачах» — чеки в ожидании + вопросы без ответа. */
   const [counts, setCounts] = useState({ receipts: 0, questions: 0 });
-  // Открыто внутри Telegram — входим сами, без пароля: подпись даёт сам Telegram.
-  // Пока проверяем, форму входа не показываем, иначе она мигнёт и исчезнет.
-  const [checkingTelegram, setCheckingTelegram] = useState(!hasToken() && isInsideTelegram());
+  // Check the server's auth mode before trusting any previously stored session.
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [accessError, setAccessError] = useState<string | null>(null);
 
   useEffect(() => {
     applyTelegramChrome();
   }, []);
 
   useEffect(() => {
-    if (!checkingTelegram) return;
-    loginViaTelegram()
-      .then((ok) => setAuthed(ok))
-      .finally(() => setCheckingTelegram(false));
-  }, [checkingTelegram]);
+    let active = true;
+    checkAdminSession()
+      .then(async mode => {
+        const ok = mode === "access" || hasToken() || (isInsideTelegram() && await loginViaTelegram());
+        if (active) setAuthed(ok);
+      })
+      .catch(error => { if (active) setAccessError(error instanceof Error ? error.message : "Ошибка входа"); })
+      .finally(() => { if (active) setCheckingSession(false); });
+    return () => { active = false; };
+  }, []);
+
+  async function leavePanel() {
+    try { await signOut(); setAuthed(false); }
+    catch { window.alert("Не удалось завершить сессию на сервере. Проверьте соединение и повторите выход."); }
+  }
 
   // Счётчик обновляем при каждой смене раздела: свежие цифры нужны ровно тогда,
   // когда человек что-то сделал и вернулся, а не по таймеру.
@@ -151,16 +161,19 @@ export function App() {
     [goTo, openStudent]
   );
 
-  if (checkingTelegram) {
+  if (checkingSession) {
     return (
       <div className="login">
         <div className="card">
           <Logo />
-          <p className="hint" style={{ margin: 0 }}>Вхожу через Telegram…</p>
+          <p className="hint" style={{ margin: 0 }}>Проверяю защищённый вход…</p>
         </div>
       </div>
     );
   }
+  if (accessError) return <div className="login"><div className="card"><Logo />
+    <p role="alert">{accessError}</p><a className="btn wide" href="/panel">Открыть защищённый вход</a>
+  </div></div>;
   if (!authed) return <Login onDone={() => setAuthed(true)} />;
 
   const inSecondary = SECONDARY.some((s) => s.id === tab);
@@ -200,7 +213,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <button className="sidebar-logout" onClick={() => { logout(); setAuthed(false); }}>
+        <button className="sidebar-logout" onClick={() => void leavePanel()}>
           Выйти
         </button>
       </aside>
@@ -210,7 +223,7 @@ export function App() {
           <Logo />
           <div className="topbar-actions">
             <SearchButton />
-            <button className="btn quiet small" onClick={() => { logout(); setAuthed(false); }} title="Выйти">
+            <button className="btn quiet small" onClick={() => void leavePanel()} title="Выйти">
               Выйти
             </button>
           </div>

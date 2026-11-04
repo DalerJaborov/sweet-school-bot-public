@@ -1,4 +1,31 @@
 let token = localStorage.getItem("ssb_token") ?? "";
+let accessSession = false;
+
+/** Access keeps its credential in an HttpOnly cookie; this marker grants no access. */
+export async function checkAdminSession(): Promise<"access" | "password"> {
+  const res = await fetch("/admin/session", { credentials: "same-origin", cache: "no-store" });
+  const data = await res.json().catch(() => null) as { mode?: string } | null;
+  if (!res.ok || (data?.mode !== "access" && data?.mode !== "password")) {
+    logout();
+    throw new Error("Не удалось подтвердить вход. Откройте панель заново и пройдите проверку доступа.");
+  }
+  if (data.mode === "access") {
+    localStorage.removeItem("ssb_token");
+    accessSession = true;
+    token = "access-session";
+  }
+  return data.mode;
+}
+
+export async function signOut(): Promise<void> {
+  if (accessSession) {
+    // Revoke at the origin before clearing the edge session. A failed revoke
+    // must not misleadingly report successful logout.
+    await api("/admin/logout", { method: "POST" });
+    logout();
+    location.assign("/cdn-cgi/access/logout");
+  } else logout();
+}
 
 export function setToken(t: string) {
   token = t;
@@ -10,6 +37,7 @@ export function hasToken(): boolean {
 }
 
 export function logout() {
+  accessSession = false;
   token = "";
   localStorage.removeItem("ssb_token");
 }
@@ -45,8 +73,10 @@ export function setSessionExpiredHandler(handler: () => void): void {
 
 function expireSessionIfUnauthorized(res: Response, sentToken: boolean): void {
   if (res.status !== 401 || !sentToken) return;
+  const wasAccess = accessSession;
   logout();
-  sessionExpiredHandler();
+  if (wasAccess) location.assign("/cdn-cgi/access/logout");
+  else sessionExpiredHandler();
 }
 
 export async function api<T>(

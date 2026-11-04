@@ -65,6 +65,9 @@ async function isAllowed(userId: string): Promise<boolean> {
  * работает ровно как сайт — теми же запросами, с тем же токеном.
  */
 miniAppRouter.post("/admin/telegram-login", async (req, res) => {
+  if (process.env.SCHOOL_ACCESS_REQUIRED === "1" || process.env.NODE_ENV === "production") {
+    res.status(403).json({ error: "Вход через Telegram отключён. Откройте панель в браузере." }); return;
+  }
   const initData = typeof req.body?.initData === "string" ? req.body.initData : "";
   if (!initData) {
     res.status(400).json({ error: "Нет данных Telegram" });
@@ -85,7 +88,7 @@ miniAppRouter.post("/admin/telegram-login", async (req, res) => {
   }
 
   const authDate = Number(data.auth_date ?? 0);
-  if (!Number.isFinite(authDate) || Date.now() / 1000 - authDate > MAX_AGE_SECONDS) {
+  if (!Number.isFinite(authDate) || authDate > Date.now() / 1000 + 30 || Date.now() / 1000 - authDate > MAX_AGE_SECONDS) {
     res.status(403).json({ error: "Данные Telegram устарели, откройте панель заново" });
     return;
   }

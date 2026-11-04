@@ -7,6 +7,8 @@ import { singleFlight } from "./services/singleFlight.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
 import { markWorkerOk, markWorkerTimeout, STUCK_AFTER } from "./workerHealth.js";
 import cors from "cors";
+import { adminAccessConfig, createAdminAccessGuard } from "./adminAccess.js";
+import { adminRevocations } from "./adminRevocations.js";
 import { env } from "./env.js";
 import { webhookRouter } from "./webhook.js";
 import { adminRouter } from "./admin.js";
@@ -57,7 +59,12 @@ process.on("unhandledRejection", (err) => logError("unhandledRejection", err));
 process.on("uncaughtException", (err) => logError("uncaughtException", err));
 
 const app = express();
-app.use(cors());
+app.use(["/admin", "/admin-form"], createAdminAccessGuard(adminAccessConfig(), adminRevocations));
+const publicCors = cors();
+app.use((req, res, next) => {
+  if (res.locals.schoolAccessAuthenticated === true) next();
+  else publicCors(req, res, next);
+});
 app.use(
   express.json({
     limit: "1mb",

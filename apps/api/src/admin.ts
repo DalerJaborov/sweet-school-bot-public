@@ -1,6 +1,7 @@
 import express, { Router, type Request, type Response, type NextFunction } from "express";
 import nodeCrypto from "node:crypto";
 import jwt from "jsonwebtoken";
+import { adminAccessConfig } from "./adminAccess.js";
 import { z } from "zod";
 import { env } from "./env.js";
 import { prisma, getSetting, logError } from "./db.js";
@@ -30,6 +31,7 @@ export const adminRouter = Router();
 // ---------- вход ----------
 
 adminRouter.post("/admin/login", (req, res) => {
+  if (adminAccessConfig()) { res.status(403).json({ error: "Используйте защищённый вход" }); return; }
   const parsed = z.object({ password: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success || parsed.data.password !== env.adminPassword) {
     res.status(401).json({ error: "Неверный пароль" });
@@ -63,6 +65,11 @@ function isAdminToken(token: string): boolean {
 }
 
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  if (adminAccessConfig()) {
+    if (res.locals.schoolAccessAuthenticated === true) next();
+    else res.status(401).json({ error: "Нужен защищённый вход" });
+    return;
+  }
   const header = req.header("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (isAdminToken(token)) next();
@@ -88,6 +95,7 @@ adminRouter.use("/admin", (req, res, next) => {
  * а не в заголовке (форма не умеет слать заголовки).
  */
 adminRouter.post("/admin-form/setting", express.urlencoded({ extended: false }), (req, res) => {
+  if (adminAccessConfig()) { res.status(403).send("Изменяйте настройки только в панели"); return; }
   const parsed = z
     .object({ auth: z.string().min(1), key: z.string().min(1), value: z.string().min(1) })
     .safeParse(req.body);

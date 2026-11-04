@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { api, askAssistant, hasToken, logout, setSessionExpiredHandler, setToken, uploadFile } from "../src/api";
+import { api, askAssistant, checkAdminSession, signOut, hasToken, logout, setSessionExpiredHandler, setToken, uploadFile } from "../src/api";
 
 /**
  * ПРОТУХШИЙ ТОКЕН (30 дней): 401 на запросе с токеном стирает его и зовёт
@@ -62,5 +62,38 @@ describe("api — 401 при живом токене", () => {
     await expect(askAssistant("сколько продали?", [])).rejects.toThrow();
     expect(hasToken()).toBe(false);
     expect(expired).toHaveBeenCalledTimes(2);
+  });
+
+  it("Access removes the old persistent JWT and never stores a new credential", async () => {
+    setToken("old-password-session");
+    vi.stubGlobal("fetch", respond(200, { mode: "access", email: "owner@example.com" }));
+    expect(await checkAdminSession()).toBe("access");
+    expect(hasToken()).toBe(true);
+    expect(localStorage.getItem("ssb_token")).toBeNull();
+    await uploadFile(new File(["x"], "a.png")).catch(() => undefined);
+    const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
+    expect(request?.headers).toEqual({ Authorization: "Bearer access-session" });
+  });
+
+  it("does not fall back to the old password session if Access is unavailable", async () => {
+    setToken("old");
+    vi.stubGlobal("fetch", respond(401, { error: "denied" }));
+    await expect(checkAdminSession()).rejects.toThrow("Не удалось подтвердить вход");
+    expect(hasToken()).toBe(false);
+  });
+
+  it("logout revokes first and only then clears the browser session", async () => {
+    vi.stubGlobal("fetch", respond(200, { mode: "access" }));
+    await checkAdminSession();
+    vi.stubGlobal("fetch", respond(503));
+    await expect(signOut()).rejects.toThrow();
+    expect(hasToken()).toBe(true);
+    const assign = vi.fn();
+    vi.stubGlobal("location", { assign });
+    vi.stubGlobal("fetch", respond(200, { ok: true }));
+    await signOut();
+    expect(fetch).toHaveBeenCalledWith("/admin/logout", expect.objectContaining({ method: "POST" }));
+    expect(assign).toHaveBeenCalledWith("/cdn-cgi/access/logout");
+    expect(hasToken()).toBe(false);
   });
 });
