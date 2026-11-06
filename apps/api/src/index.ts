@@ -36,6 +36,7 @@ import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
 import { checkDisk } from "./diskWatch.js";
 import { checkIgToken } from "./igTokenWatch.js";
+import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
 import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
 
@@ -263,6 +264,13 @@ setInterval(() => {
 // предупреждаем владельца, если продлить не выходит.
 setTimeout(() => void checkIgToken().catch((err) => logError("igToken", err)), 4 * 60_000);
 setInterval(() => void checkIgToken().catch((err) => logError("igToken", err)), 6 * 60 * 60_000);
+// СЕКРЕТ ПРИЛОЖЕНИЯ META (appSecretWatch.ts): пуст — вебхук отклоняет всё, бот глухой.
+const secretTick = () =>
+  void checkAppSecret()
+    .then((r) => { if (r === "no-recipient") logError("appSecret:noRecipient", new Error("Секрет Meta пуст, а чат владельца для тревог не задан — предупредить некого")); })
+    .catch((err) => logError("appSecret", err));
+setTimeout(secretTick, 3 * 60_000);
+setInterval(secretTick, 60 * 60_000);
 setInterval(() => pollMissedComments().catch((err) => logError("commentBackfill", err)), 10 * 60_000);
 
 // СТОРОЖ ВХОДЯЩИХ (inboundWatch.ts): Instagram перестал присылать сообщения —
