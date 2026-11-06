@@ -8,6 +8,7 @@ import { detectAbuse } from "./ai/abuseFilter.js";
 import { notifyFunnelGaveUp } from "./systemAlerts.js";
 import type { Contact, Delivery, Funnel, FunnelStep } from "@prisma/client";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
+import { renderFunnelText } from "./funnelPlaceholders.js";
 
 /**
  * ОТКАЗ ШАГА — РАСТУЩАЯ ПАУЗА, А НЕ МГНОВЕННЫЙ ОКОНЧАТЕЛЬНЫЙ FAILED
@@ -93,7 +94,7 @@ async function sendStep(
   privateReplyCommentId?: string
 ): Promise<void> {
   const buttons = parseStepButtons(step);
-  const text = step.text.trim();
+  const text = (await renderFunnelText(step.text)).trim();
   let mid: string | null = null;
 
   // Шаг может быть ЧИСТЫМ вложением — фото меню или видео без подписи, как это
