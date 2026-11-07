@@ -10,6 +10,13 @@ const files: Map<string, string> = renderSite(content);
 const publicFile = (url: string) => resolve("public", new URL(url, content.site.origin).pathname.slice(1));
 
 describe("public link previews and recognizable icons", () => {
+  it("versions all icon references in public and authenticated manifests", () => {
+    const manifest = JSON.parse(readFileSync("public/manifest.webmanifest", "utf8"));
+    for (const icon of manifest.icons) expect(icon.src).toMatch(/\?v=20261108-brand$/);
+    const api = readFileSync("../api/src/course/router.ts", "utf8");
+    for (const name of ["icon-192", "icon-512", "icon-512-maskable"]) expect(api).toContain(`/icons/${name}.png?v=20261108-brand`);
+    for (const file of ["index.html", "course.html"]) expect(readFileSync(file, "utf8")).toContain('/icons/apple-touch-icon-180.png?v=20261108-brand');
+  });
   it("all localized pages expose a real 1200×630 JPEG and complete preview metadata", async () => {
     for (const [file, html] of files) {
       if (!file.endsWith(".html") || file === "404.html") continue;
