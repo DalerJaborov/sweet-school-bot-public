@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "images": "node scripts/enhance-images.mjs && node scripts/make-covers.mjs"
+    "images": "node scripts/enhance-images.mjs && node scripts/make-covers.mjs && node scripts/make-sharing-assets.mjs"
   },
   "dependencies": {
     "hls.js": "^1.7.2",
