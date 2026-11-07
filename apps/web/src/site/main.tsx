@@ -22,7 +22,9 @@ if (!syncLangOnEntry()) {
   bindChatButtons();
 
   const courses = document.getElementById("courses-island");
-  if (courses) {
+  // Server-rendered catalogue links work without React. Do not replace them
+  // with a loading skeleton or an older cached browser response.
+  if (courses && !courses.querySelector('[data-server-catalog="ready"]')) {
     const only = courses.dataset.course || undefined;
     courses.replaceChildren();
     createRoot(courses).render(

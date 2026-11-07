@@ -43,3 +43,5 @@ jobs:
       - run: npm exec --workspace=apps/api -- vitest run --maxWorkers=4
       - run: npm exec --workspace=apps/web -- vitest run --maxWorkers=4
       - run: npm run build
+      - name: Verify server-rendered catalogue in isolated Nginx
+        run: npm run test:ssi --workspace=apps/web

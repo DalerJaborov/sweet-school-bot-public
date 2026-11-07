@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "npm run pages && vite",
     "pages": "node scripts/build-site-pages.mjs",
-    "build": "npm run pages && tsc -p tsconfig.json && vite build",
+    "build": "npm run pages && npm run check:seo && tsc -p tsconfig.json && vite build && npm run check:seo:dist",
+    "check:seo": "node scripts/check-site-seo.mjs",
+    "check:seo:dist": "node scripts/check-site-seo.mjs --dist",
+    "test:ssi": "node scripts/test-catalog-ssi.mjs",
     "preview": "vite preview",
     "lint": "eslint src/",
     "format": "prettier --write src/",
