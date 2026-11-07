@@ -61,6 +61,7 @@ describe("offlineCourseCard", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
   });
@@ -113,6 +114,7 @@ describe("maybeSendOfflineCard", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
     sendText.mockClear().mockResolvedValue("mid-1");
     db.model("setting").findUnique.mockResolvedValue(null);
   });

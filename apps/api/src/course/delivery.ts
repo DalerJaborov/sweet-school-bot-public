@@ -37,7 +37,7 @@ export async function deliveryMode(): Promise<DeliveryMode> {
  * стоял в настройках. Для Instagram/Messenger — как настроил владелец.
  */
 export async function deliveryModeFor(contact: { channel: string; courseDeliveryChoice?: string | null }): Promise<DeliveryMode> {
-  if (contact.channel === "WEB" || contact.channel === "MANUAL") return "web";
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
   if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web") return contact.courseDeliveryChoice;
   return deliveryMode();
 }

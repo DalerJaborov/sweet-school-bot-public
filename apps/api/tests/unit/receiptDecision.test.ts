@@ -22,6 +22,7 @@ function receipt(overrides: Record<string, unknown> = {}) {
   const contact = fakeContact();
   return {
     id: "receipt-1",
+    imageHash: "test-receipt-hash",
     contactId: contact.id,
     contact,
     amount: 70,

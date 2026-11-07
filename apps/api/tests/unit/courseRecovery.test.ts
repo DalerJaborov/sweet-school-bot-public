@@ -67,7 +67,7 @@ describe("maybeRestoreAccess", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
-    db.model("contact").findUnique.mockResolvedValue({ id: "contact-1", accessTokenId: null, accessIssuedAt: null });
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
     db.model("contact").updateMany.mockResolvedValue({ count: 1 });
     sendText.mockClear();
     sendTelegramMessage.mockClear();

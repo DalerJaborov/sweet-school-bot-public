@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
-import { isBotFrozen, assertAutomationAllowed } from "./messaging/automation.js";
+import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, withContactMessaging } from "./messaging/automation.js";
 import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
@@ -185,7 +185,7 @@ export async function aiReply(
   // выключенном aiEnabled, см. её комментарий), и отзыв-скриншот, и сам ИИ-ответ
   // одним ранним выходом. Воронка (funnel.ts) вызывается из webhook.ts до
   // aiReply и этой проверки не видит вовсе — её выключить нельзя тем же флагом.
-  if ((await getSetting("botFrozen")) === "true") return;
+  if ((await getSetting("botFrozen")) === "true" || contactAutomationBlocked(contact)) return;
 
   if (text && await handleDeliveryChoiceReply(contact, text)) return;
 
@@ -227,6 +227,7 @@ export async function aiReply(
   const apiKeys = await resolveGeminiKeys();
   if (apiKeys.length === 0) {
     logError("ai:aiReply:noGeminiKeys", new Error("Gemini API keys not configured — AI reply skipped"));
+    if (contact.channel === "WHATSAPP") throw new Error("WhatsAppGenerationRetry: no keys");
     return;
   }
   const primaryKey = apiKeys[0];
@@ -427,6 +428,7 @@ export async function aiReply(
     // Ни разу не ответили — раньше здесь была тишина навсегда (см. aiReplyRetry.ts).
     // Кладём ход в очередь: фоновый тик попробует снова, пока не получится или не
     // кончатся попытки (~13 часов), и владелец узнает, только если так и не вышло.
+    if (contact.channel === "WHATSAPP") throw new Error("WhatsAppGenerationRetry: generation unavailable");
     await queuePendingAiReply(contact.id, text).catch((err) => logError("aiReplyRetry:queue", err));
   } else {
     await recordAiCall(contact.id);
@@ -448,8 +450,10 @@ export async function aiReply(
         replyText = "error" in fixed ? null : fixed.text;
         if (!replyText || replyPolicyIssues(replyText, facts).length || replyText.trim() === "[NO_REPLY]") {
           logWarn("ai:replyPolicy", `${contact.id}: held ${issues.join(",")}`);
-          if ("error" in fixed) await queuePendingAiReply(contact.id, text);
-          else deliveryFailure = new ReplyPolicyError(issues);
+          if ("error" in fixed) {
+            if (contact.channel === "WHATSAPP") deliveryFailure = new Error("WhatsAppGenerationRetry: correction unavailable");
+            else await queuePendingAiReply(contact.id, text);
+          } else deliveryFailure = new ReplyPolicyError(issues);
           replyText = null;
         }
       }
@@ -538,7 +542,7 @@ export async function aiReply(
  * кнопок: человек просто спросил что-то под роликом, продавать ему нечего.
  */
 export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<void> {
-  if (await isBotFrozen()) return;
+  if (await isBotFrozen() || contactAutomationBlocked(contact)) return;
   // Свой флаг, не aiEnabled — владелец 13.09.2026 попросил заглушить обычный
   // ИИ-ответ в директе, но оставить живыми ответы под комментариями; общий
   // флаг гасил бы оба сразу.
@@ -557,7 +561,8 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     if (isSilentKind(verdict.kind)) return;
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
-    await sendPrivateReply(commentId, guardReply(verdict.kind, language), [], metaChannelOf(contact)).catch((err) => {
+    const guardedText = guardReply(verdict.kind, language);
+    await withContactMessaging(contact.id, "reply", () => sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact))).catch((err) => {
       logError("ai:commentGuard:sendPrivateReply", err);
     });
     return;
@@ -614,7 +619,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     throw new ReplyPolicyError(issues);
   }
   const clean = cleanAutomatedReply(result.text);
-  const mid = await sendPrivateReply(commentId, clean, [], metaChannelOf(contact));
+  const mid = await withContactMessaging(contact.id, "reply", () => sendPrivateReply(commentId, clean, [], metaChannelOf(contact)));
   await recordOutgoingMessage(contact.id, clean, mid);
 }
 
@@ -753,15 +758,17 @@ async function enforceReplyLanguage(
  * владельца писался под директ и Telegram-группы: «добавлю вас в группу»,
  * «уроки в Телеграме». На сайте это ложь — уроки открываются по ссылке на
  * самом сайте, а ссылка приходит прямо в этот чат после чека. Не трогаем
- * промт владельца, а добавляем поправку только для канала WEB.
+ * промт владельца, а добавляем поправку для WEB и WhatsApp, где выдаём сайт.
  */
-function webChannelBlock(contact: Contact): string {
-  if (contact.channel !== "WEB") return "";
+export function webChannelBlock(contact: Pick<Contact, "channel">): string {
+  if (contact.channel !== "WEB" && contact.channel !== "WHATSAPP") return "";
   return (
-    "\n\nВАЖНО — КАНАЛ: клиентка пишет в чат на нашем сайте shirinsweets.online. " +
+    (contact.channel === "WHATSAPP"
+      ? "\n\nВАЖНО — КАНАЛ: клиентка пишет в WhatsApp. "
+      : "\n\nВАЖНО — КАНАЛ: клиентка пишет в чат на нашем сайте shirinsweets.online. ") +
     "Онлайн-уроки открываются ПРЯМО НА САЙТЕ по личной ссылке, в телефоне, без Telegram и без групп. " +
     "Никогда не говори «в Телеграме», «добавлю в группу», «пришлю ссылку на группу». " +
-    "После оплаты нужна проверка поступления денег; не обещай автоматическое подтверждение по скриншоту. " +
+    "После оплаты нужна проверка поступления денег; после подтверждения ссылка на уроки придёт сюда же. Не обещай автоматическое подтверждение по скриншоту. " +
     "Уроки можно смотреть с любого телефона, сохранять офлайн, в конце — сертификат."
   );
 }

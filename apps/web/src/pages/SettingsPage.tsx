@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FreeLessonSettings } from "../components/FreeLessonSettings";
+import { WhatsAppSettings } from "../components/WhatsAppSettings";
+import { KnowledgeReview } from "../components/KnowledgeReview";
 
 /** Ответ живой проверки модели (POST /admin/gemini-test). */
 interface CheckResult {
@@ -295,6 +297,8 @@ export function SettingsPage() {
     <div className="card">
       <h2>{Icons.settings} Настройки</h2>
       <FreeLessonSettings />
+      <WhatsAppSettings />
+      <KnowledgeReview />
       <p className="hint">Ключи и промт ИИ. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}
       {values.botFrozen === "true" && (

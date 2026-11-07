@@ -21,6 +21,8 @@ services:
       IG_PROXY_BASE: ${IG_PROXY_BASE:-}
       IG_PROXY_KEY: ${IG_PROXY_KEY:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      SCHOOL_WHATSAPP_URL: ${SCHOOL_WHATSAPP_URL:-}
+      SCHOOL_WHATSAPP_TOKEN: ${SCHOOL_WHATSAPP_TOKEN:-}
       # Временные файлы перекодировки — на том же томе, что и данные. /tmp
       # контейнера живёт на оверлее корневого диска, и HLS двухгигабайтного
       # урока (исходник + две дорожки) забил бы его целиком.
@@ -33,6 +35,26 @@ services:
     # шлёт SIGKILL через 10 с, ровно когда наш собственный аварийный выход
     # тоже срабатывает (index.ts gracefulShutdown).
     stop_grace_period: 20s
+
+  whatsapp:
+    profiles: ["whatsapp"]
+    build:
+      context: services/whatsapp-bridge
+    restart: unless-stopped
+    init: true
+    environment:
+      SCHOOL_WHATSAPP_TOKEN: ${SCHOOL_WHATSAPP_TOKEN:-}
+      SCHOOL_WHATSAPP_MEDIA_HOSTS: ${SCHOOL_WHATSAPP_MEDIA_HOSTS:-shirinsweets.online}
+    volumes:
+      - whatsapp-data:/data
+    expose:
+      - "4200"
+    mem_limit: 1536m
+    cpus: 1.5
+    shm_size: 256m
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
 
   web:
     build:
@@ -47,3 +69,4 @@ services:
 
 volumes:
   bot-data:
+  whatsapp-data:

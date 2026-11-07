@@ -40,6 +40,7 @@ import { checkIgToken } from "./igTokenWatch.js";
 import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
 import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
+import { startWhatsAppWorker } from "./whatsapp/worker.js";
 
 // index.ts — единственная точка, где db.ts и telegram.ts (через systemAlerts.ts)
 // встречаются без цикла импортов (см. комментарий у onNewSystemError в db.ts).
@@ -117,6 +118,7 @@ setTimeout(() => {
 const server = app.listen(env.port, () => {
   logInfo("http", `Sweet School Bot API на порту ${env.port}`);
 });
+startWhatsAppWorker();
 
 // Graceful shutdown: при SIGTERM/SIGINT сначала сбрасываем pending-сообщения
 // дебаунса (чтобы не потерять неотправленные ответы), потом закрываем сервер.

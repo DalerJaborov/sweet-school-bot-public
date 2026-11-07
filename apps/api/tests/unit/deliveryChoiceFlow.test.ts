@@ -141,6 +141,21 @@ describe("paid delivery choice", () => {
   it.each(["нет Telegram", "У меня нет Telegram", "Telegram надорам"])("understands explicit negative %s", (answer) => {
     expect(parseDeliveryAnswer(answer)).toEqual({ choice: "web", explicit: true });
   });
+  it("only a persisted accepted receipt permits delivery after operator takeover", async () => {
+    await pay(); contact.humanTakenOverAt = new Date();
+    expect(await handleDeliveryChoiceReply(asContact(), "да")).toBe(false);
+    expect(createOneTimeInviteLink).not.toHaveBeenCalled();
+    db.model("receiptCheck").findFirst.mockResolvedValue({ imageHash: "accepted-receipt" });
+    expect(await handleDeliveryChoiceReply(asContact(), "да")).toBe(true);
+    expect(createOneTimeInviteLink).toHaveBeenCalledTimes(1);
+    expect(db.model("receiptCheck").findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ contactId: contact.id, awaitingDeliveryChoice: true }) }));
+  });
+  it("even an accepted receipt cannot bypass personal-contact policy", async () => {
+    await pay(); contact.personal = true;
+    db.model("receiptCheck").findFirst.mockResolvedValue({ imageHash: "accepted-receipt" });
+    expect(await handleDeliveryChoiceReply(asContact(), "да")).toBe(false);
+    expect(createOneTimeInviteLink).not.toHaveBeenCalled();
+  });
   it("does not interpret questions or contradictory prose as an answer", () => {
     for (const input of ["да но нет", "а Telegram обязательно?", "нет времени", "дайте рецепт", "нет Telegram, но есть у сестры"]) expect(parseDeliveryAnswer(input)).toBeNull();
   });

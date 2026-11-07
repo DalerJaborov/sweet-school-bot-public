@@ -115,6 +115,9 @@ async function runQueue(): Promise<void> {
 
   for (const row of pending) {
     if (await isBotFrozen()) return;
+    // A later saved-contact/manual exclusion also stops queued receipt automation.
+    // Preserve the evidence for the owner; do not consume retries or call the model.
+    if (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact) continue;
     // confidence переиспользован как счётчик попыток: пока чек не разобран, своего
     // смысла у него нет, а лишняя колонка в схеме ради счётчика — перебор.
     const attempt = row.confidence + 1;

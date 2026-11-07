@@ -30,6 +30,7 @@ const BATCH = 8;
 type Profile = { name?: string; username?: string; profile_pic?: string; profile_picture_url?: string };
 
 async function fetchProfile(igUserId: string, channel: string): Promise<Profile | null> {
+  if (channel !== "INSTAGRAM" && channel !== "MESSENGER") return null;
   const messenger = channel === "MESSENGER";
   const token = (await getSetting(messenger ? "fbPageToken" : "igToken"))?.trim();
   if (!token) return null;
@@ -72,7 +73,7 @@ export async function refreshProfiles(): Promise<void> {
 async function refreshProfilesOnce(): Promise<void> {
   try {
     const stale = await prisma.contact.findMany({
-      where: { OR: [{ profileAt: null }, { profileAt: { lt: new Date(Date.now() - MAX_AGE_MS) } }] },
+      where: { channel: { in: ["INSTAGRAM", "MESSENGER"] }, OR: [{ profileAt: null }, { profileAt: { lt: new Date(Date.now() - MAX_AGE_MS) } }] },
       orderBy: { updatedAt: "desc" },
       take: BATCH,
     });

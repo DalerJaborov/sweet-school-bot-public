@@ -11,7 +11,7 @@ vi.mock("../../src/ai/qaGroupReply.js", () => ({ findQaAnswer: (t: string) => fi
 import { receiveQuestion, answerFromOwner, chatHistory } from "../../src/course/chat.js";
 import type { Purchase } from "@prisma/client";
 
-const purchase = { id: "purchase-1", contactId: "contact-1" } as Purchase;
+const purchase = { id: "purchase-1", contactId: "contact-1", courseId: "course-1" } as Purchase;
 
 function settings(values: Record<string, string>) {
   return async ({ where }: { where: { key: string } }) =>

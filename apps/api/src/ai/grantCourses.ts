@@ -14,7 +14,7 @@ import {
 } from "../course/delivery.js";
 import type { Contact } from "@prisma/client";
 import { metaFailureKind } from "../messaging/metaErrors.js";
-import { isBotFrozen } from "../messaging/automation.js";
+import { isBotFrozen, currentReceiptEvidence, assertContactMessagingAllowed } from "../messaging/automation.js";
 
 /**
  * Выдача доступа к курсам после подтверждения оплаты.
@@ -31,7 +31,9 @@ export async function grantCourses(
   opts: { byHuman?: boolean; fromDeliveryChoice?: boolean } = {}
 ): Promise<Course[]> {
   if (!opts.byHuman && (await isBotFrozen())) return [];
-  if (!opts.fromDeliveryChoice && await deferGrantForChoice(contact, plan, amount, verdict, opts)) return [];
+  const sendOpts = { ...opts, ...(currentReceiptEvidence()?.contactId === contact.id ? { purpose: "verified_receipt_access" as const } : {}) };
+  await assertContactMessagingAllowed(contact.id, opts.byHuman ? "human" : sendOpts.purpose ?? "reply");
+  if (!opts.fromDeliveryChoice && await deferGrantForChoice(contact, plan, amount, verdict, sendOpts)) return [];
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const done: Course[] = [];
 
@@ -163,7 +165,7 @@ export async function grantCourses(
           webLink,
           withTitle: plan.grant.length > 1,
         }) ?? link;
-      const mid = await sendToContact(contact, text, [], opts);
+      const mid = await sendToContact(contact, text, [], sendOpts);
       if (!mid) throw new Error("Access message delivery not confirmed");
       await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.update({ where: { id: purchaseId }, data: { inviteLink: telegramLink ?? link, deliveryAwaitingChoice: false } });
@@ -200,7 +202,7 @@ export async function grantCourses(
         added: hadBefore > 0,
       }) ?? sharedWebLink;
     try {
-      const mid = await sendToContact(contact, text, [], opts);
+      const mid = await sendToContact(contact, text, [], sendOpts);
       if (!mid) throw new Error("Access message delivery not confirmed");
       await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.updateMany({

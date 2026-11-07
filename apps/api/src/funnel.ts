@@ -1,7 +1,7 @@
 import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, replyToComment, deleteComment, metaChannelOf, mediaPermalink, type QuickButton, type Channel, type MetaChannel } from "./instagram.js";
 import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
-import { isBotFrozen, withMessagingPermission } from "./messaging/automation.js";
+import { isBotFrozen, withMessagingPermission, withContactMessaging } from "./messaging/automation.js";
 import { instagramShortcode } from "./ownMedia.js";
 import { aiReplyToComment } from "./ai.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -103,7 +103,7 @@ async function sendStep(
   // выглядел бы как сбой, да и Meta его не примет.
   if (text || buttons.length > 0) {
     if (privateReplyCommentId) {
-      mid = await withMessagingPermission("funnel", () => sendPrivateReply(privateReplyCommentId, text, buttons, metaChannelOf(delivery.contact)));
+      mid = await withContactMessaging(delivery.contact.id, "reply", () => withMessagingPermission("funnel", () => sendPrivateReply(privateReplyCommentId, text, buttons, metaChannelOf(delivery.contact))));
     } else {
       mid = await withMessagingPermission("funnel", () => sendToContact(delivery.contact, text, buttons));
     }
@@ -346,7 +346,9 @@ async function processComment(input: CommentInput): Promise<void> {
   if (isEmojiOnly(input.text)) {
     if (await isBotFrozen()) return;
     const emoji = THANK_YOU_EMOJI[Math.floor(Math.random() * THANK_YOU_EMOJI.length)];
-    await replyToComment(input.commentId, emoji, channel);
+    const contact = await upsertContact(input.igUserId, input.username, channel);
+    await withContactMessaging(contact.id, "reply", () => replyToComment(input.commentId, emoji, channel));
+
     return;
   }
 

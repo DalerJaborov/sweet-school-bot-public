@@ -4,7 +4,8 @@ import { prisma, WEB_MID_PREFIX } from "../db.js";
 import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
 import { stripRepeatGreeting } from "../greeting.js";
 import { toOwnerVoice } from "../voice.js";
-import { assertMessagingAllowed, withMessagingPermission } from "./automation.js";
+import { assertMessagingAllowed, withMessagingPermission, withContactMessaging, type MessagePurpose } from "./automation.js";
+import { sendWhatsAppText, sendWhatsAppAttachment } from "../whatsapp/transport.js";
 
 /**
  * ЕДИНАЯ ДВЕРЬ НАРУЖУ: «написать этому человеку», где бы он ни писал.
@@ -37,6 +38,7 @@ export type SendOptions = {
    *  сообщение показывается как «ответ владельца»; для Meta признак не нужен —
    *  там его ставит эхо вебхука по факту. */
   byHuman?: boolean;
+  purpose?: "verified_receipt_access";
 };
 
 export async function sendToContact(
@@ -47,14 +49,16 @@ export async function sendToContact(
 ): Promise<string | null> {
   if (!opts.byHuman) text = cleanAutomatedReply(text);
   if (!text.trim()) return null;
-  return opts.byHuman
+  const purpose: MessagePurpose = opts.purpose ?? (opts.byHuman ? "human" : "reply");
+  return withContactMessaging(contact.id, purpose, () => opts.byHuman && !opts.purpose
     ? withMessagingPermission("human", () => sendContact(contact, text, buttons, opts))
-    : sendContact(contact, text, buttons, opts);
+    : sendContact(contact, text, buttons, opts));
 }
 
 async function sendContact(contact: Recipient, text: string, buttons: QuickButton[], opts: SendOptions): Promise<string | null> {
   await assertMessagingAllowed();
   const channel = channelOf(contact);
+  if (channel === "WHATSAPP") return sendWhatsAppText(contact, text, buttons, opts.purpose ?? (opts.byHuman ? "human" : "reply"));
   if (channel !== "WEB") return sendText(contact.igUserId, text, buttons, channel);
 
   // Правило «здороваемся один раз» и голос владелицы — те же, что у sendText:
@@ -73,12 +77,15 @@ export async function sendAttachmentToContact(
   url: string,
   type: "video" | "image" | "audio" | "file" = "image"
 ): Promise<string | null> {
+  return withContactMessaging(contact.id, "reply", async () => {
   await assertMessagingAllowed();
   const channel = channelOf(contact);
+  if (channel === "WHATSAPP") return sendWhatsAppAttachment(contact, url, type);
   if (channel !== "WEB") return sendAttachment(contact.igUserId, url, type, channel);
   return type === "image"
     ? persistWebOutgoing(contact.id, { imageUrl: url })
     : persistWebOutgoing(contact.id, { text: url });
+  });
 }
 
 export function sendImageToContact(contact: Recipient, url: string): Promise<string | null> {

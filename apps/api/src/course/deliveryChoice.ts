@@ -2,7 +2,7 @@ import type { Contact } from "@prisma/client";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
 import { detectClientLanguage } from "../ai/clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
-import { isBotFrozen } from "../messaging/automation.js";
+import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
 import type { Allocation, Course } from "../courses.js";
 
@@ -31,9 +31,9 @@ export function parseDeliveryAnswer(text: string): { choice: CourseDeliveryChoic
  * before asking, so losing the question never loses the paid entitlement. */
 export async function deferGrantForChoice(
   contact: Contact, plan: Allocation, amount: number,
-  verdict: { amount: number | null; currency?: string | null }, opts: { byHuman?: boolean },
+  verdict: { amount: number | null; currency?: string | null }, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" },
 ): Promise<boolean> {
-  if (contact.channel === "WEB" || contact.channel === "MANUAL") return false;
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return false;
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh) return false;
   if (isDeliveryChoice(fresh.courseDeliveryChoice)) {
@@ -69,8 +69,8 @@ export async function awaitingDeliveryChoice(contactId: string): Promise<boolean
   return (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
 }
 
-export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean } = {}): Promise<void> {
-  if (contact.channel === "WEB" || contact.channel === "MANUAL" || isDeliveryChoice(contact.courseDeliveryChoice)) return;
+export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<void> {
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice)) return;
   if (!opts.byHuman && await isBotFrozen()) return;
   const claim = await prisma.contact.updateMany({
     where: { id: contact.id, courseDeliveryChoice: null, deliveryChoicePromptState: null, accessRevokedAt: null, spamBlockedAt: null },
@@ -101,12 +101,22 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
 /** Deterministic entry before the model and access recovery. No fresh payment,
  * no question state, or an unrelated answer => never chooses a delivery mode. */
 export async function handleDeliveryChoiceReply(contact: Contact, text: string): Promise<boolean> {
+  const receipt = await prisma.receiptCheck.findFirst({ where: {
+    contactId: contact.id, awaitingDeliveryChoice: true,
+    OR: [{ ownerDecision: "APPROVED" }, { ownerDecision: null, kind: "valid" }],
+  }, select: { imageHash: true } });
+  return receipt?.imageHash
+    ? withVerifiedReceiptDelivery(contact.id, receipt.imageHash, () => handleChoice(contact, text, true))
+    : handleChoice(contact, text, false);
+}
+
+async function handleChoice(contact: Contact, text: string, verifiedReceipt: boolean): Promise<boolean> {
   if (await isBotFrozen()) return false;
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-  if (!fresh || fresh.accessRevokedAt || fresh.spamBlockedAt || !await awaitingDeliveryChoice(contact.id)) return false;
+  if (!fresh || fresh.accessRevokedAt || contactAutomationBlocked(fresh, verifiedReceipt ? "verified_receipt_access" : "reply") || !await awaitingDeliveryChoice(contact.id)) return false;
   if ((!fresh.deliveryChoicePromptState || fresh.deliveryChoicePromptState === "FAILED") && !isDeliveryChoice(fresh.courseDeliveryChoice)) {
     if (fresh.deliveryChoicePromptState === "FAILED") await prisma.contact.updateMany({ where: { id: contact.id, deliveryChoicePromptState: "FAILED" }, data: { deliveryChoicePromptState: null } });
-    await askDeliveryChoice(fresh);
+    await askDeliveryChoice(fresh, verifiedReceipt ? { purpose: "verified_receipt_access" } : {});
     return true;
   }
   const answer = parseDeliveryAnswer(text);

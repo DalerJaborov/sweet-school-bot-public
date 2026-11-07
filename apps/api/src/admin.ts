@@ -20,6 +20,8 @@ import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
 import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
 import { assistantRouter } from "./assistantPanel.js";
+import { whatsappAdminRouter, conversationAdminRouter } from "./whatsapp/routes.js";
+import { knowledgeReviewRouter } from "./knowledgeReview.js";
 import { getPrices } from "./services/priceService.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { geminiGenerateUrl, geminiProxyHeaders } from "./gemini.js";
@@ -81,6 +83,9 @@ adminRouter.use("/admin", (req, res, next) => {
   if (req.path === "/login") return next();
   requireAuth(req, res, next);
 });
+adminRouter.use("/admin/v1/whatsapp", whatsappAdminRouter);
+adminRouter.use("/admin/v1/conversations", conversationAdminRouter);
+adminRouter.use("/admin/v1/knowledge", knowledgeReviewRouter);
 
 /**
  * Приём одной настройки обычной HTML-формой.

@@ -7,6 +7,7 @@ import { bindLangSwitch, pageLang, syncLangOnEntry } from "./lang";
 import { CoursesIsland } from "./CoursesIsland";
 import { OfflineForm } from "./OfflineForm";
 import { FreeLesson } from "./FreeLesson";
+import { openChat } from "./chat/bus";
 
 /**
  * Точка входа сайта. Страницы — статичный HTML (scripts/build-site-pages.mjs),
@@ -33,6 +34,16 @@ document
 if (!syncLangOnEntry()) {
   const lang = pageLang();
   const t = dict(lang);
+  let chatAvailable = false;
+  // Reuse the same school assistant; the server's pause is authoritative.
+  void fetch("/api/site/chat-status", { cache: "no-store" }).then(async response => {
+    if (!response.ok || !(await response.json()).enabled) return;
+    const { ChatLauncher } = await import("./chat/ChatLauncher");
+    const mount = document.createElement("div");
+    document.body.append(mount);
+    createRoot(mount).render(<StrictMode><ChatLauncher t={t} lang={lang} /></StrictMode>);
+    chatAvailable = true;
+  }).catch(() => { /* Existing course and WhatsApp links remain usable. */ });
 
   bindLangSwitch();
   bindMobileMenu();
@@ -64,12 +75,13 @@ if (!syncLangOnEntry()) {
     );
   }
 
-  // Продажи ведёт человек: старые CTA ведут к выбору курса, без запуска бота.
+  // When the shared assistant is paused, keep the course-selection fallback.
   function bindChatButtons() {
     document.addEventListener("click", (e) => {
       const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-chat]");
       if (!target) return;
       e.preventDefault();
+      if (chatAvailable) { openChat(target.dataset.prefill); return; }
       const courseSection = document.getElementById("courses-island");
       if (courseSection) {
         const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;

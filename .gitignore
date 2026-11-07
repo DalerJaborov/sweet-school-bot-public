@@ -25,6 +25,9 @@ apps/web/public/robots.txt
 *.db-shm
 *.sqlite
 *.sqlite3
+**/.wwebjs_auth/
+**/.wwebjs_cache/
+services/whatsapp-bridge/data/
 *.dump
 .env.*
 !.env.example

@@ -1,0 +1,364 @@
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MAX_EVENT_BYTES = 64 * 1024 * 1024;
+const MAX_PENDING = 100;
+const REPLY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const idOf = value => typeof value === 'string' ? value : value?._serialized;
+const directId = id => typeof id === 'string' && /^\d{7,20}@(c\.us|lid)$/.test(id);
+const failure = (message, status = 409) => Object.assign(new Error(message), { status });
+const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+class Bridge {
+  constructor({ stateDir, createClient, makeQr, mediaFromUrl, now = Date.now }) {
+    this.stateDir = stateDir;
+    this.createClient = createClient;
+    this.makeQr = makeQr;
+    this.mediaFromUrl = mediaFromUrl;
+    this.now = now;
+    this.client = null;
+    this.starting = null;
+    this.state = 'disconnected';
+    this.contactsReady = false;
+    this.qrDataUrl = null;
+    this.lastError = null;
+    this.accountId = null;
+    this.liveSince = this.now();
+    this.scanPromise = null;
+    this.chatChains = new Map();
+    this.sending = new Map();
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    this.filename = path.join(stateDir, 'state.json');
+    this.data = fs.existsSync(this.filename)
+      ? JSON.parse(fs.readFileSync(this.filename, 'utf8'))
+      : { version: 1, accounts: {} };
+    if (this.data.version !== 1 || !this.data.accounts) throw new Error('Unsupported bridge state');
+    // A transport may have accepted these sends before the previous process died.
+    for (const account of Object.values(this.data.accounts)) {
+      for (const op of Object.values(account.operations)) if (op.status === 'sending') op.status = 'uncertain';
+      for (const event of Object.values(account.events)) {
+        if (event.mediaPending) { delete event.mediaPending; event.mediaUnavailable = 'download_interrupted'; }
+      }
+    }
+    this.save();
+  }
+
+  save() {
+    const temporary = `${this.filename}.tmp`;
+    const fd = fs.openSync(temporary, 'w', 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify(this.data)); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    fs.renameSync(temporary, this.filename);
+    try { const dir = fs.openSync(this.stateDir, 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); } } catch { /* Windows cannot fsync a directory. */ }
+  }
+
+  account() {
+    if (!this.accountId) throw failure('WhatsApp account is not ready');
+    return this.data.accounts[this.accountId];
+  }
+
+  status() {
+    const account = this.accountId ? this.data.accounts[this.accountId] : null;
+    const digits = this.accountId?.split('@')[0] ?? '';
+    return {
+      state: this.state, qrDataUrl: this.qrDataUrl, accountId: this.accountId,
+      accountMasked: digits ? `••••${digits.slice(-4)}` : null,
+      contactsReady: this.contactsReady, blockedCount: account ? new Set(Object.keys(account.blocked).map(alias => (account.aliases[alias] || [alias]).find(id => id.endsWith('@c.us')) || alias)).size : 0,
+      enabled: !!account?.enabled && this.state === 'ready' && this.contactsReady,
+      lastError: this.lastError,
+    };
+  }
+
+  report(error) {
+    this.lastError = String(error?.message || error).slice(0, 180);
+  }
+
+  async start() {
+    if (this.starting) return this.starting;
+    if (this.client && ['pairing', 'starting', 'synchronizing', 'ready', 'paused'].includes(this.state)) return this.status();
+    if (this.client) { await this.client.destroy().catch(() => {}); this.client = null; }
+    this.state = 'starting'; this.contactsReady = false; this.lastError = null;
+    const client = this.createClient();
+    this.client = client;
+    client.on('qr', qr => { void this.makeQr(qr).then(data => {
+      if (this.client === client) { this.qrDataUrl = data; this.state = 'pairing'; this.contactsReady = false; }
+    }).catch(e => this.report(e)); });
+    client.on('ready', () => { void this.onReady(client).catch(e => { this.report(e); this.state = 'paused'; this.contactsReady = false; }); });
+    client.on('auth_failure', () => { this.state = 'auth_failure'; this.contactsReady = false; this.qrDataUrl = null; this.lastError = 'WhatsApp authorization failed'; });
+    client.on('disconnected', () => { this.state = 'disconnected'; this.contactsReady = false; this.qrDataUrl = null; });
+    // message_create also includes outgoing phone messages; a single handler avoids duplicate events.
+    client.on('message_create', message => {
+      if (this.client !== client) return;
+      void this.onMessage(message).catch(error => { this.report(error); this.contactsReady = false; this.state = 'paused'; });
+    });
+    this.starting = client.initialize().catch(error => { this.report(error); this.state = 'disconnected'; }).finally(() => { this.starting = null; });
+    // Browser initialization can wait for QR indefinitely; HTTP should return immediately.
+    return this.status();
+  }
+
+  async onReady(client) {
+    if (this.client !== client) return;
+    const accountId = idOf(client.info?.wid);
+    if (!directId(accountId)) throw failure('Unable to resolve connected account');
+    this.accountId = accountId;
+    this.data.accounts[accountId] ||= { enabled: false, blocked: {}, takeovers: {}, aliases: {}, events: {}, operations: {} };
+    this.liveSince = this.now();
+    this.qrDataUrl = null; this.state = 'synchronizing'; this.contactsReady = false;
+    this.save();
+    await this.scanContacts();
+    this.state = this.account().enabled ? 'ready' : 'paused';
+  }
+
+  async aliasesFor(chatId, contact) {
+    const aliases = new Set([chatId, idOf(contact?.id)].filter(directId));
+    if (idOf(contact?.id)?.endsWith('@c.us') && typeof contact?.number === 'string' && /^\d{7,15}$/.test(contact.number)) aliases.add(`${contact.number}@c.us`);
+    const remembered = this.account().aliases[chatId] || [];
+    remembered.forEach(id => { if (directId(id)) aliases.add(id); });
+    if ([...aliases].some(id => id.endsWith('@lid'))) {
+      try {
+        const mappings = await this.client.getContactLidAndPhone([...aliases]);
+        for (const mapping of mappings) {
+          if (directId(mapping.lid)) aliases.add(mapping.lid);
+          if (directId(mapping.pn)) aliases.add(mapping.pn);
+        }
+      } catch { /* A remembered verified mapping is still usable. */ }
+    }
+    return [...aliases];
+  }
+
+  rememberAliases(aliases) {
+    for (const alias of aliases) this.account().aliases[alias] = aliases;
+  }
+
+  async scanContacts() {
+    if (this.scanPromise) return this.scanPromise;
+    this.scanPromise = this.doScan().finally(() => { this.scanPromise = null; });
+    return this.scanPromise;
+  }
+
+  async doScan() {
+    if (!this.client || !this.accountId) throw failure('Account unavailable');
+    const accountId = this.accountId;
+    try {
+      const contacts = await this.client.getContacts();
+      if (!Array.isArray(contacts) || contacts.length === 0) throw failure('Contact list has not loaded');
+      for (const contact of contacts) {
+        const id = idOf(contact.id);
+        if (!directId(id) || contact.isMyContact !== true) continue;
+        const aliases = await this.aliasesFor(id, contact);
+        if (this.accountId !== accountId) throw failure('Account changed during contact synchronization');
+        this.rememberAliases(aliases);
+        for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
+      }
+      this.save(); this.contactsReady = true;
+    } catch (error) {
+      this.contactsReady = false; this.report(error); throw error;
+    }
+  }
+
+  async contactStatus(chatId) {
+    const denied = { blocked: true, isMyContact: null, aliases: [], takenOver: false, identityResolved: false };
+    if (!directId(chatId) || !this.client || !this.contactsReady || !this.accountId) return denied;
+    const accountId = this.accountId;
+    try {
+      const contact = await this.client.getContactById(chatId);
+      if (typeof contact?.isMyContact !== 'boolean' || contact.isMe || contact.isGroup) return denied;
+      const aliases = await this.aliasesFor(chatId, contact);
+      if (this.accountId !== accountId) return denied;
+      const identityResolved = aliases.some(id => /^\d{7,15}@c\.us$/.test(id));
+      if (!identityResolved) return { ...denied, aliases };
+      this.rememberAliases(aliases);
+      if (contact.isMyContact) for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
+      const blocked = contact.isMyContact || aliases.some(id => !!this.account().blocked[id]);
+      const takenOver = aliases.some(id => !!this.account().takeovers[id]);
+      this.save();
+      return { blocked, isMyContact: contact.isMyContact, aliases, takenOver, identityResolved };
+    } catch (error) { this.report(error); return denied; }
+  }
+
+  async block(chatId) {
+    const status = await this.contactStatus(chatId);
+    if (!directId(chatId) || !this.accountId) throw failure('Unknown contact', 400);
+    for (const alias of new Set([chatId, ...status.aliases])) this.account().blocked[alias] ||= 'manual';
+    this.save(); return { blocked: true };
+  }
+
+  async resetTakeover(chatId) {
+    const status = await this.contactStatus(chatId);
+    if (!status.identityResolved) throw failure('Contact identity unavailable');
+    for (const alias of status.aliases) delete this.account().takeovers[alias];
+    this.save(); return { reset: true, blocked: status.blocked };
+  }
+
+  pause() {
+    if (this.accountId) { this.account().enabled = false; this.save(); }
+    if (this.client && this.contactsReady) this.state = 'paused';
+    return this.status();
+  }
+
+  async resume() {
+    if (!this.contactsReady || !['ready', 'paused'].includes(this.state)) throw failure('Contacts must load before enabling replies');
+    await this.scanContacts();
+    this.account().enabled = true; this.save(); this.state = 'ready'; return this.status();
+  }
+
+  async logout() {
+    this.pause();
+    const client = this.client;
+    this.contactsReady = false; this.qrDataUrl = null; this.state = 'disconnected';
+    if (client) { await client.logout(); await client.destroy().catch(() => {}); }
+    this.client = null; this.accountId = null;
+    return this.status();
+  }
+
+  async onMessage(message) {
+    const accountId = this.accountId;
+    const messageId = idOf(message.id);
+    const chatId = message.fromMe ? message.to : message.from;
+    const timestamp = Number(message.timestamp) * 1000;
+    if (!messageId || !directId(chatId) || !Number.isFinite(timestamp)
+      || timestamp < Math.floor(this.liveSince / 1000) * 1000 || timestamp > this.now() + 60_000
+      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) return;
+    if (message.fromMe) {
+      // A library send emits its own echo before its promise returns on some versions.
+      const active = this.sending.get(chatId);
+      if (active) await active.catch(() => {});
+      if (Object.values(this.account().operations).some(op => op.messageId === messageId)) return;
+    }
+    const status = await this.contactStatus(chatId);
+    if (this.accountId !== accountId) return;
+    if (status.blocked || !status.identityResolved) return; // Do not retain personal conversations.
+    const account = this.account();
+    if (account.events[messageId]) return;
+    if (message.fromMe) {
+      for (const alias of status.aliases) account.takeovers[alias] = this.now();
+      this.save();
+    } else if (!account.enabled || this.state !== 'ready') return;
+    if (!message.fromMe && !['chat', 'image', 'audio', 'ptt', 'document', 'video'].includes(message.type)) return;
+    const event = {
+      id: messageId, messageId, accountId: this.accountId,
+      type: message.fromMe ? 'human' : 'incoming', chatId, timestamp,
+      text: typeof message.body === 'string' ? message.body.slice(0, 12000) : '',
+    };
+    if (!message.fromMe && status.takenOver) event.takenOver = true;
+    if (!message.fromMe && message.hasMedia) event.mediaPending = true;
+    // Persist the incoming envelope before any network download. A restart keeps
+    // the question and marks interrupted media explicitly instead of losing it.
+    this.appendEvent(event);
+    if (!message.fromMe && message.hasMedia) {
+      const advertisedSize = Number(message._data?.size ?? message._data?.fileSize);
+      if (!Number.isFinite(advertisedSize) || advertisedSize <= 0 || advertisedSize > MAX_MEDIA_BYTES) {
+        event.mediaUnavailable = 'size_unverified_or_too_large';
+      } else if (['image', 'audio', 'ptt'].includes(message.type)) {
+        try {
+          const media = await message.downloadMedia();
+          const bytes = media?.data ? Buffer.byteLength(media.data, 'base64') : 0;
+          if (bytes > 0 && bytes <= MAX_MEDIA_BYTES && /^(image\/(jpeg|png|webp)|audio\/[a-z0-9.+-]+)$/i.test(media.mimetype)) {
+            event.media = { data: media.data, mimeType: media.mimetype, filename: media.filename || undefined };
+            if (Buffer.byteLength(JSON.stringify(Object.values(account.events).filter(item => !item.ackedAt))) > MAX_EVENT_BYTES) {
+              delete event.media; event.mediaUnavailable = 'queue_media_capacity';
+            }
+          } else event.mediaUnavailable = 'unsupported_or_too_large';
+        } catch { event.mediaUnavailable = 'download_failed'; }
+      } else event.mediaUnavailable = 'unsupported';
+    }
+    if (this.accountId !== accountId) return;
+    delete event.mediaPending;
+    this.save();
+  }
+
+  appendEvent(event) {
+    const account = this.account();
+    const now = this.now();
+    for (const [id, old] of Object.entries(account.events)) {
+      if (old.ackedAt && now - old.timestamp > REPLY_MAX_AGE_MS * 7) delete account.events[id];
+    }
+    const pending = Object.values(account.events).filter(item => !item.ackedAt);
+    if (pending.length >= MAX_PENDING || Buffer.byteLength(JSON.stringify(pending)) + Buffer.byteLength(JSON.stringify(event)) > MAX_EVENT_BYTES) {
+      account.enabled = false; this.state = 'paused'; this.lastError = 'Incoming queue is full; replies paused'; this.save();
+      throw failure('Incoming queue capacity exceeded');
+    }
+    account.events[event.id] = event; this.save();
+  }
+
+  events() {
+    if (!this.accountId) return { events: [] };
+    const events = []; let bytes = 0;
+    // One maximum-sized image is ~11 MB as base64. Bound each polling response.
+    for (const event of Object.values(this.account().events)) {
+      if (event.ackedAt || event.mediaPending) continue;
+      const size = Buffer.byteLength(JSON.stringify(event));
+      if (events.length && bytes + size > 12 * 1024 * 1024) break;
+      events.push(event); bytes += size;
+      if (events.length >= 10) break;
+    }
+    return { events };
+  }
+
+  ack(id) {
+    const event = this.account().events[id];
+    if (!event) throw failure('Unknown event', 404);
+    event.ackedAt = this.now(); delete event.media; this.save(); return { acknowledged: true };
+  }
+
+  async send(input) {
+    const { operationId, chatId, replyToId, purpose, text, mediaUrl, mediaType } = input || {};
+    if (typeof operationId !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(operationId)
+      || !directId(chatId) || typeof replyToId !== 'string' || !['reply', 'verified_receipt_access'].includes(purpose)
+      || (typeof text !== 'string' && typeof mediaUrl !== 'string') || (text && text.length > 12000)) throw failure('Invalid send request', 400);
+    const accountId = this.accountId;
+    const account = this.account();
+    const payloadHash = digest({ chatId, replyToId, purpose, text, mediaUrl, mediaType });
+    const previous = account.operations[operationId];
+    if (previous) {
+      if (previous.payloadHash !== payloadHash) throw failure('Operation payload changed');
+      if (previous.status === 'sent') return { operationId, messageId: previous.messageId, status: 'sent' };
+      throw failure('Send outcome uncertain; do not retry automatically');
+    }
+    const previousSend = this.chatChains.get(chatId) || Promise.resolve();
+    const task = previousSend.catch(() => {}).then(async () => {
+      if (this.accountId !== accountId) throw failure('Account changed');
+      const known = account.operations[operationId];
+      if (known?.status === 'sent') return { operationId, messageId: known.messageId, status: 'sent' };
+      if (known) throw failure('Send outcome uncertain; do not retry automatically');
+      const inbound = account.events[replyToId];
+      if (!inbound || inbound.type !== 'incoming' || inbound.chatId !== chatId || inbound.accountId !== accountId
+        || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
+      await this.assertSendAllowed(chatId, purpose);
+      const content = mediaUrl ? await this.mediaFromUrl(mediaUrl, mediaType) : text;
+      // Network/media work may take time. Recheck immediately before dispatch.
+      await this.assertSendAllowed(chatId, purpose);
+      if (this.accountId !== accountId) throw failure('Account changed');
+      const op = { status: 'sending', payloadHash, chatId, replyToId, purpose, createdAt: this.now() };
+      account.operations[operationId] = op; this.save();
+      let settle;
+      const ownSend = new Promise(resolve => { settle = resolve; });
+      this.sending.set(chatId, ownSend);
+      try {
+        const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text ? { caption: text } : {}), sendSeen: false });
+        const messageId = idOf(sent?.id);
+        if (!messageId) throw failure('Transport returned no message ID');
+        op.status = 'sent'; op.messageId = messageId; this.save();
+        return { operationId, messageId, status: 'sent' };
+      } catch (error) {
+        op.status = 'uncertain'; this.save(); this.report(error);
+        throw failure('Send outcome uncertain; do not retry automatically');
+      } finally { settle(); if (this.sending.get(chatId) === ownSend) this.sending.delete(chatId); }
+    });
+    this.chatChains.set(chatId, task);
+    try { return await task; }
+    finally { if (this.chatChains.get(chatId) === task) this.chatChains.delete(chatId); }
+  }
+
+  async assertSendAllowed(chatId, purpose) {
+    if (!this.contactsReady || this.state !== 'ready' || !this.account().enabled) throw failure('Replies are paused', 403);
+    const status = await this.contactStatus(chatId);
+    if (status.blocked || !status.identityResolved) throw failure('Contact is excluded from automation', 403);
+    if (status.takenOver && purpose !== 'verified_receipt_access') throw failure('Owner has taken over this chat', 403);
+  }
+}
+
+module.exports = { Bridge, MAX_MEDIA_BYTES, REPLY_MAX_AGE_MS };
