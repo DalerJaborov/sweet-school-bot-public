@@ -16,6 +16,7 @@ import { createRateLimiter } from "../services/rateLimit.js";
 import { visitorOf } from "./visitor.js";
 import type { Attachment } from "../ai/media.js";
 import type { Contact, Message } from "@prisma/client";
+import { renderCatalogFragment, renderCatalogUnavailable } from "./catalogFragment.js";
 
 /**
  * ПУБЛИЧНОЕ API САЙТА shirinsweets.online — каталог, чат с ботом, заявка на
@@ -77,6 +78,28 @@ export function resetSiteRateLimits(): void {
 const typingContacts = new Set<string>();
 
 type Visitor = { id: string; isNew: boolean };
+
+// Public, non-personal HTML for Nginx SSI. Keep BEFORE the visitor middleware:
+// rendering a catalogue must not issue cookies or create visitor/contact data.
+siteRouter.get(`${API_BASE}/catalog-fragment`, async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  res.type("html");
+  const query = z.object({
+    lang: z.enum(["ru", "tg"]),
+    only: z.enum(["COURSE50", "COURSE70"]).optional(),
+  }).safeParse(req.query);
+  if (!query.success) {
+    res.status(400).send(renderCatalogUnavailable("ru"));
+    return;
+  }
+  try {
+    res.send(renderCatalogFragment(await getCatalog(), query.data.lang, query.data.only));
+  } catch (err) {
+    logError("site:catalogFragment", err);
+    res.send(renderCatalogUnavailable(query.data.lang));
+  }
+});
 
 // Кука ставится на ЛЮБОЕ обращение к /api/site/* (контракт), поэтому
 // посетитель определяется один раз здесь, а не в каждом обработчике.
@@ -187,12 +210,17 @@ async function buildCatalog(): Promise<Catalog> {
   };
 }
 
-siteRouter.get(`${API_BASE}/courses`, async (_req: Request, res: Response) => {
+async function getCatalog(): Promise<Catalog> {
   if (!catalogCache || Date.now() - catalogCache.at > CATALOG_TTL_MS) {
     catalogCache = { at: Date.now(), data: await buildCatalog() };
   }
+  return catalogCache.data;
+}
+
+siteRouter.get(`${API_BASE}/courses`, async (_req: Request, res: Response) => {
+  const catalog = await getCatalog();
   res.setHeader("Cache-Control", "public, max-age=60");
-  res.json(catalogCache.data);
+  res.json(catalog);
 });
 
 // ---------- чат ----------

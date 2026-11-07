@@ -27,7 +27,7 @@ vi.mock("../../src/systemAlerts.js", () => ({
   notifyOwnerDirect: (...a: unknown[]) => notifyOwnerDirect(...(a as [])),
 }));
 
-import { siteRouter, resetSiteRateLimits } from "../../src/site/router.js";
+import { siteRouter, resetSiteRateLimits, resetCatalogCache } from "../../src/site/router.js";
 import { encodeVisitorCookie, issueVisitorId } from "../../src/site/visitor.js";
 
 let server: Server;
@@ -80,6 +80,52 @@ describe("/api/site", () => {
     db.model("setting").findUnique.mockResolvedValue(null);
   });
   afterEach(restorePrisma);
+
+  it("catalog-fragment shares the JSON catalogue without cookies or visitor writes", async () => {
+    db.model("course").findMany.mockResolvedValue([
+      { id: "c1", code: "COURSE50", title: "Арт-десерты", description: null, price: 83, coverUrl: null, active: true, order: 1 },
+    ]);
+    db.model("lesson").findMany.mockResolvedValue([{ durationSec: 600, module: { courseId: "c1" } }]);
+    const response = await fetch(`${base}/api/site/catalog-fragment?lang=tg&only=COURSE50`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(await response.text()).toContain("83 сомонӣ");
+    // A second representation must read the same cached snapshot, not a
+    // different price service or a second catalogue build.
+    const json = await (await fetch(`${base}/api/site/courses`)).json() as { courses: { price: number }[] };
+    expect(json.courses[0].price).toBe(83);
+    expect(db.model("course").findMany).toHaveBeenCalledTimes(1);
+    expect(db.model("contact").upsert).not.toHaveBeenCalled();
+    db.model("course").findMany.mockResolvedValue([
+      { id: "c1", code: "COURSE50", title: "Арт-десерты", description: null, price: 127, coverUrl: null, active: true, order: 1 },
+    ]);
+    resetCatalogCache();
+    const updated = await fetch(`${base}/api/site/catalog-fragment?lang=ru`);
+    expect(await updated.text()).toContain("127 сомони");
+    expect(db.model("course").findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["", "?lang=kk", "?lang=ru&only=unknown", "?lang=ru&lang=tg"])("fragment rejects invalid query without a cookie: %s", async (query) => {
+    const response = await fetch(`${base}/api/site/catalog-fragment${query}`);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(db.model("course").findMany).not.toHaveBeenCalled();
+  });
+
+  it("fragment returns a price-free contact fallback when the catalogue fails", async () => {
+    db.model("course").findMany.mockRejectedValueOnce(new Error("catalog unavailable"));
+    const response = await fetch(`${base}/api/site/catalog-fragment?lang=ru`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    const html = await response.text();
+    expect(html).toContain('data-server-catalog="unavailable"');
+    expect(html).not.toContain('class="price');
+    expect(html).not.toContain("catalog unavailable");
+  });
 
   it.each(["botFrozen", "aiEnabled"])("%s blocks chat before contacts, receipt uploads and messages", async (key) => {
     db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>

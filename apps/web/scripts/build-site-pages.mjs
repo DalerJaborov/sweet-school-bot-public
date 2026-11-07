@@ -161,7 +161,7 @@ function renderHeader(site, page, lang, ctx) {
       })
       .join("");
   const langSwitch = LANGS.map((l) => {
-    const url = l === lang ? "" : pageUrl(site, page.slug, l);
+    const url = l === lang ? "" : pageUrl(site, page.slug === "404" ? "" : page.slug, l);
     const label = l === "tg" ? "ТҶ" : "РУ";
     return l === lang
       ? `<span class="lang-pill on" aria-current="true" lang="${l}">${label}</span>`
@@ -394,15 +394,19 @@ const SECTIONS = {
 
   courses(s, lang, ctx) {
     const ui = ctx.ui;
-    // Островок React. До загрузки JS (и для поисковика) — текст-заглушка и
-    // рабочие кнопки на WhatsApp; цены здесь НЕ пишем — они только из API.
+    // Nginx inserts the current public catalogue before sending HTML, so
+    // visitors and crawlers see the same prices without a JavaScript fetch.
+    // Static previews and failed subrequests retain a price-free fallback.
     const fallback = `<div class="card"><p>${esc(ui.coursesFallback)}</p>
       <div class="btn-row" style="margin-top:16px">
-        <a class="btn" href="${esc(ctx.wa)}" data-chat="${esc(ui.ctaBuyPrefill)}">${esc(ui.ctaBuy)}</a>
+        <a class="btn" href="${esc(ctx.wa)}">${esc(ui.ctaBuy)}</a>
         <a class="btn btn-ghost" href="/course">${esc(ui.ctaLessons)}</a>
       </div></div>`;
     const dataCourse = s.only ? ` data-course="${esc(s.only)}"` : "";
-    return wrap(s, `${sectionHead(s, lang)}<div id="courses-island"${dataCourse}>${fallback}</div>`, ctx);
+    const query = `lang=${lang}${s.only ? `&only=${encodeURIComponent(s.only)}` : ""}`;
+    const include = `<!--# block name="catalog-fallback" -->${fallback}<!--# endblock -->` +
+      `<!--# include virtual="/_site/catalog-fragment?${query}" stub="catalog-fallback" -->`;
+    return wrap(s, `${sectionHead(s, lang)}<div id="courses-island"${dataCourse}>${include}</div>`, ctx);
   },
 
   menu(s, lang, ctx) {
