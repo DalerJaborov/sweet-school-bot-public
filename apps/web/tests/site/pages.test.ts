@@ -7,6 +7,7 @@ import {
   md,
   resolveSsiFallback,
   usesOfferFacts,
+  verificationTags,
 } from "../../scripts/build-site-pages.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -123,6 +124,7 @@ describe("Статичные страницы сайта", () => {
     expect(sm).not.toContain("<lastmod>");
     const robots = files.get("public/robots.txt")!;
     expect(robots).toContain("Disallow: /api/");
+    expect(robots).toContain("Disallow: /l/");
     // Адрес панели нигде на сайте не светим: ни в robots, ни ссылкой в подвале.
     expect(robots).not.toContain("/panel");
     expect(robots).not.toContain("/admin");
@@ -190,6 +192,66 @@ describe("Статичные страницы сайта", () => {
       '&lt;b&gt;a&lt;/b&gt; <strong>b</strong> <a href="/tg/faq">c</a>',
     );
     expect(md("[buy](chat:)", "ru", ctx)).toContain('data-chat="x"');
+  });
+
+  it.each(html)("%s: title ≤ 70, description 80–200, один h1, favicon.ico, без меток по умолчанию", (_file, body) => {
+    const title = /<title>([^<]+)<\/title>/.exec(body)![1];
+    const desc = /name="description" content="([^"]+)"/.exec(body)![1];
+    expect(title.length).toBeLessThanOrEqual(70);
+    expect(desc.length).toBeGreaterThanOrEqual(80);
+    expect(desc.length).toBeLessThanOrEqual(200);
+    expect((body.match(/<h1[ >]/g) ?? []).length).toBe(1);
+    expect(body).not.toContain('content="noindex');
+    expect(body).toMatch(/rel="icon" href="\/favicon\.ico[?"]/);
+    expect(body).not.toContain("site-verification");
+    expect(body).not.toContain("yandex-verification");
+  });
+
+  it("метки Google/Яндекс: пусто — нет тега; код из кабинета — тег; мусор отбрасывается", () => {
+    expect(verificationTags({})).toBe("");
+    expect(verificationTags({ verification: { google: "", yandex: "" } })).toBe("");
+    const withTags = { verification: { google: "AbC_123-xyzQWE", yandex: "0123456789abcdef" } };
+    const out = verificationTags(withTags);
+    expect(out).toContain('<meta name="google-site-verification" content="AbC_123-xyzQWE" />');
+    expect(out).toContain('<meta name="yandex-verification" content="0123456789abcdef" />');
+    expect(verificationTags({ verification: { google: '"><script>alert(1)</script>' } })).toBe("");
+    const page = renderSite({ ...content, site: { ...content.site, ...withTags } }).get("faq.html")!;
+    expect(page).toContain("yandex-verification");
+  });
+});
+
+describe("noindex только на приватных путях (SCH-04)", () => {
+  const nginx = fs
+    .readFileSync(path.resolve(__dirname, "../../nginx.conf"), "utf8")
+    .replace(/^\s*#.*$/gm, "");
+  // Блоки `location … { … }` без вложенных скобок (в этом конфиге их нет у add_header).
+  const blocks = [...nginx.matchAll(/location\s+([^{]+?)\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g)].map((m) => ({
+    path: m[1].trim(),
+    body: m[2],
+  }));
+  const noindexed = blocks.filter((b) => /add_header X-Robots-Tag "noindex/.test(b.body)).map((b) => b.path);
+
+  it("X-Robots-Tag noindex ровно на /course, /l/, /panel — и больше нигде", () => {
+    expect(noindexed.sort()).toEqual(["/course/", "/l/", "/panel/", "= /course", "= /panel"].sort());
+  });
+
+  it("публичные страницы и главная не закрыты ни nginx, ни метой", () => {
+    for (const b of blocks.filter((x) => !noindexed.includes(x.path))) {
+      expect(b.body, b.path).not.toMatch(/X-Robots-Tag\s+"[^"]*noindex/);
+    }
+    // Ни одного X-Robots-Tag вне location-блоков (иначе закрылся бы весь сайт).
+    expect((nginx.match(/X-Robots-Tag "noindex/g) ?? []).length).toBe(noindexed.length);
+    for (const [file, body] of html) {
+      expect(body, file).not.toMatch(/<meta name="robots" content="[^"]*noindex/);
+    }
+  });
+
+  it("приватные приложения несут noindex в самом HTML (вторая защита)", () => {
+    for (const f of ["course.html", "index.html"]) {
+      expect(fs.readFileSync(path.resolve(__dirname, "../..", f), "utf8"), f).toMatch(
+        /<meta name="robots" content="noindex, nofollow"/,
+      );
+    }
   });
 });
 

@@ -845,6 +845,23 @@ function buildJsonLd(site, page, lang, ui) {
 
 // ---------- страница целиком ----------
 
+/**
+ * Метки подтверждения сайта в Google Search Console и Яндекс.Вебмастере.
+ * Пустое значение в site.json → тега нет (рубильник «выключено»). Значение —
+ * только код из кабинета: буквы, цифры, «_» и «-»; всё прочее отбрасываем.
+ */
+export function verificationTags(site) {
+  const ok = (v) => (typeof v === "string" && /^[\w-]{8,100}$/.test(v.trim()) ? v.trim() : "");
+  const g = ok(site.verification?.google);
+  const y = ok(site.verification?.yandex);
+  return [
+    g ? `<meta name="google-site-verification" content="${esc(g)}" />` : "",
+    y ? `<meta name="yandex-verification" content="${esc(y)}" />` : "",
+  ]
+    .filter(Boolean)
+    .join("\n    ");
+}
+
 function renderHead(site, page, lang, ctx) {
   const url = pageUrl(site, page.slug, lang);
   const title = L(page.title, lang);
@@ -884,6 +901,7 @@ function renderHead(site, page, lang, ctx) {
     <title>${esc(title)}</title>
     <meta name="description" content="${esc(desc)}" />
     ${page.noindex ? '<meta name="robots" content="noindex, follow" />' : ""}
+    ${verificationTags(site)}
     <link rel="canonical" href="${esc(url)}" />
     ${page.noindex ? "" : `${alts}\n    <link rel="alternate" hreflang="x-default" href="${esc(pageUrl(site, page.slug, "tg"))}" />`}
     <meta property="og:type" content="website" />
@@ -1045,6 +1063,7 @@ function renderRobots(site) {
   return `User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /l/
 # Private application HTML uses noindex; allow crawling to read that rule.
 Sitemap: ${site.origin}/sitemap.xml
 `;
