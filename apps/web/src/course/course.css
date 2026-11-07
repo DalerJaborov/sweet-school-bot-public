@@ -2141,3 +2141,7 @@ span.ingredient-row {
 .lang-pill.on, .tab.on, .portion-btn.on { background: var(--c-bg); color: var(--c-ink); }
 
 .player-hint-ok { color: var(--c-photo-chip-ink); }
+
+.recipe-originals { margin-top: 24px; }
+.recipe-originals h2 { font-size: 20px; margin-bottom: 16px; }
+.recipe-originals .photos img { width: 100%; height: auto; object-fit: contain; }

@@ -20,16 +20,14 @@ import { Illustration } from "./components/Illustration";
  */
 
 export function Onboarding({ onDone }: { onDone: (lang: Lang) => void }) {
-  const [lang, setLang] = useState<Lang | null>(null);
+  const [lang, setLang] = useState<Lang | null>("tg");
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // До выбора языка подписи показываем по-русски: это язык, на котором написан
-  // весь исходный текст школы. Гадать по стране входа не станем — в Душанбе
-  // русскоязычных не меньше.
-  const t = dict(lang ?? "ru");
+  // Первый вход — на таджикском. Русский доступен сразу рядом с формой.
+  const t = dict(lang ?? "tg");
 
   const choose = (next: Lang) => {
     applyLang(next);
@@ -75,6 +73,9 @@ export function Onboarding({ onDone }: { onDone: (lang: Lang) => void }) {
 
   return (
     <div className="center onboarding">
+      <div className="lang-grid" role="group" aria-label={t.languageLabel}>
+        {LANGUAGES.map((l) => <button key={l.code} type="button" className="btn ghost" aria-pressed={lang === l.code} onClick={() => choose(l.code)} disabled={busy}>{l.label}</button>)}
+      </div>
       <h1>{t.yourName}</h1>
       <p className="sub">{t.nameHint}</p>
       <form

@@ -1993,3 +1993,13 @@ a {
 .course-cover > svg { color: var(--c-muted); width: 48px; height: 48px; }
 
 .social { width: 48px; height: 48px; }
+
+/* Section links belong to each detailed page, without changing its content. */
+.page-contents { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 20px; padding-bottom: 12px; }
+.page-contents a { display: inline-flex; align-items: center; min-height: 48px; padding: 8px 16px; background: var(--c-surface); border-radius: 14px; color: var(--c-ink); text-decoration: none; }
+.page-contents a:hover { color: var(--c-accent); }
+.hero-compact .hero-grid { display: block; }
+.hero-compact .hero-card { max-width: 780px; }
+section[id] { scroll-margin-top: 96px; }
+.lang-pill { padding-inline: 10px; font-size: 12px; }
+@media (max-width: 420px) { .header-tools { gap: 4px; } .site-header .logo { font-size: 14px; } .site-header .wrap { gap: 6px; } .lang-pill { padding-inline: 8px; } }

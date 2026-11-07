@@ -7,10 +7,10 @@ uploads/
 .claude/settings.local.json
 prisma/backup/
 
-# Локальные копии продовой базы — никогда в репозиторий
+# Р›РѕРєР°Р»СЊРЅС‹Рµ РєРѕРїРёРё РїСЂРѕРґРѕРІРѕР№ Р±Р°Р·С‹ вЂ” РЅРёРєРѕРіРґР° РІ СЂРµРїРѕР·РёС‚РѕСЂРёР№
 backups/
 
-# Страницы сайта генерируются на сборке из apps/web/site-content (scripts/build-site-pages.mjs)
+# РЎС‚СЂР°РЅРёС†С‹ СЃР°Р№С‚Р° РіРµРЅРµСЂРёСЂСѓСЋС‚СЃСЏ РЅР° СЃР±РѕСЂРєРµ РёР· apps/web/site-content (scripts/build-site-pages.mjs)
 apps/web/*.html
 !apps/web/index.html
 !apps/web/course.html
@@ -29,3 +29,5 @@ apps/web/public/robots.txt
 .env.*
 !.env.example
 !.env.*.example
+
+apps/web/ru/

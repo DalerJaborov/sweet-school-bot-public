@@ -21,17 +21,19 @@ describe("Статичные страницы сайта", () => {
   });
 
   it.each(html)("%s: canonical, hreflang, JSON-LD, lang, текст", (file, body) => {
-    const tg = file.startsWith("tg/");
+    const tg = file === "site.html" || file.startsWith("tg/");
     const slug = file
-      .replace(/^tg\//, "")
+      .replace(/^(tg|ru)\//, "")
       .replace(/\.html$/, "")
       .replace(/^(site|index)$/, "");
-    const self = `https://shirinsweets.online${tg ? "/tg" : ""}/${slug}`;
+    const ru = `https://shirinsweets.online/${slug || "ru/"}`;
+    const tajik = `https://shirinsweets.online${slug ? `/tg/${slug}` : "/"}`;
+    const self = tg ? tajik : ru;
     expect(body).toContain(`<html lang="${tg ? "tg" : "ru"}">`);
     expect(body).toContain(`<link rel="canonical" href="${self}" />`);
-    expect(body).toContain(`hreflang="ru" href="https://shirinsweets.online/${slug}"`);
-    expect(body).toContain(`hreflang="tg" href="https://shirinsweets.online/tg/${slug}"`);
-    expect(body).toContain(`hreflang="x-default" href="https://shirinsweets.online/${slug}"`);
+    expect(body).toContain(`hreflang="ru" href="${ru}"`);
+    expect(body).toContain(`hreflang="tg" href="${tajik}"`);
+    expect(body).toContain(`hreflang="x-default" href="${tajik}"`);
     expect(body).toMatch(/<meta property="og:title" content=".+"/);
     expect(body).toMatch(/<meta name="description" content=".+"/);
     const ld = body.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
@@ -76,9 +78,9 @@ describe("Статичные страницы сайта", () => {
     );
     // Превью ссылки — своё на страницу и язык, крупная карточка.
     for (const [file, page] of html) {
-      const tg = file.startsWith("tg/");
+      const tg = file === "site.html" || file.startsWith("tg/");
       const key = file
-        .replace(/^tg\//, "")
+        .replace(/^(tg|ru)\//, "")
         .replace(/\.html$/, "")
         .replace(/^(site|index)$/, "home");
       expect(page).toContain(
@@ -106,7 +108,8 @@ describe("Статичные страницы сайта", () => {
     expect(body).toContain('href="/course"');
     expect(body).not.toContain('href="/tg/course"');
     expect(localHref("/faq", "tg")).toBe("/tg/faq");
-    expect(localHref("/", "tg")).toBe("/tg/");
+    expect(localHref("/", "tg")).toBe("/");
+    expect(localHref("/", "ru")).toBe("/ru/");
     expect(localHref("/l/abc", "tg")).toBe("/l/abc");
     expect(localHref("#offline", "tg")).toBe("#offline");
   });
@@ -148,8 +151,8 @@ describe("Статичные страницы сайта", () => {
       expect(body).not.toMatch(/14:00|17:00|Рудаки|Пример отзыва|Мадина|Нигора|Фарзона/);
     }
     expect(files.get("kursy-konditera-dushanbe.html")).toContain("13:40–16:30");
-    expect(files.get("site.html")).toContain("Клубника в шоколаде");
-    expect(files.get("tg/index.html")).toContain("Тути фаранг дар шоколад");
+    expect(files.get("ru/index.html")).toContain("Клубника в шоколаде");
+    expect(files.get("site.html")).toContain("Тути фаранг дар шоколад");
     expect(files.get("404.html")).not.toContain('rel="alternate"');
   });
 

@@ -107,20 +107,24 @@ export function Lesson({
         aria-labelledby={tabId("lesson", tab)}
         tabIndex={0}
       >
-        {tab === "recipe" && (
-          <RecipeCard
+        {tab === "recipe" && <>
+          {(lesson.recipeData || lesson.recipeText || !photos.length) && <RecipeCard
             t={t}
             title={lesson.title}
             number={lessonNumber}
             recipeData={lesson.recipeData ?? null}
             fallbackText={lesson.recipeText}
-          />
-        )}
+          />}
+          {photos.length > 0 && <section className="recipe-originals" aria-label={t.photos}>
+            <h2>{t.photos}</h2>
+            <div className="photos">{photos.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener"><img src={url} alt={`${lesson.title} · ${index + 1}`} loading="lazy" decoding="async" /></a>)}</div>
+          </section>}
+        </>}
         {tab === "photos" &&
           (photos.length > 0 ? (
             <div className="photos">
               {photos.map((url) => (
-                <img key={url} src={url} alt="" loading="lazy" decoding="async" />
+                <img key={url} src={url} alt={lesson.title} loading="lazy" decoding="async" />
               ))}
             </div>
           ) : (

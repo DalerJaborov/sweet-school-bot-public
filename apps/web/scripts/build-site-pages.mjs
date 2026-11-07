@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const WEB_ROOT = path.resolve(__dirname, "..");
 const CONTENT_DIR = path.join(WEB_ROOT, "site-content");
 
-const LANGS = ["ru", "tg"];
+const LANGS = ["tg", "ru"];
 /** Пути, которые НЕ зеркалятся под /tg/ — приложения, а не страницы сайта. */
 const APP_PATHS = ["/course", "/l/", "/panel", "/api", "/admin"];
 
@@ -65,6 +65,7 @@ function isAppPath(href) {
 
 /** Внутренняя ссылка с учётом языка: /faq → /tg/faq на таджикской странице. */
 export function localHref(href, lang) {
+  if (href === "/") return lang === "tg" ? "/" : "/ru/";
   if (!href.startsWith("/") || lang === "ru" || isAppPath(href)) return href;
   return href === "/" ? "/tg/" : `/tg${href}`;
 }
@@ -87,12 +88,14 @@ function stripMd(text) {
 }
 
 function pageUrl(site, slug, lang) {
+  if (!slug) return `${site.origin}${lang === "tg" ? "/" : "/ru/"}`;
   const base = lang === "ru" ? "" : "/tg";
   return `${site.origin}${base}/${slug}`;
 }
 
 function outFile(slug, lang) {
-  if (lang === "ru") return slug ? `${slug}.html` : "site.html";
+  if (!slug) return lang === "tg" ? "site.html" : "ru/index.html";
+  if (lang === "ru") return `${slug}.html`;
   return slug ? `tg/${slug}.html` : "tg/index.html";
 }
 
@@ -162,7 +165,7 @@ function renderHeader(site, page, lang, ctx) {
       .join("");
   const langSwitch = LANGS.map((l) => {
     const url = l === lang ? "" : pageUrl(site, page.slug, l);
-    const label = l === "tg" ? "ТҶ" : "РУ";
+    const label = l === "tg" ? "Тоҷикӣ" : "Русский";
     return l === lang
       ? `<span class="lang-pill on" aria-current="true" lang="${l}">${label}</span>`
       : `<a class="lang-pill" href="${esc(url)}" hreflang="${l}" lang="${l}" data-lang="${l}">${label}</a>`;
@@ -316,7 +319,7 @@ const SECTIONS = {
     // Герой-картинка (LCP): коллаж make-covers (media.hero), без него —
     // первая запись media.desserts. Без media.json просто нет .hero-photo —
     // раскладка герой-карточки (grid) одинаково работает и с фото, и без него.
-    const heroEntry = heroMedia(media, page);
+    const heroEntry = s.compact ? null : heroMedia(media, page);
     const photo = heroEntry
       ? `<div class="hero-photo">${mediaImg(
           heroEntry,
@@ -327,13 +330,13 @@ const SECTIONS = {
           },
         )}</div>`
       : "";
-    return `<section class="hero"><div class="wrap"><div class="hero-grid${photo ? " has-photo" : ""}"><div class="hero-card">
+    return `<section class="hero${s.compact ? " hero-compact" : ""}"><div class="wrap"><div class="hero-grid${photo ? " has-photo" : ""}"><div class="hero-card">
 
       <h1 class="h1">${esc(L(page.h1, lang))}</h1>
       <p class="lead">${esc(L(s.lead, lang))}</p>
       <div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>
       ${trustRow(site, lang)}
-    </div>${photo}</div>${s.stats ? statsList(site, lang) : ""}</div></section><div class="wrap" id="free-lesson-island"></div>`;
+    </div>${photo}</div>${s.stats ? statsList(site, lang) : ""}</div></section>${!page.slug || page.slug === "online-kurs" ? '<div class="wrap" id="free-lesson-island"></div>' : ""}`;
   },
 
   /**
@@ -765,7 +768,7 @@ function renderHead(site, page, lang, ctx) {
     <meta name="description" content="${esc(desc)}" />
     ${page.noindex ? '<meta name="robots" content="noindex, follow" />' : ""}
     <link rel="canonical" href="${esc(url)}" />
-    ${page.noindex ? "" : `${alts}\n    <link rel="alternate" hreflang="x-default" href="${esc(pageUrl(site, page.slug, "ru"))}" />`}
+    ${page.noindex ? "" : `${alts}\n    <link rel="alternate" hreflang="x-default" href="${esc(pageUrl(site, page.slug, "tg"))}" />`}
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="${esc(site.brand)}" />
     <meta property="og:locale" content="${lang === "tg" ? "tg_TJ" : "ru_RU"}" />
@@ -784,6 +787,12 @@ function renderHead(site, page, lang, ctx) {
     <script>try{if(localStorage.getItem('ssb_theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
     ${heroPreload}
     <script type="application/ld+json">${ld}</script>`;
+}
+
+function pageContents(page, lang) {
+  const entries = page.sections.filter((s) => s.id && L(s.h2, lang));
+  if (entries.length < 2) return "";
+  return `<nav class="page-contents wrap" aria-label="${lang === "tg" ? "Дар ин саҳифа" : "На этой странице"}">${entries.map((s) => `<a href="#${esc(s.id)}">${esc(L(s.h2, lang))}</a>`).join("")}</nav>`;
 }
 
 export function renderPage(site, page, lang, now = new Date(), media = null, offlineProgramme = null) {
@@ -827,6 +836,7 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
     ${renderHeader(site, page, lang, ctx)}
     <main id="main">
       ${crumbs}${h1}
+      ${page.slug ? pageContents(page, lang) : ""}
       ${sections.join("\n")}
     </main>
     ${renderFooter(site, lang, ctx)}
