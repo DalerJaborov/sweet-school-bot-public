@@ -721,12 +721,14 @@ async function enforceReplyLanguage(
  * владельца писался под директ и Telegram-группы: «добавлю вас в группу»,
  * «уроки в Телеграме». На сайте это ложь — уроки открываются по ссылке на
  * самом сайте, а ссылка приходит прямо в этот чат после чека. Не трогаем
- * промт владельца, а добавляем поправку только для канала WEB.
+ * промт владельца, а добавляем поправку для WEB и WhatsApp, где выдаём сайт.
  */
-function webChannelBlock(contact: Contact): string {
-  if (contact.channel !== "WEB") return "";
+export function webChannelBlock(contact: Pick<Contact, "channel">): string {
+  if (contact.channel !== "WEB" && contact.channel !== "WHATSAPP") return "";
   return (
-    "\n\nВАЖНО — КАНАЛ: клиентка пишет в чат на нашем сайте shirinsweets.online. " +
+    (contact.channel === "WHATSAPP"
+      ? "\n\nВАЖНО — КАНАЛ: клиентка пишет в WhatsApp. "
+      : "\n\nВАЖНО — КАНАЛ: клиентка пишет в чат на нашем сайте shirinsweets.online. ") +
     "Онлайн-уроки открываются ПРЯМО НА САЙТЕ по личной ссылке, в телефоне, без Telegram и без групп. " +
     "Никогда не говори «в Телеграме», «добавлю в группу», «пришлю ссылку на группу». " +
     "После оплаты попроси прислать чек прямо сюда, в этот чат: ссылка на уроки придёт сюда же автоматически. " +
