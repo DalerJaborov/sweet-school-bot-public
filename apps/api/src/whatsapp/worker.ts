@@ -55,6 +55,8 @@ export async function processInbox(id: string): Promise<void> {
     return;
   }
   if (!check.identityResolved) throw new Error("Не удалось проверить контакт WhatsApp");
+  const phone = check.aliases?.find(alias => /^\d{7,15}@c\.us$/.test(alias))?.split("@")[0];
+  if (phone && !contact.name) await prisma.contact.update({ where: { id: contact.id }, data: { name: `+${phone}` } });
   const stamp = event.timestamp;
   if (Date.now() - stamp > 86400000 || stamp > Date.now() + 60000) {
     await prisma.whatsAppInbox.update({ where: { id }, data: { status: "expired", payload: JSON.stringify({ ...payload, media: undefined }) } });
