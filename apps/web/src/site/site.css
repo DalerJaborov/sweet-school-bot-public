@@ -2003,3 +2003,11 @@ a {
 section[id] { scroll-margin-top: 96px; }
 .lang-pill { padding-inline: 10px; font-size: 12px; }
 @media (max-width: 420px) { .header-tools { gap: 4px; } .site-header .logo { font-size: 14px; } .site-header .wrap { gap: 6px; } .lang-pill { padding-inline: 8px; } }
+
+.lesson-samples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.lesson-samples figure { margin: 0; min-width: 0; }
+.lesson-samples img, .lesson-samples video { width: 100%; aspect-ratio: 3 / 4; height: auto; object-fit: cover; border-radius: 16px; background: var(--c-surface); }
+.lesson-samples figcaption { padding: 12px 0; font-weight: 500; }
+@media (min-width: 900px) { .lesson-samples { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
+
+.about-figure::before { display: none; }

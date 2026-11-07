@@ -53,7 +53,7 @@ describe("looksLikeAccessRequest", () => {
   });
 
   it("не срабатывает на обычных вопросах — иначе бот перебивал бы консультанта", () => {
-    for (const text of ["сколько стоит курс", "здравствуйте", "а есть рассрочка", "где вы находитесь"]) {
+    for (const text of ["сколько стоит курс", "здравствуйте", "а есть рассрочка", "где вы находитесь", "не открывается видео", "не работает миксер", "кор намекунад", "не могу посмотреть видео урока", "新", "потеряла рецепт"]) {
       expect(looksLikeAccessRequest(text), text).toBe(false);
     }
   });
@@ -67,6 +67,8 @@ describe("maybeRestoreAccess", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue({ id: "contact-1", accessTokenId: null, accessIssuedAt: null });
+    db.model("contact").updateMany.mockResolvedValue({ count: 1 });
     sendText.mockClear();
     sendTelegramMessage.mockClear();
     db.model("setting").findUnique.mockImplementation(settings(WEB_MODE));
@@ -166,7 +168,7 @@ describe("maybeRestoreAccess", () => {
     db.model("device").count.mockResolvedValue(2);
     db.model("device").findFirst.mockResolvedValue(null);
 
-    await maybeRestoreAccess(contact, "не открывается");
+    await maybeRestoreAccess(contact, "не открывается ссылка");
 
     expect(db.model("device").delete).not.toHaveBeenCalled();
   });
@@ -192,7 +194,7 @@ describe("maybeRestoreAccess", () => {
     db.model("device").findMany.mockResolvedValue([]);
     db.model("purchase").findUnique.mockResolvedValue({ courseRef: { deviceLimit: 3 } });
 
-    const result = await maybeRestoreAccess(contact, "не открывается");
+    const result = await maybeRestoreAccess(contact, "не открывается ссылка");
 
     expect(result).toMatchObject({ handled: true, outcome: "reissued" });
   });
@@ -222,13 +224,33 @@ describe("maybeRestoreAccess", () => {
     expect(result).toMatchObject({ handled: true, outcome: "reissued" });
   });
 
+  it("failed send preserves valid link, devices and reissue budget; owner sees failure", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    db.model("contact").findUnique.mockResolvedValue({ accessTokenId: "Ab3kQ9xZpm", accessIssuedAt: new Date() });
+    sendText.mockRejectedValueOnce(new Error("24h window closed"));
+    expect(await maybeRestoreAccess(contact, "ссылка не открывается на новом телефоне")).toMatchObject({ outcome: "escalated" });
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+    expect(db.model("purchase").update).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("НЕ доставлена");
+  });
+
+  it("lost link alone never releases a device", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    await maybeRestoreAccess(contact, "потеряла ссылку");
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+    expect(db.model("device").count).not.toHaveBeenCalled();
+  });
+
   it("владелец узнаёт о КАЖДОМ случае, даже когда бот справился сам", async () => {
     db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
     db.model("receiptCheck").count.mockResolvedValue(1);
     db.model("device").findMany.mockResolvedValue([]);
     db.model("purchase").findUnique.mockResolvedValue({ courseRef: { deviceLimit: 3 } });
 
-    await maybeRestoreAccess(contact, "не открывается");
+    await maybeRestoreAccess(contact, "не открывается ссылка");
 
     expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("бот сам выдал");

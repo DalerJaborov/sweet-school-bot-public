@@ -12,6 +12,7 @@ import {
   coursePlatformReady,
 } from "../course/delivery.js";
 import type { Contact } from "@prisma/client";
+import { metaFailureKind } from "../messaging/metaErrors.js";
 import { isBotFrozen } from "../messaging/automation.js";
 
 /**
@@ -19,7 +20,7 @@ import { isBotFrozen } from "../messaging/automation.js";
  *
  * Извлечено из ai.ts для снижения сложности god-file. Функция самодостаточна:
  * создаёт Purchase-записи, генерирует one-time ссылки, отправляет их клиенту
- * и откатывает покупку при ошибке отправки (чтобы деньги не были приняты молча).
+ * и сохраняет оплату при ошибке отправки для повторной доставки.
  */
 export async function grantCourses(
   contact: Contact,
@@ -53,14 +54,26 @@ export async function grantCourses(
   let sharedWebLink: string | null = null;
   const webLinkOnce = async () => {
     if (!opts.byHuman && (await isBotFrozen())) return null;
-    return (sharedWebLink ??= wantWeb ? await issueCourseLink(contact.id, { automatic: !opts.byHuman }) : null);
+    return (sharedWebLink ??= wantWeb ? await issueCourseLink(contact.id, { automatic: !opts.byHuman, preserveExisting: true }) : null);
   };
   const webOnly = wantWeb && !wantTelegram;
   const pendingWeb: { purchaseId: string; course: Course }[] = [];
+  const createdIds: string[] = [];
+  const deliveryFailed = async (error: unknown, ids: string[]) => {
+    if (!opts.byHuman && (await isBotFrozen())) {
+      await prisma.purchase.deleteMany({ where: { id: { in: ids.filter((id) => createdIds.includes(id)) } } });
+      return;
+    }
+    if (metaFailureKind(error) === "AMBIGUOUS") {
+      await prisma.purchase.updateMany({ where: { id: { in: ids } }, data: { accessDeliveryUncertainAt: new Date() } });
+    }
+    logError("grantCourses:deliveryPending", error);
+    await prisma.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
+  };
   const stopIfFrozen = async (): Promise<boolean> => {
     if (opts.byHuman || !(await isBotFrozen())) return false;
     if (pendingWeb.length > 0) {
-      await prisma.purchase.deleteMany({ where: { id: { in: pendingWeb.map((p) => p.purchaseId) } } });
+      await prisma.purchase.deleteMany({ where: { id: { in: pendingWeb.map((p) => p.purchaseId).filter((id) => createdIds.includes(id)) } } });
     }
     return true;
   };
@@ -68,19 +81,23 @@ export async function grantCourses(
   for (const course of plan.grant) {
     if (await stopIfFrozen()) return done;
     let purchaseId: string | null = null;
-    try {
-      const purchase = await prisma.purchase.create({
-        data: {
-          contactId: contact.id,
-          course,
-          amount: Math.round(amount / plan.grant.length),
-          rawAmount: verdict.amount,
-          currency: verdict.currency ?? "TJS",
-        },
-      });
-      purchaseId = purchase.id;
-    } catch {
-      continue; // эта группа у человека уже есть — второй ссылки не даём
+    const existing = await prisma.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
+    if (existing) {
+      // Resume only an undelivered active purchase; never revive revoked access.
+      if (existing.revokedAt || existing.inviteLink || existing.accessDeliveryUncertainAt) continue;
+      purchaseId = existing.id;
+    } else {
+      try {
+        const purchase = await prisma.purchase.create({ data: {
+          contactId: contact.id, course, amount: Math.round(amount / plan.grant.length),
+          rawAmount: verdict.amount, currency: verdict.currency ?? "TJS",
+        } });
+        purchaseId = purchase.id;
+        createdIds.push(purchase.id);
+      } catch (err) {
+        if ((err as { code?: string }).code !== "P2002") throw err;
+        continue;
+      }
     }
 
     // Привязываем покупку к курсу каталога — платформе нужен courseId, чтобы
@@ -89,14 +106,14 @@ export async function grantCourses(
 
     // Only roll back a new purchase from this invocation; preserve paid access.
     if (!opts.byHuman && (await isBotFrozen())) {
-      await prisma.purchase.delete({ where: { id: purchaseId } });
+      if (createdIds.includes(purchaseId)) await prisma.purchase.delete({ where: { id: purchaseId } });
       await stopIfFrozen();
       return done;
     }
 
     const chatId = wantTelegram ? await chatIdFor(course) : null;
     if (!opts.byHuman && (await isBotFrozen())) {
-      await prisma.purchase.delete({ where: { id: purchaseId } });
+      if (createdIds.includes(purchaseId)) await prisma.purchase.delete({ where: { id: purchaseId } });
       await stopIfFrozen();
       return done;
     }
@@ -115,18 +132,17 @@ export async function grantCourses(
     } catch (err) {
       // A late freeze can reject token issuance. It must not leave a newly
       // granted purchase behind, or delete any pre-existing paid course.
-      await prisma.purchase.delete({ where: { id: purchaseId } });
-      if (await stopIfFrozen()) return done;
-      throw err;
+      if (!opts.byHuman && (await isBotFrozen())) {
+        if (createdIds.includes(purchaseId)) await prisma.purchase.delete({ where: { id: purchaseId } });
+        await stopIfFrozen();
+        return done;
+      }
+      await deliveryFailed(err, [purchaseId]);
+      continue;
     }
     const link = telegramLink ?? webLink;
     if (!link) {
-      await prisma.purchase.delete({ where: { id: purchaseId } }).catch((err) => {
-        // P2025 = запись уже удалена (race) — это нормально.
-        if ((err as { code?: string })?.code !== "P2025") {
-          logError("grantCourses:noLink:deletePurchase", err);
-        }
-      });
+      await deliveryFailed(new Error(`No delivery link for purchase ${purchaseId}`), [purchaseId]);
       continue;
     }
 
@@ -145,7 +161,8 @@ export async function grantCourses(
           withTitle: plan.grant.length > 1,
         }) ?? link;
       const mid = await sendToContact(contact, text, [], opts);
-      if (mid) await recordOutgoingMessage(contact.id, text, mid);
+      if (!mid) throw new Error("Access message delivery not confirmed");
+      await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.update({ where: { id: purchaseId }, data: { inviteLink: telegramLink ?? link } });
       // Связь «ссылка → человек» нужна, чтобы узнать его в Telegram при входе.
       // Веб-ссылку сюда класть нельзя: по ней в группу никто не входит, и
@@ -157,16 +174,8 @@ export async function grantCourses(
       }
       done.push(course);
     } catch (err) {
-      // Отправка не удалась (окно Meta закрылось, пока разбирался чек; 429).
-      // Покупку откатываем: иначе человек числится купившим, ссылки у него нет,
-      // а владельцу ничего не показывают — деньги приняты молча.
-      logError("grantCourses:sendLink", err);
-      await prisma.purchase.delete({ where: { id: purchaseId } }).catch((delErr) => {
-        // P2025 = запись уже удалена (race) — это нормально.
-        if ((delErr as { code?: string })?.code !== "P2025") {
-          logError("grantCourses:sendLink:rollbackDelete", delErr);
-        }
-      });
+      // Payment remains recorded; inviteLink stays null for a safe delivery retry.
+      await deliveryFailed(err, [purchaseId]);
     }
   }
 
@@ -189,19 +198,15 @@ export async function grantCourses(
       }) ?? sharedWebLink;
     try {
       const mid = await sendToContact(contact, text, [], opts);
-      if (mid) await recordOutgoingMessage(contact.id, text, mid);
+      if (!mid) throw new Error("Access message delivery not confirmed");
+      await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.updateMany({
         where: { id: { in: pendingWeb.map((p) => p.purchaseId) } },
         data: { inviteLink: sharedWebLink },
       });
       done.push(...pendingWeb.map((p) => p.course));
     } catch (err) {
-      // Не ушло — откатываем все покупки этой выдачи: деньги не должны быть
-      // приняты молча (см. ветку Telegram выше).
-      logError("grantCourses:sendLink", err);
-      await prisma.purchase
-        .deleteMany({ where: { id: { in: pendingWeb.map((p) => p.purchaseId) } } })
-        .catch((delErr) => logError("grantCourses:sendLink:rollbackDelete", delErr));
+      await deliveryFailed(err, pendingWeb.map((p) => p.purchaseId));
       return [];
     }
   }

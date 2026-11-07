@@ -1,3 +1,5 @@
+import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError } from "./ai/replyPolicy.js";
+import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
@@ -9,7 +11,7 @@ import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
 import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
 import { BUDGET_FALLBACK } from "./ai/prompts.js";
-import { buildSystemPrompt } from "./services/salesTextsService.js";
+import { buildSystemPrompt, getSalesTexts, getOfflineFacts } from "./services/salesTextsService.js";
 import { isBudgetExceeded, recordAiCall } from "./ai/dailyBudget.js";
 import { fetchAttachment, buildMediaPart, type Attachment, type MediaPart } from "./ai/media.js";
 import { checkReceipt, pickReceiptVerdict, type ReceiptVerdict } from "./ai/receiptCheck.js";
@@ -262,7 +264,7 @@ export async function aiReply(
         // revokedAt: доступ отозвали — человек больше не ученица, и звать её в
         // закрытый чат снова нельзя.
         (await prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null } })) > 0;
-      const reply = guardReply(verdict.kind, language, isStudent);
+      const reply = guardReply(verdict.kind, language, isStudent, await replyDeliveryMode(contact));
       // Обещали позвать Ширин — зовём и замолкаем (см. callOwnerToChat).
       if (verdict.kind === "wants_human") await callOwnerToChat(contact, text);
       const mid = await sendToContact(contact, reply);
@@ -315,7 +317,7 @@ export async function aiReply(
     (await alreadyOwnedBlock(contact, text)) +
     (await coldLeadNudge(contact, text)) +
     (await offlineSignupBlock(contact, text)) +
-    webChannelBlock(contact);
+    webChannelBlock(contact) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).
   let model = (await getSetting("aiModel")) || "gemini-3.7-flash";
@@ -415,6 +417,7 @@ export async function aiReply(
     });
   };
 
+  let deliveryFailure: unknown = null;
   const result = await generate(prompt);
   if ("error" in result) {
     logError("ai:reply", result.error);
@@ -424,11 +427,31 @@ export async function aiReply(
     await queuePendingAiReply(contact.id, text).catch((err) => logError("aiReplyRetry:queue", err));
   } else {
     await recordAiCall(contact.id);
-    // Пустой ответ — иногда штатный исход: промт сам просит модель промолчать
-    // (например, на присланное фото без подписи, которое не про десерт).
+    // Штатное молчание требует явной метки NO_REPLY. Пустой ответ провайдера
+    // уже превращён в ошибку и направлен в очередь повторов.
     // Отправка обёрнута нарочно: отказ Meta (закрылось окно 24 ч, 429) не должен
     // уносить с собой разбор чека, который ждёт ниже — он дороже ответа.
-    const replyText = result.text ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate) : null;
+    let replyText = result.text ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate) : null;
+    if (replyText?.trim() === "[NO_REPLY]") {
+      logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
+      replyText = null;
+    }
+    if (replyText) {
+      const facts = await trustedSalesFacts();
+      const issues = replyPolicyIssues(replyText, facts);
+      if (issues.length) {
+        const fixed = await generate(prompt + `
+Исправьте ответ: ${issues.join(", ")}. Проверенные факты: ${facts}`);
+        replyText = "error" in fixed ? null : fixed.text;
+        if (!replyText || replyPolicyIssues(replyText, facts).length || replyText.trim() === "[NO_REPLY]") {
+          logWarn("ai:replyPolicy", `${contact.id}: held ${issues.join(",")}`);
+          if ("error" in fixed) await queuePendingAiReply(contact.id, text);
+          else deliveryFailure = new ReplyPolicyError(issues);
+          replyText = null;
+        }
+      }
+      if (replyText) replyText = cleanAutomatedReply(replyText);
+    }
     if (replyText) {
       try {
         // Несколько коротких сообщений вместо одного полотна — см. splitReplyParts.
@@ -444,6 +467,7 @@ export async function aiReply(
         notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       } catch (err) {
         logError("ai:send", err);
+        deliveryFailure = err;
       }
     }
   }
@@ -483,6 +507,7 @@ export async function aiReply(
         currency: verdict.currency,
         receiptAt: verdict.receiptAt,
         tamperingSuspected: verdict.tamperingSuspected,
+        recipientMatches: verdict.recipientMatches,
         reason: verdict.reason,
         imageHash: firstImage.hash,
         imageUrl: firstImage.url,
@@ -500,6 +525,7 @@ export async function aiReply(
       }
     });
   }
+  if (deliveryFailure) throw deliveryFailure;
 }
 
 /**
@@ -537,7 +563,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
 
   // Комментарий — это всегда текст, голосовых под роликами не бывает: модель
   // обычная, время обычное.
-  const prompt = await buildSystemPrompt();
+  const prompt = (await buildSystemPrompt()) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
   const model = (await getSetting("aiModel")) || "gemini-3.7-flash";
 
   const startedAt = Date.now();
@@ -578,8 +604,15 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
   await recordAiCall(contact.id);
   if (!result.text) return;
 
-  const mid = await sendPrivateReply(commentId, result.text, [], metaChannelOf(contact));
-  await recordOutgoingMessage(contact.id, result.text, mid);
+  if (result.text.trim() === "[NO_REPLY]") return;
+  const issues = replyPolicyIssues(result.text, await trustedSalesFacts());
+  if (issues.length) {
+    logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
+    throw new ReplyPolicyError(issues);
+  }
+  const clean = cleanAutomatedReply(result.text);
+  const mid = await sendPrivateReply(commentId, clean, [], metaChannelOf(contact));
+  await recordOutgoingMessage(contact.id, clean, mid);
 }
 
 /**
@@ -725,7 +758,7 @@ function webChannelBlock(contact: Contact): string {
     "\n\nВАЖНО — КАНАЛ: клиентка пишет в чат на нашем сайте shirinsweets.online. " +
     "Онлайн-уроки открываются ПРЯМО НА САЙТЕ по личной ссылке, в телефоне, без Telegram и без групп. " +
     "Никогда не говори «в Телеграме», «добавлю в группу», «пришлю ссылку на группу». " +
-    "После оплаты попроси прислать чек прямо сюда, в этот чат: ссылка на уроки придёт сюда же автоматически. " +
+    "После оплаты нужна проверка поступления денег; не обещай автоматическое подтверждение по скриншоту. " +
     "Уроки можно смотреть с любого телефона, сохранять офлайн, в конце — сертификат."
   );
 }
@@ -824,8 +857,8 @@ async function alreadyOwnedBlock(contact: Contact, text: string): Promise<string
   if (owned.includes(COURSE_50) && owned.includes(COURSE_70)) {
     return (
       "\n\nВАЖНО СЕЙЧАС: человек УЖЕ купил ОБА курса (Арт-десерты и 21 рецепт) — доступ в обеих " +
-      "Телеграм-группах у него уже есть. НЕ отправляй реквизиты оплаты и не проси чек — скажи, что доступ " +
-      "уже выдан, и предложи написать в группу, если что-то не открывается."
+      "курсах у него уже есть. НЕ отправляй реквизиты оплаты и не проси чек — скажи, что доступ " +
+      "уже выдан. Если что-то не открывается, уточни ошибку; способ доступа указан в актуальном блоке."
     );
   }
   const already = owned.includes(COURSE_50) ? COURSE_TITLE[COURSE_50] : COURSE_TITLE[COURSE_70];
@@ -887,3 +920,8 @@ async function buildSocialProofBlock(): Promise<string> {
 import { confirmRequisitesToCustomer, handleReceiptVerdict } from "./ai/receiptVerdict.js";
 export { handleReceiptVerdict };
 
+
+async function trustedSalesFacts(): Promise<string> {
+  const [texts, offline] = await Promise.all([getSalesTexts(), getOfflineFacts()]);
+  return `${texts.priceLineRu}. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони`;
+}

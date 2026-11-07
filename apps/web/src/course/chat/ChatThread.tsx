@@ -24,33 +24,76 @@ export function ChatThread({ t, lessonId, online }: { t: Dict; lessonId: string 
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [queued, setQueued] = useState<QueuedChat[]>(() => readQueue());
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const mounted = useRef(true);
+  const requestTail = useRef<Promise<unknown>>(Promise.resolve());
+  const flushing = useRef(false);
+  // Reads and writes share one sequence. A slow history response cannot replace
+  // the result of a newer question, and offline questions retain their order.
+  const serial = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
+    const next = requestTail.current.then(task);
+    requestTail.current = next.catch(() => undefined);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    void loadChat()
-      .then((r) => {
-        if (!cancelled) setMessages(r.messages);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setLoaded(true);
-      });
+    let polling = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const visibleOnline = () => online && navigator.onLine && document.visibilityState === "visible";
+    const poll = async () => {
+      if (cancelled || polling || !visibleOnline()) return;
+      polling = true;
+      try {
+        const result = await serial(() => cancelled || !visibleOnline() ? Promise.resolve(null) : loadChat());
+        if (!cancelled && result) {
+          setMessages(result.messages);
+          setLoadFailed(false);
+          setLoaded(true);
+        }
+      } catch {
+        if (!cancelled) { setLoadFailed(true); setLoaded(true); }
+      } finally {
+        polling = false;
+        if (!cancelled && visibleOnline()) timer = setTimeout(() => void poll(), 8000);
+      }
+    };
+    const resume = () => {
+      if (timer) clearTimeout(timer);
+      if (visibleOnline()) void poll();
+    };
+    void poll();
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("online", resume);
+    window.addEventListener("offline", resume);
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("online", resume);
+      window.removeEventListener("offline", resume);
     };
-  }, []);
+  }, [online, serial]);
 
   // Появилась сеть — досылаем то, что писали без неё.
   const flush = useCallback(async () => {
-    if (!navigator.onLine || readQueue().length === 0) return;
+    if (!navigator.onLine || flushing.current || readQueue().length === 0) return;
+    flushing.current = true;
     const { sent } = await flushQueue(async (item) => {
-      const r = await sendChat(item.text, item.lessonId, true);
-      setMessages(r.messages);
+      const r = await serial(() => sendChat(item.text, item.lessonId, true));
+      if (mounted.current) { setMessages(r.messages); setLoadFailed(false); setLoaded(true); }
     });
-    if (sent.length > 0) setQueued(readQueue());
-  }, []);
+    flushing.current = false;
+    if (mounted.current && sent.length > 0) setQueued(readQueue());
+  }, [serial]);
   useEffect(() => {
     if (online) void flush();
   }, [online, flush]);
@@ -63,27 +106,31 @@ export function ChatThread({ t, lessonId, online }: { t: Dict; lessonId: string 
     const value = text.trim();
     if (!value || busy) return;
     setText("");
-    if (!navigator.onLine) {
+    if (!online || !navigator.onLine || flushing.current || readQueue().length > 0) {
       setQueued(enqueue({ text: value, lessonId, at: Date.now() }));
+      if (online) void flush();
       return;
     }
     setBusy(true);
     try {
-      const r = await sendChat(value, lessonId);
-      setMessages(r.messages);
+      const r = await serial(() => sendChat(value, lessonId));
+      if (mounted.current) { setMessages(r.messages); setLoadFailed(false); setLoaded(true); }
     } catch {
-      setQueued(enqueue({ text: value, lessonId, at: Date.now() }));
+      const pending = enqueue({ text: value, lessonId, at: Date.now() });
+      if (mounted.current) setQueued(pending);
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
-  const empty = loaded && messages.length === 0 && queued.length === 0;
+  const empty = loaded && !loadFailed && messages.length === 0 && queued.length === 0;
+  const awaitingAnswer = messages.at(-1)?.fromStudent === true;
 
   return (
     <div className="chat">
       <div className="chat-log" role="log" aria-live="polite" aria-label={t.chatLog}>
         {!loaded && <p className="chat-empty">{t.chatLoading}</p>}
+        {loadFailed && <p role="status" className="chat-empty">{t.chatLoadFailed}</p>}
         {empty && (
           <div className="chat-empty">
             <Illustration kind="chat" size={72} />
@@ -101,6 +148,7 @@ export function ChatThread({ t, lessonId, online }: { t: Dict; lessonId: string 
             <span className="msg-note">{t.queuedNote}</span>
           </div>
         ))}
+        {awaitingAnswer && <p role="status" className="msg-note">{t.questionSaved}</p>}
         <div ref={bottomRef} />
       </div>
       <Composer t={t} value={text} busy={busy} onChange={setText} onSubmit={() => void submit()} />

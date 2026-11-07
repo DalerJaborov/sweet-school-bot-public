@@ -255,6 +255,7 @@ model AiLog {
 /// пришлось руками через SSH. У приёма чеков (receiptRetry.ts) такая защита
 /// уже была, у обычного ответа — нет.
 model PendingAiReply {
+  delayNoticeAt DateTime?
   id            String   @id @default(uuid())
   contactId     String
   contact       Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -334,6 +335,7 @@ model Funnel {
 /// «оплатил» был одной галочкой на человеке, второй курс выдать было нечем:
 /// код видел `paid=true` и молчал. Теперь каждая покупка — своя строка.
 model Purchase {
+  accessDeliveryUncertainAt DateTime?
   id                    String    @id @default(uuid())
   contactId             String
   contact               Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -917,4 +919,19 @@ model Certificate {
   updatedAt DateTime @updatedAt
 
   @@unique([contactId, courseId])
+}
+
+// Accepted Meta events survive process death before their handler completes.
+model WebhookInbox {
+  id String @id @default(cuid())
+  eventKey String @unique
+  payload String
+  state String @default("PENDING")
+  attempts Int @default(0)
+  nextRunAt DateTime @default(now())
+  leaseUntil DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([state, nextRunAt])
 }

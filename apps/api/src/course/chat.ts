@@ -51,7 +51,7 @@ export async function receiveQuestion(
   /** Чьи покупки показать в ответной ленте; по умолчанию — только эту. */
   historyFor: string[] = [purchase.id]
 ): Promise<CourseChatMessage[]> {
-  await prisma.courseChatMessage.create({
+  const question = await prisma.courseChatMessage.create({
     data: { purchaseId: purchase.id, lessonId, fromStudent: true, text, queuedOffline },
   });
 
@@ -63,7 +63,7 @@ export async function receiveQuestion(
       data: { purchaseId: purchase.id, lessonId, fromStudent: false, text: auto, byBot: true },
     });
   } else {
-    await askOwner(purchase, text, lessonId);
+    await askOwner(purchase, text, lessonId, question.id);
   }
 
   return chatHistory(historyFor);
@@ -120,7 +120,8 @@ async function autoAnswer(purchase: Purchase, text: string, lessonId: string | n
 
 /** Переслать вопрос владельцу. Отвечать он будет реплаем — по message_id мы
  *  найдём, к какому вопросу относится ответ (см. telegramWebhook). */
-async function askOwner(purchase: Purchase, text: string, lessonId: string | null): Promise<void> {
+async function askOwner(purchase: Purchase, text: string, lessonId: string | null, questionId: string): Promise<void> {
+  if (await isBotFrozen()) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const chatId = (await getSetting("telegramQaGroupId"))?.trim() || (await getSetting("telegramOwnerChatId"))?.trim();
   if (!botToken || !chatId) return;
@@ -131,6 +132,8 @@ async function askOwner(purchase: Purchase, text: string, lessonId: string | nul
   ]);
   const who = contact?.username ? `@${contact.username}` : (contact?.igUserId ?? "ученица");
   const about = lesson ? `\nУрок: ${lesson.title}` : "";
+
+  if (await isBotFrozen()) return;
 
   // Запоминаем message_id: по нему ответ реплаем найдёт дорогу обратно
   // к вопросу этой ученицы (см. answerFromOwner).
@@ -143,15 +146,11 @@ async function askOwner(purchase: Purchase, text: string, lessonId: string | nul
     return null;
   });
   if (!messageId) return;
-  const last = await prisma.courseChatMessage.findFirst({
-    where: { purchaseId: purchase.id, fromStudent: true },
-    orderBy: { createdAt: "desc" },
-  });
-  if (last) {
-    await prisma.courseChatMessage
-      .update({ where: { id: last.id }, data: { telegramMsgId: messageId } })
-      .catch((err) => logError("courseChat:linkTelegram", err));
-  }
+  // Bind the response to this exact saved question, even when a second request
+  // finishes while Telegram is still sending the first one.
+  await prisma.courseChatMessage
+    .update({ where: { id: questionId }, data: { telegramMsgId: messageId } })
+    .catch((err) => logError("courseChat:linkTelegram", err));
 }
 
 /**

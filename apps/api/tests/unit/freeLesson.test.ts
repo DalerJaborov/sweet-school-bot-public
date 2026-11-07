@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
     id: "sample",
     title: "Эклеры",
     recipeText: "Рецепт",
+    recipePhotos: '["recipes/sample.png"]',
     durationSec: 60,
     encryptionKey: Buffer.alloc(16).toString("base64"),
     coverPath: null,
@@ -21,7 +22,7 @@ vi.mock("../../src/db.js", () => ({
   prisma: { lesson: { findFirst: vi.fn(async () => state.lesson) }, freeLessonLead: { create: state.create } },
 }));
 vi.mock("../../src/env.js", () => ({ env: { jwtSecret: "local-free-test", publicBaseUrl: "http://localhost" } }));
-vi.mock("../../src/storage/s3.js", () => ({ storageConfig: async () => null, presignGet: vi.fn() }));
+vi.mock("../../src/storage/s3.js", () => ({ storageConfig: async () => ({}), presignGet: vi.fn(), getObject: async () => Buffer.from("local image fixture") }));
 vi.mock("../../src/course/manifest.js", () => ({
   masterManifest: async () => "#EXTM3U",
   variantManifest: async () => "#EXTM3U",
@@ -51,7 +52,7 @@ function token(id = "sample", expiresIn = 60) {
     expiresIn,
   });
 }
-const protectedPaths = ["/content", "/lessons/sample/manifest", "/lessons/sample/variant/480p", "/lessons/sample/key"];
+const protectedPaths = ["/content", "/lessons/sample/manifest", "/lessons/sample/variant/480p", "/lessons/sample/key", "/lessons/sample/photo/0"];
 describe("free lesson access boundary", () => {
   it("defaults off and writes no leads", async () => {
     expect(await (await fetch(base)).json()).toEqual({ enabled: false });

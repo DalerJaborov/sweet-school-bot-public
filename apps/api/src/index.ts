@@ -10,7 +10,7 @@ import cors from "cors";
 import { adminAccessConfig, createAdminAccessGuard } from "./adminAccess.js";
 import { adminRevocations } from "./adminRevocations.js";
 import { env } from "./env.js";
-import { webhookRouter } from "./webhook.js";
+import { webhookRouter, runWebhookInbox } from "./webhook.js";
 import { adminRouter } from "./admin.js";
 import { mediaRouter } from "./upload.js";
 import { telegramRouter } from "./telegramWebhook.js";
@@ -208,6 +208,7 @@ setInterval(() => {
     // they must neither issue access nor consume retry attempts while frozen.
     // Owner reports, learning maintenance and profile refresh remain separate.
     const tasks = [
+      withTimeout("webhookInbox", runWebhookInbox().catch((err) => logError("webhookInbox", err))),
       withTimeout("worker", runDueDeliveries().catch((err) => logError("worker", err))),
       withTimeout("dailyReport", maybeSendDailyReport().catch((err) => logError("dailyReport", err))),
       withTimeout("nightlyLearning", maybeRunNightlyLearning().catch((err) => logError("nightlyLearning", err))),

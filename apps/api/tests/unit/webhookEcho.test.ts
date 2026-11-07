@@ -32,14 +32,22 @@ const duplicateMid = Object.assign(new Error("Unique constraint failed on mid"),
 describe("handleEcho — транзакция эха хозяйки", () => {
   let db: PrismaMock;
   beforeEach(() => {
+    vi.useFakeTimers();
     db = mockPrisma();
     db.model("message").findUnique.mockResolvedValue(null); // это не наша отправка
     db.model("message").findFirst.mockResolvedValue({ text: "Курс чанд пул?" });
   });
-  afterEach(restorePrisma);
+  afterEach(() => { restorePrisma(); vi.useRealTimers(); });
+
+  async function finishEcho() {
+    const task = handleEcho(echo);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await task;
+  }
 
   it("первый вебхук: сообщение и тишина бота пишутся в одной транзакции, обучение запускается", async () => {
-    await handleEcho(echo);
+    db.model("message").findUnique.mockResolvedValueOnce(null).mockResolvedValue({ byHuman: true });
+    await finishEcho();
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.model("message").create).toHaveBeenCalledWith(
@@ -54,10 +62,11 @@ describe("handleEcho — транзакция эха хозяйки", () => {
 
   it("повторный вебхук с тем же mid: транзакция откатывается, обучение НЕ запускается второй раз", async () => {
     // Первая доставка прошла как обычно.
-    await handleEcho(echo);
+    db.model("message").findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({ byHuman: true });
+    await finishEcho();
     // Вторая — Prisma отвечает дубликатом mid на create, до update дело не доходит.
     db.model("message").create.mockRejectedValueOnce(duplicateMid);
-    await handleEcho(echo);
+    await finishEcho();
 
     expect(db.$transaction).toHaveBeenCalledTimes(2);
     expect(db.model("contact").update).toHaveBeenCalledTimes(1); // только из первой транзакции
@@ -67,7 +76,7 @@ describe("handleEcho — транзакция эха хозяйки", () => {
   it("наша же отправка (mid уже в базе) — не эхо человека, ничего не делаем", async () => {
     db.model("message").findUnique.mockResolvedValue({ id: "m", mid: "mid-echo-1" });
 
-    await handleEcho(echo);
+    await finishEcho();
 
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(rememberOwnerReply).not.toHaveBeenCalled();
@@ -77,9 +86,15 @@ describe("handleEcho — транзакция эха хозяйки", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     db.model("message").create.mockRejectedValueOnce(new Error("SQLITE_BUSY"));
 
-    await handleEcho(echo);
+    await expect(handleEcho(echo)).rejects.toThrow("SQLITE_BUSY");
 
     expect(rememberOwnerReply).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("webhook:handleEcho:record"));
   });
+  it("does not learn from a bot echo corrected while Graph send completes", async () => {
+    db.model("message").findUnique.mockResolvedValueOnce(null).mockResolvedValue({ byHuman: false });
+    await finishEcho();
+    expect(rememberOwnerReply).not.toHaveBeenCalled();
+  });
+
 });

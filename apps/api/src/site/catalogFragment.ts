@@ -4,6 +4,7 @@
 type Lang = "ru" | "tg";
 type Course = {
   code: string; title: string; description: string | null; price: number;
+  lessonTitles?: string[];
   currency: string; coverUrl: string | null; lessonsCount: number; durationMin: number;
 };
 type Catalog = {
@@ -101,13 +102,14 @@ export function renderCatalogFragment(catalog: Catalog, lang: Lang, only?: "COUR
     const duration = durationLabel(c.durationMin, lang);
     const ownCover = cover && /^\/img\/covers\/course-course(?:50|70)\.webp$/.test(cover);
     const srcset = ownCover ? ` srcset="${esc(cover.replace(/\.webp$/, "-sm.webp"))} 800w, ${esc(cover)} 1600w" sizes="(min-width: 720px) 400px, 100vw"` : "";
+    const syllabus = c.lessonTitles?.length ? `<p class="course-preview">${c.lessonTitles.slice(0, 3).map(esc).join(" · ")}</p><details class="course-syllabus"><summary>${esc(lessons)}</summary><ul>${c.lessonTitles.map((name) => `<li>${esc(name)}</li>`).join("")}</ul></details>` : "";
     const alt = lang === "tg" ? `Муқоваи курси «${name}»` : `Обложка курса «${name}»`;
-    return `<article class="card course-card"><div class="course-cover">${cover ? `<img src="${esc(cover)}"${srcset} alt="${esc(alt)}" width="640" height="360" loading="lazy" decoding="async">` : '<span aria-hidden="true">🍰</span>'}</div><div class="course-body"><h3 class="h3">${esc(name)}</h3>${description ? `<p>${esc(description)}</p>` : ""}<ul class="course-meta"><li class="chip">${esc(lessons)}</li>${c.durationMin > 0 ? `<li class="chip">${esc(duration)}</li>` : ""}<li class="chip">${t.forever}</li><li class="chip chip-ok">${t.certificate}</li></ul><div class="price price-pill">${esc(amount(c.price, c.currency))}</div>${button(name, c.price, c.currency)}</div></article>`;
+    return `<article class="card course-card"><div class="course-cover">${cover ? `<img src="${esc(cover)}"${srcset} alt="${esc(alt)}" width="640" height="360" loading="lazy" decoding="async">` : '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 4h6a4 4 0 0 1 3 2 4 4 0 0 1 3-2h6v16h-6a4 4 0 0 0-3 2 4 4 0 0 0-3-2H3V4Z M12 6v16"/></svg>'}</div><div class="course-body"><h3 class="h3">${esc(name)}</h3>${description ? `<p>${esc(description)}</p>` : ""}${syllabus}<ul class="course-meta"><li class="chip">${esc(lessons)}</li>${c.durationMin > 0 ? `<li class="chip">${esc(duration)}</li>` : ""}<li class="chip">${t.forever}</li><li class="chip chip-ok">${t.certificate}</li></ul><div class="price price-pill">${esc(amount(c.price, c.currency))}</div>${button(name, c.price, c.currency)}</div></article>`;
   }).join("");
   const names = courses.map((c) => title(c, lang)).join(" + ");
   const discounted = bundle && bundle.fullPrice > bundle.price;
   const saving = discounted ? (lang === "tg" ? `${bundle.fullPrice - bundle.price} сомонӣ сарфа мекунед` : `выгода ${bundle.fullPrice - bundle.price} сомони`) : "";
   const insteadOf = bundle ? (lang === "tg" ? `ба ҷои ${amount(bundle.fullPrice)}` : `вместо ${amount(bundle.fullPrice)}`) : "";
-  const bundled = bundle ? `<article class="card course-card bundle-card"><div class="course-cover" aria-hidden="true"><span>🎁</span></div><div class="course-body"><h3 class="h3">${t.bundle}</h3><p>${esc(names)}</p><ul class="course-meta">${discounted ? `<li class="chip">${esc(saving)}</li>` : ""}</ul><div class="price price-pill">${esc(amount(bundle.price))}${discounted ? `<s>${esc(insteadOf)}</s>` : ""}</div>${button(names, bundle.price)}</div></article>` : "";
+  const bundled = bundle ? `<article class="card course-card bundle-card"><div class="course-cover" aria-hidden="true"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 4h6a4 4 0 0 1 3 2 4 4 0 0 1 3-2h6v16h-6a4 4 0 0 0-3 2 4 4 0 0 0-3-2H3V4Z M12 6v16"/></svg></div><div class="course-body"><h3 class="h3">${t.bundle}</h3><p>${esc(names)}</p><ul class="course-meta">${discounted ? `<li class="chip">${esc(saving)}</li>` : ""}</ul><div class="price price-pill">${esc(amount(bundle.price))}${discounted ? `<s>${esc(insteadOf)}</s>` : ""}</div>${button(names, bundle.price)}</div></article>` : "";
   return `<div data-server-catalog="ready" lang="${lang}"><div class="grid grid-${courses.length === 1 ? 1 : bundle ? 3 : 2}">${cards}${bundled}</div><section class="purchase-guide" aria-label="${t.purchase}"><h3 class="h3">${t.purchase}</h3><ol>${t.steps.map((step) => `<li>${step}</li>`).join("")}</ol><p class="muted">${t.note}</p></section></div>`;
 }

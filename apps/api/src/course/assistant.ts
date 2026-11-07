@@ -1,7 +1,8 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { geminiGenerateUrl, geminiProxyHeaders, thinkingConfigFor, FALLBACK_MODELS, isRetryableStatus, RETRY_DELAYS_MS, sleep } from "../gemini.js";
+import { generateWithFallback, thinkingConfigFor } from "../gemini.js";
 import { resolveGeminiKeys } from "../ai/geminiKeys.js";
 import type { ClientLanguage } from "../ai/clientLanguage.js";
+import { guardGeneratedTone, FORMAL_TONE_RULE } from "../ai/replyPolicy.js";
 
 /**
  * ПОМОЩНИК ПО РЕЦЕПТАМ — отвечает на вопросы ученицы по материалам курса.
@@ -12,11 +13,9 @@ import type { ClientLanguage } from "../ai/clientLanguage.js";
  * Ширин. Выдуманная замена продукта или неверная температура портят десерт,
  * а вместе с ним — доверие к школе; молчание в этом месте дешевле догадки.
  *
- * ПОЧЕМУ ЭТО БЕЗОПАСНО ПРИ ВЫДУМКАХ МОДЕЛИ. Ответ строится ТОЛЬКО из текста
- * рецептов, который написала сама владелица, и модели явно велено вернуть
- * условное слово, если материала не хватает. Никакого «общего кулинарного
- * знания» она подмешивать не должна — об этом сказано в правилах ниже прямым
- * текстом и продублировано форматом ответа.
+ * Модель получает только материалы курса и должна отказаться, если ответа
+ * нет. Это ограничение не доказывает точность ответа: нужны проверки на
+ * реальных вопросах и возможность передать вопрос преподавателю.
  */
 
 /** Условный ответ «в материалах этого нет». Модель обязана вернуть ровно его. */
@@ -107,6 +106,7 @@ function buildPrompt(knowledge: string, question: string, language: ClientLangua
     "4. Не обсуждай цены, оплату, доступ к курсу и другие курсы — на это отвечают люди.",
     `5. ${RULES[language]}`,
     "6. Без приветствий и подписи — только ответ по делу, 1-4 предложения.",
+    FORMAL_TONE_RULE,
     "",
     "=== МАТЕРИАЛЫ КУРСА ===",
     knowledge,
@@ -143,53 +143,19 @@ export async function answerFromRecipes(
   // Модель может вернуть условное слово внутри фразы («НЕ_ЗНАЮ, спросите
   // учительницу») — этого достаточно, чтобы не показывать ответ ученице.
   if (!answer || answer.includes(UNKNOWN)) return { text: null, reason: "no_material" };
-  return { text: answer };
+  const checked = guardGeneratedTone(answer);
+  return checked ? { text: checked } : { text: null, reason: "unavailable" };
 }
 
 /** Вызов Gemini с теми же повторами и запасными моделями, что и остальной бот. */
 async function generate(model: string, prompt: string, apiKeys: string[]): Promise<string | null> {
-  const models = [model, ...FALLBACK_MODELS.filter((m) => m !== model)];
-  for (const candidate of models) {
-    for (const apiKey of apiKeys) {
-      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-        try {
-          const res = await fetch(geminiGenerateUrl(candidate), {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey, ...geminiProxyHeaders() },
-            body: JSON.stringify({
-              contents: [{ role: "user", parts: [{ text: prompt }] }],
-              generationConfig: {
-                // Помощник должен быть предсказуемым: один и тот же вопрос —
-                // один и тот же ответ, без фантазии.
-                temperature: 0.2,
-                maxOutputTokens: 400,
-                ...thinkingConfigFor(candidate),
-              },
-            }),
-            signal: AbortSignal.timeout(TIMEOUT_MS),
-          });
-
-          if (isRetryableStatus(res.status) && attempt < RETRY_DELAYS_MS.length) {
-            await sleep(RETRY_DELAYS_MS[attempt]);
-            continue;
-          }
-          if (!res.ok) break; // ключ или модель не подходят — пробуем следующие
-
-          const data = (await res.json()) as {
-            candidates?: { content?: { parts?: { text?: string }[] } }[];
-          };
-          const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-          if (text.trim()) return text;
-          break;
-        } catch (err) {
-          if (attempt >= RETRY_DELAYS_MS.length) {
-            logError("courseAssistant:generate", err);
-            break;
-          }
-          await sleep(RETRY_DELAYS_MS[attempt]);
-        }
-      }
-    }
+  const result = await generateWithFallback(apiKeys, model, (candidate) => JSON.stringify({
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: 400, thinkingConfig: thinkingConfigFor(candidate) },
+  }), TIMEOUT_MS);
+  if ("error" in result) {
+    logError("courseAssistant:generate", result.error);
+    return null;
   }
-  return null;
+  return result.text;
 }

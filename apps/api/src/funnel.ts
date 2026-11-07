@@ -8,6 +8,7 @@ import { detectAbuse } from "./ai/abuseFilter.js";
 import { notifyFunnelGaveUp } from "./systemAlerts.js";
 import type { Contact, Delivery, Funnel, FunnelStep } from "@prisma/client";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
+import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { renderFunnelText } from "./funnelPlaceholders.js";
 
 /**
@@ -36,7 +37,7 @@ async function retryOrGiveUp(delivery: Delivery, contact: Contact, err: unknown)
   logError("funnel:step", err);
 
   const failCount = delivery.failCount + 1;
-  if (failCount >= RETRY_MAX_ATTEMPTS) {
+  if (failCount >= RETRY_MAX_ATTEMPTS || !canRetryMetaFailure(err)) {
     await prisma.delivery.update({
       where: { id: delivery.id },
       data: { state: "FAILED", failCount, lastError: message, nextRunAt: null },
@@ -183,7 +184,7 @@ export async function startFunnel(
           data: {
             state: "ACTIVE",
             nextOrder: firstStep.order,
-            nextRunAt: null,
+            nextRunAt: new Date(Date.now() + 5 * 60_000),
             lastError: null,
             createdAt: new Date(), // отсчёт окна повтора идёт от нового прохода
             commentId: opts.commentId ?? null,
@@ -197,15 +198,15 @@ export async function startFunnel(
             contactId: contact.id,
             state: "ACTIVE",
             nextOrder: firstStep.order,
-            nextRunAt: null,
+            nextRunAt: new Date(Date.now() + 5 * 60_000),
             commentId: opts.commentId ?? null,
             commentText: opts.commentText ?? null,
           },
           include: { contact: true },
         });
-  } catch {
-    // Гонка: два сообщения почти одновременно — второй заход просто молчит.
-    return false;
+  } catch (err) {
+    if ((err as { code?: string })?.code === "P2002") return false;
+    throw err;
   }
 
   await addTag(contact, funnel.startTag);
@@ -235,8 +236,16 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
   // Атомарный захват: sendStep ставит доставку в WAITING именно перед кнопкой —
   // двойное нажатие (клиент тапнул дважды почти одновременно) без этой проверки
   // проходило оба раза и слало шаг воронки клиенту дважды.
-  const claimed = await prisma.delivery.updateMany({ where: { id: delivery.id, state: "WAITING" }, data: { state: "ACTIVE" } });
-  if (claimed.count === 0) return true;
+  const claimed = await prisma.delivery.updateMany({ where: { id: delivery.id, state: "WAITING" }, data: { state: "ACTIVE", nextOrder: step.order, nextRunAt: new Date(Date.now() + 5 * 60_000) } });
+  if (claimed.count === 0) {
+    if (delivery.state === "ACTIVE") return true; // The original tap is still scheduled/running.
+    const text = contact.preferredLanguage === "tg"
+      ? "Ин тугма дигар фаъол нест. Лутфан саволатонро нависед ё тугмаи паёми охиринро интихоб кунед."
+      : "Эта кнопка больше не активна. Напишите ваш вопрос или выберите кнопку в последнем сообщении.";
+    const mid = await withMessagingPermission("funnel", () => sendToContact(contact, text));
+    await recordOutgoingMessage(contact.id, text, mid);
+    return true;
+  }
 
   try {
     if (step.delaySeconds > 0) {
@@ -248,11 +257,7 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
       await sendStep(delivery, step.funnel, step);
     }
   } catch (err) {
-    logError("funnel:quickReply", err);
-    await prisma.delivery.update({
-      where: { id: delivery.id },
-      data: { state: "FAILED", lastError: err instanceof Error ? err.message : String(err) },
-    });
+    await retryOrGiveUp({ ...delivery, nextOrder: step.order }, contact, err);
   }
   return true;
 }
@@ -304,28 +309,35 @@ function isEmojiOnly(text: string): boolean {
 }
 
 /** Комментарий под публикацией — Instagram или страницы Facebook. */
-export async function handleComment(input: {
+type CommentInput = {
   commentId: string;
   mediaId: string | null;
   igUserId: string;
   username: string | null;
   text: string;
   channel?: MetaChannel;
-}): Promise<void> {
+};
+const commentTasks = new Map<string, Promise<void>>();
+export async function handleComment(input: CommentInput): Promise<void> {
+  const running = commentTasks.get(input.commentId);
+  if (running) return running;
+  const task = (async () => {
+    if (await prisma.seenComment.findUnique({ where: { commentId: input.commentId } })) return;
+    await processComment(input);
+    try { await prisma.seenComment.create({ data: { commentId: input.commentId } }); }
+    catch (err) { if ((err as { code?: string })?.code !== "P2002") throw err; }
+  })();
+  commentTasks.set(input.commentId, task);
+  try { await task; } finally { commentTasks.delete(input.commentId); }
+}
+async function processComment(input: CommentInput): Promise<void> {
   const channel: MetaChannel = input.channel ?? "INSTAGRAM";
-
-  // Повторная доставка вебхука не должна отправить второе приглашение.
-  try {
-    await prisma.seenComment.create({ data: { commentId: input.commentId } });
-  } catch {
-    return;
-  }
 
   // Флирт, оскорбления, рекламный спам — не отвечаем вовсе, удаляем: такому не
   // место под роликом школы, а любой ответ только продолжает разговор.
   const abuse = detectAbuse(input.text);
   if (abuse) {
-    await deleteComment(input.commentId, channel).catch((err) => logError(`funnel:delete:${abuse}`, err));
+    await deleteComment(input.commentId, channel);
     return;
   }
 
@@ -334,7 +346,7 @@ export async function handleComment(input: {
   if (isEmojiOnly(input.text)) {
     if (await isBotFrozen()) return;
     const emoji = THANK_YOU_EMOJI[Math.floor(Math.random() * THANK_YOU_EMOJI.length)];
-    await replyToComment(input.commentId, emoji, channel).catch((err) => logError("funnel:emojiReply", err));
+    await replyToComment(input.commentId, emoji, channel);
     return;
   }
 
@@ -366,7 +378,7 @@ export async function handleComment(input: {
   // Ни одна воронка не подошла (ролик не в списке продающих) — не молчим:
   // обычный тёплый ответ ИИ личным сообщением, без кнопок и без нажима на продажу.
   const contact = await upsertContact(input.igUserId, input.username, channel);
-  await aiReplyToComment(contact, input.commentId, input.text).catch((err) => logError("funnel:aiComment", err));
+  await aiReplyToComment(contact, input.commentId, input.text);
 }
 
 /**
@@ -416,7 +428,7 @@ export async function runDueDeliveries(): Promise<void> {
     });
     for (const delivery of due) {
       // Сначала снимаем с расписания, потом шлём — повторный тик не отправит дубль.
-      await prisma.delivery.update({ where: { id: delivery.id }, data: { nextRunAt: null } });
+      await prisma.delivery.update({ where: { id: delivery.id }, data: { nextRunAt: new Date(Date.now() + 5 * 60_000) } });
       const step = await prisma.funnelStep.findUnique({
         where: { funnelId_order: { funnelId: delivery.funnelId, order: delivery.nextOrder } },
       });

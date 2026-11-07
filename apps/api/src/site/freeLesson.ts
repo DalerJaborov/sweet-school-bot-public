@@ -5,9 +5,10 @@ import { z } from "zod";
 import { prisma, getSetting } from "../db.js";
 import { env } from "../env.js";
 import { masterManifest, variantManifest } from "../course/manifest.js";
-import { presignGet, storageConfig } from "../storage/s3.js";
+import { getObject, presignGet, storageConfig } from "../storage/s3.js";
 import { createRateLimiter } from "../services/rateLimit.js";
 import { parseRecipeCard } from "../course/cardOcr.js";
+import { parseStringArray } from "../json.js";
 import { clientIp } from "../course/access.js";
 
 export const FREE_BASE = "/api/v1/free-lesson";
@@ -130,9 +131,20 @@ freeLessonRouter.get(`${FREE_BASE}/content`, guard, (_req, res) => {
     id: lesson.id,
     title: lesson.title,
     recipeText: lesson.recipeText,
+    recipePhotos: parseStringArray(lesson.recipePhotos).map((_, i) => `${FREE_BASE}/lessons/${lesson.id}/photo/${i}`),
     recipeData: lesson.recipeData ? parseRecipeCard(lesson.recipeData) : null,
     manifestUrl: `${FREE_BASE}/lessons/${lesson.id}/manifest`,
   });
+});
+freeLessonRouter.get(`${FREE_BASE}/lessons/:id/photo/:index`, guard, async (req, res) => {
+  if (!/^\d+$/.test(req.params.index)) { res.sendStatus(404); return; }
+  const key = parseStringArray(res.locals.freeLesson.recipePhotos)[Number(req.params.index)];
+  const cfg = key ? await storageConfig() : null;
+  const data = cfg && key ? await getObject(cfg, key) : null;
+  if (!data) { res.sendStatus(404); return; }
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.type(key.endsWith(".png") ? "image/png" : key.endsWith(".webp") ? "image/webp" : "image/jpeg").send(data);
 });
 freeLessonRouter.get(`${FREE_BASE}/lessons/:id/manifest`, guard, async (_req, res) => {
   const body = await masterManifest(res.locals.freeLesson, FREE_BASE);

@@ -195,7 +195,7 @@ export function auditBuiltSite(distDir, content = loadContent()) {
   const artifactErrors = [];
   const expected = renderSite(content);
   const fail = (code, file, message) => artifactErrors.push({ code, file, message });
-  for (const directory of ["", "tg"]) {
+  for (const directory of ["", "tg", "ru"]) {
     const fullDir = path.join(distDir, directory);
     if (!fs.existsSync(fullDir)) continue;
     for (const entry of fs.readdirSync(fullDir, { withFileTypes: true })) {

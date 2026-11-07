@@ -16,6 +16,7 @@ type Content = {
   id: string;
   title: string;
   recipeText: string | null;
+  recipePhotos?: string[];
   recipeData: RecipeCardData | null;
   manifestUrl: string;
 };
@@ -98,8 +99,9 @@ export function FreeLesson({ lang }: { lang: Lang }) {
               </div>
             ))
           ) : (
-            <p className="free-recipe">{content.recipeText || t.noRecipe}</p>
+            <p className="free-recipe">{content.recipeText || (!content.recipePhotos?.length ? t.noRecipe : "")}</p>
           )}
+          {content.recipePhotos?.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener"><img src={url} alt={`${content.title} · ${index + 1}`} loading="lazy" /></a>)}
           <a className="btn" href={`${lang === "tg" ? "/tg" : ""}/online-kurs#kupit`}>
             {t.courses}
           </a>

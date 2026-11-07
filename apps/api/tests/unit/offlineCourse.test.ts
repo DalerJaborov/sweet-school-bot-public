@@ -1,3 +1,4 @@
+import { cleanAutomatedReply } from "../../src/ai/replyPolicy.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../helpers.js";
 
@@ -124,8 +125,8 @@ describe("maybeSendOfflineCard", () => {
     const sent = await maybeSendOfflineCard(contact, "сабти ном мехоҳам");
 
     expect(sent).toBe(true);
-    // Именно заготовка, символ в символ — без пересказа моделью.
-    expect(sendText.mock.calls[0][1]).toBe(offlineCardDefault("tg", null));
+    // Текст заготовки без пересказа моделью; единая политика убирает emoji.
+    expect(sendText.mock.calls[0][1]).toBe(cleanAutomatedReply(offlineCardDefault("tg", null)));
     expect(db.model("message").create).toHaveBeenCalledTimes(1);
   });
 

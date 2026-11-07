@@ -62,20 +62,11 @@ describe("Статичные страницы сайта", () => {
 
   it("картинки: фото десерта с прелоадом и AVIF, своё og:image на каждой странице и языке", () => {
     const body = files.get("site.html")!;
-    // LCP: прелоад совпадает с кандидатами <img> (imagesrcset/imagesizes), иначе качается дважды.
-    expect(body).toMatch(
-      /<link rel="preload" as="image" href="\/img\/desserts\/chizkejk-dubajskij-shokolad\.avif" type="image\/avif" imagesrcset="[^"]+" imagesizes="[^"]+" fetchpriority="high" \/>/,
-    );
-    expect(body).toContain(
-      '<picture><source type="image/avif" srcset="/img/desserts/chizkejk-dubajskij-shokolad-sm.avif 627w, /img/desserts/chizkejk-dubajskij-shokolad.avif 1254w"',
-    );
-    expect(body).toMatch(
-      /<img src="\/img\/desserts\/chizkejk-dubajskij-shokolad\.webp"[^>]*width="1254" height="1254"[^>]*fetchpriority="high"/,
-    );
-    // Плитки десертов: явные размеры и lazy — без сдвига раскладки.
-    expect(body).toMatch(
-      /<img src="\/img\/desserts\/[^"]+\.webp" srcset="[^"]+" sizes="[^"]+" width="800" height="800" alt="[^"]+" loading="lazy"/,
-    );
+    const hero = content.media.desserts['Чизкейк «Дубайский шоколад»'];
+    expect(body).toContain(`rel="preload" as="image" href="${hero.avif || hero.src}"`);
+    expect(body).toContain(`src="${hero.src}"`);
+    expect(body).toContain(`width="${hero.width}" height="${hero.height}"`);
+    expect(body).toContain('loading="lazy"');
     // Превью ссылки — своё на страницу и язык, крупная карточка.
     for (const [file, page] of html) {
       const tg = file === "site.html" || file.startsWith("tg/");
@@ -133,12 +124,11 @@ describe("Статичные страницы сайта", () => {
     expect((sitemap.match(/<loc>/g) ?? []).length).toBe(16);
   });
 
-  it("прелоад использует обложку самой страницы и её AVIF, а не главную", () => {
-    const body = files.get("online-kurs.html")!;
-    const entry = content.media.heroPages["online-kurs"];
-    const preload = body.match(/<link rel="preload" as="image"[^>]+>/)![0];
-    expect(preload).toContain(`href="${entry.avif || entry.src}"`);
-    expect(preload).not.toContain('href="/img/covers/hero.avif"');
+  it("compact pages do not preload an unused hero photograph", () => {
+    for (const slug of ["online-kurs", "faq"]) {
+      const body = files.get(`${slug}.html`)!;
+      expect(body).not.toContain('rel="preload" as="image"');
+    }
   });
 
   it("оплата вручную, реальная программа арт-десертов и актуальные часы", () => {

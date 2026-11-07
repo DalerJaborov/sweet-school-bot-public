@@ -12,6 +12,7 @@ vi.mock("../../src/course/delivery.js", () => ({
   accessMessage: () => "Course access",
 }));
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact }));
+import { MetaDeliveryError } from "../../src/messaging/metaErrors.js";
 import { grantCourses } from "../../src/ai/grantCourses.js";
 import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 
@@ -36,23 +37,20 @@ const contact = fakeContact({ channel: "WEB", paid: true }) as unknown as Contac
 const plan = { grant: ["COURSE70" as const], note: "70" };
 
 describe("in-flight course grants", () => {
-  it.each([undefined, "unchecked-original"])("late grant freeze leaves receipt %s and customer flags untouched", async (existingId) => {
+  it.each([undefined, "unchecked-original"])("incomplete screenshot %s cannot grant access even with high confidence", async (existingId) => {
     db.model("purchase").findMany.mockResolvedValue([]);
-    db.model("purchase").create.mockImplementation(async () => {
-      frozen = true;
-      return { id: "new-purchase-only" };
-    });
-    db.model("receiptCheck").create.mockResolvedValue({ id: "should-not-create" });
-    db.model("receiptCheck").update.mockResolvedValue({ id: "unchecked-original" });
+    db.model("receiptCheck").create.mockResolvedValue({ id: "review" });
+    db.model("receiptCheck").update.mockResolvedValue({ id: "review" });
+    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 0 });
     await handleReceiptVerdict(contact, {
-      kind: "valid", confidence: 98, amount: 70, receiptAt: null,
+      kind: "valid", confidence: 100, amount: 70, receiptAt: null,
       reason: "valid", imageHash: "original-hash", imageUrl: "/media/original.jpg",
     }, existingId);
-    expect(db.model("purchase").delete).toHaveBeenCalledExactlyOnceWith({ where: { id: "new-purchase-only" } });
-    expect(db.model("receiptCheck").create).not.toHaveBeenCalled();
-    expect(db.model("receiptCheck").update).not.toHaveBeenCalled();
-    expect(db.model("contact").update).not.toHaveBeenCalled();
-    expect(sendToContact).not.toHaveBeenCalled();
+    expect(db.model("purchase").create).not.toHaveBeenCalled();
+    expect(issueCourseLink).not.toHaveBeenCalled();
+    expect(sendToContact.mock.calls.every((call) => !String(call[1]).includes("/l/"))).toBe(true);
+    const saved = existingId ? db.model("receiptCheck").update : db.model("receiptCheck").create;
+    expect(saved).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "PENDING", linkSent: false }) }));
   });
 
   it("freeze during receipt save stops later alternative-screenshot side effects", async () => {
@@ -88,10 +86,45 @@ describe("in-flight course grants", () => {
     expect(db.model("contact").update).not.toHaveBeenCalled();
   });
 
+  it("network failure keeps paid purchase pending, and retry reuses it", async () => {
+    sendToContact.mockRejectedValueOnce(new Error("network unavailable"));
+    expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual([]);
+    expect(db.model("purchase").delete).not.toHaveBeenCalled();
+    expect(db.model("purchase").deleteMany).not.toHaveBeenCalled();
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { paid: true, paidAt: expect.any(Date) } }));
+    db.model("purchase").findUnique.mockResolvedValue({ id: "new-purchase-only", inviteLink: null, revokedAt: null });
+    expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual(["COURSE70"]);
+    expect(db.model("purchase").create).toHaveBeenCalledTimes(1);
+    expect(db.model("purchase").updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { inviteLink: "/course/new-link" } }));
+  });
+
+  it("retry never revives a revoked purchase", async () => {
+    db.model("purchase").findUnique.mockResolvedValue({ id: "old", inviteLink: null, revokedAt: new Date() });
+    expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual([]);
+    expect(sendToContact).not.toHaveBeenCalled();
+    expect(db.model("purchase").create).not.toHaveBeenCalled();
+  });
+
+  it("a late freeze at transport rolls back only purchases created in this call", async () => {
+    sendToContact.mockImplementationOnce(async () => { frozen = true; throw new Error("Bot automation is frozen"); });
+    expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual([]);
+    expect(db.model("purchase").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["new-purchase-only"] } } });
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+  });
+
+  it("ambiguous delivery is recorded and cannot be silently resent", async () => {
+    sendToContact.mockRejectedValueOnce(new MetaDeliveryError("AMBIGUOUS", 0));
+    expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual([]);
+    expect(db.model("purchase").updateMany).toHaveBeenCalledWith({ where: { id: { in: ["new-purchase-only"] } }, data: { accessDeliveryUncertainAt: expect.any(Date) } });
+    db.model("purchase").findUnique.mockResolvedValue({ id: "new-purchase-only", inviteLink: null, accessDeliveryUncertainAt: new Date() });
+    expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual([]);
+    expect(sendToContact).toHaveBeenCalledTimes(1);
+  });
+
   it("explicit owner approval still grants manually while frozen", async () => {
     frozen = true;
     expect(await grantCourses(contact, plan, 70, { amount: 70 }, { byHuman: true })).toEqual(["COURSE70"]);
-    expect(issueCourseLink).toHaveBeenCalledWith(contact.id, { automatic: false });
+    expect(issueCourseLink).toHaveBeenCalledWith(contact.id, { automatic: false, preserveExisting: true });
     expect(sendToContact).toHaveBeenCalledWith(contact, "Course access", [], { byHuman: true });
     expect(db.model("purchase").delete).not.toHaveBeenCalled();
   });

@@ -43,7 +43,7 @@ try {
     try { assert.equal((await request("/health")).status, 200); break; }
     catch (error) { if (attempt >= 30) throw error; await new Promise((resolve) => setTimeout(resolve, 200)); }
   }
-  for (const route of ["/", "/online-kurs", "/art-desserty", "/tg/", "/tg/online-kurs", "/tg/art-desserty"]) {
+  for (const route of ["/", "/online-kurs", "/art-desserty", "/ru/", "/tg/online-kurs", "/tg/art-desserty"]) {
     const response = await request(route, { Cookie: "private-session=fixture", Authorization: "Bearer fixture" });
     const html = await response.text();
     assert.equal(response.status, 200, `${route}: ${JSON.stringify(Object.fromEntries(response.headers))}`);
@@ -53,11 +53,12 @@ try {
     assert.equal(response.headers.get("last-modified"), null);
     assert.match(html, /data-server-catalog="ready"/, route);
     assert.doesNotMatch(html, /<!--#|an error occurred while processing/, route);
-    assert.match(html, route.startsWith("/tg/") ? /83 сомонӣ/ : /83 сомони/, route);
+    assert.match(html, (route === "/" || route.startsWith("/tg/")) ? /83 сомонӣ/ : /83 сомони/, route);
     if (route.endsWith("art-desserty")) assert.doesNotMatch(html, /91 сомон|147 сомон/, route);
     else assert.match(html, /147 сомон/, route);
     checks++;
   }
+  assert.equal((await request("/tg/")).status, 301); checks++;
   assert.equal((await request("/_site/catalog-fragment?lang=ru")).status, 404); checks++;
   assert.equal((await request("/missing-course-page")).status, 404); checks++;
   for (const route of ["/course", "/panel"]) {

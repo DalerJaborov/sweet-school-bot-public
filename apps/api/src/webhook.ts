@@ -5,6 +5,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
 import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
 import { sendToContact } from "./messaging/send.js";
+import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
 import { looksPersonal } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -158,8 +159,6 @@ webhookRouter.post(["/webhooks/instagram", "/webhooks/messenger"], async (req, r
     res.sendStatus(403);
     return;
   }
-  res.sendStatus(200);
-
   // Runtime-валидация: Meta иногда меняет формат вебхука, и без проверки
   // неожиданные поля приводят к silent undefined-access глубоко в логике.
   // Здесь проверяем только верхнюю структуру — детали парсятся ниже по мере
@@ -175,53 +174,49 @@ webhookRouter.post(["/webhooks/instagram", "/webhooks/messenger"], async (req, r
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) {
     logError("webhook:invalidPayload", new Error(`Malformed webhook body: ${parsed.error.message}`));
+    res.sendStatus(400);
     return;
   }
   const body = parsed.data as WebhookBody;
-  if (!Array.isArray(body.entry)) return;
   const channel: MetaChannel = body.object === "page" ? "MESSENGER" : "INSTAGRAM";
-
+  const events: InboxEvent[] = [];
+  for (const entry of body.entry ?? []) {
+    for (const event of entry.messaging ?? []) events.push({ channel, selfId: entry.id, kind: "message", event: event as Record<string, unknown> });
+    for (const event of entry.changes ?? []) events.push({ channel, selfId: entry.id, kind: "comment", event: event as Record<string, unknown> });
+  }
   try {
-    for (const entry of body.entry) {
-      const selfId = entry.id;
-      for (const event of entry.messaging ?? []) {
-        await handleMessage(event, selfId, channel).catch((err) => logError("webhook:message", err));
-      }
-      for (const change of entry.changes ?? []) {
-        // Комментарий приходит по-разному: у Instagram это поле "comments", у
-        // страницы Facebook — "feed" с item:"comment" (в том же "feed" летят и
-        // лайки, и новые посты, поэтому вид проверяем отдельно).
-        const isIgComment = channel === "INSTAGRAM" && change.field === "comments";
-        const isFbComment =
-          channel === "MESSENGER" &&
-          change.field === "feed" &&
-          change.value?.item === "comment" &&
-          change.value?.verb === "add";
-        if ((!isIgComment && !isFbComment) || !change.value) continue;
-
-        const v = change.value;
-        // У Facebook идентификатор комментария лежит в comment_id, а автор — во
-        // вложенном from; у Instagram и то и другое в корне.
-        const commentId = v.id ?? v.comment_id;
-        const authorId = v.from?.id;
-        const text = v.text ?? v.message;
-        if (!commentId || !authorId || !text) continue;
-        if (authorId === selfId) continue; // свои комментарии не триггерят воронку
-
-        await handleComment({
-          commentId,
-          mediaId: v.media?.id ?? v.post_id ?? null,
-          igUserId: authorId,
-          username: v.from?.username ?? v.from?.name ?? null,
-          text,
-          channel,
-        }).catch((err) => logError("webhook:comment", err));
-      }
-    }
+    await acceptWebhookEvents(events);
+    res.sendStatus(200);
+    void runWebhookInbox().catch((err) => logError("webhookInbox", err));
   } catch (err) {
-    logError("webhook", err);
+    logError("webhook:accept", err);
+    res.sendStatus(503); // Not committed: Meta must redeliver.
   }
 });
+
+export async function runWebhookInbox(): Promise<void> {
+  await processWebhookInbox(async ({ channel, selfId, kind, event }) => {
+    if (kind === "message") {
+      const messageEvent = event as MessagingEvent;
+      if (messageEvent.message && !messageEvent.message.mid) {
+        messageEvent.message.mid = `inbox:${inboxKey({ channel, selfId, kind, event })}`;
+      }
+      await handleMessage(messageEvent, selfId, channel, true);
+      return;
+    }
+    const change = event as CommentChange;
+    const isComment = channel === "INSTAGRAM" ? change.field === "comments"
+      : change.field === "feed" && change.value?.item === "comment" && change.value?.verb === "add";
+    if (!isComment || !change.value) return;
+    const v = change.value;
+    const commentId = v.id ?? v.comment_id;
+    const authorId = v.from?.id;
+    const text = v.text ?? v.message;
+    if (!commentId || !authorId || !text || authorId === selfId) return;
+    await handleComment({ commentId, mediaId: v.media?.id ?? v.post_id ?? null,
+      igUserId: authorId, username: v.from?.username ?? v.from?.name ?? null, text, channel });
+  });
+}
 
 function toAttachments(raw: MessagingEvent["message"]): Attachment[] {
   return (raw?.attachments ?? [])
@@ -311,6 +306,7 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
       // P2002 = дубликат mid (гонка с параллельным вебхуком) — это нормально.
       if ((err as { code?: string })?.code !== "P2002") {
         logError("webhook:handleEcho:record", err);
+        throw err;
       }
       return false;
     });
@@ -322,6 +318,10 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
   // подписи тоже учит — сама картинка уже ответ, терять её из-за пустого текста
   // нельзя (см. rememberOwnerReply).
   if (echoText || ownerMedia) {
+    // Graph may return its send result after the echo. Give recordOutgoingMessage
+    // time to correct byHuman before admitting this sample into style learning.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20_000));
+    if (!(await prisma.message.findUnique({ where: { mid: msg.mid } }))?.byHuman) return;
     const lastIn = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "IN", text: { not: null } },
       orderBy: { createdAt: "desc" },
@@ -371,7 +371,7 @@ async function handleReaction(event: MessagingEvent, selfId?: string, channel: M
   });
 }
 
-export async function handleMessage(event: MessagingEvent, selfId?: string, channel: MetaChannel = "INSTAGRAM"): Promise<void> {
+export async function handleMessage(event: MessagingEvent, selfId?: string, channel: MetaChannel = "INSTAGRAM", resume = false): Promise<void> {
   const msg = event.message;
   const senderId = event.sender?.id;
   if (event.reaction) {
@@ -423,6 +423,15 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   if (!text && !payload && attachments.length === 0) return;
 
   const contact = await upsertContact(senderId, null, channel);
+  if (msg.mid) {
+    try {
+      await prisma.message.create({ data: { contactId: contact.id, direction: "IN", mid: msg.mid, text, payload } });
+    } catch (err) {
+      if ((err as { code?: string })?.code !== "P2002") throw err;
+      if (!resume) return;
+    }
+  }
+
 
   /**
    * ГОЛОСОВОЕ ОТ КЛИЕНТКИ — РАСШИФРОВЫВАЕМ СРАЗУ.
@@ -457,34 +466,8 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // в историю всё равно идёт: переписка сохраняется, просто без ответов бота.
   // То же для заблокированных за спам/флирт (владелец 05.09.2026) — снять
   // блок можно из панели «Ученицы».
-  if (contact.personal || contact.spamBlockedAt) {
-    if (msg.mid) {
-      await prisma.message
-        .create({ data: { contactId: contact.id, direction: "IN", mid: msg.mid, text, payload } })
-        .catch((err) => {
-          // P2002 = дубликат mid (повторная доставка вебхука) — это нормально.
-          if ((err as { code?: string })?.code !== "P2002") {
-            logError("webhook:personalContact:createMessage", err);
-          }
-        });
-    }
-    return;
-  }
-  // mid уникален в базе — повторная доставка того же сообщения обрывается здесь.
-  // Само сообщение сохраняем ДО проверки looksPersonal ниже — раньше именно то
-  // сообщение, из-за которого контакт помечался «личный», нигде не сохранялось
-  // (только обрезанный до 100 символов фрагмент в personalReason).
-  if (msg.mid) {
-    try {
-      await prisma.message.create({
-        // textOrVoice, а не text: голосовое ложится в историю расшифровкой,
-        // иначе модель читает разговор с дырами.
-        data: { contactId: contact.id, direction: "IN", mid: msg.mid, text: textOrVoice, payload },
-      });
-    } catch {
-      return;
-    }
-  }
+  if (contact.personal || contact.spamBlockedAt) return;
+  if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
 
   // ФЛИРТ / ОСКОРБЛЕНИЯ / РЕКЛАМНЫЙ СПАМ / ВИДЕО БЕЗ ТЕКСТА в директе от того,
   // кто не покупал (владелец 05.09.2026): блокируем сразу, без ответа. Оплатившую
@@ -551,10 +534,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     });
     const language = detectClientLanguage(lastIn?.text ?? "");
     const text = COULD_NOT_LOAD_PHOTO[language];
-    const mid = await sendToContact(contact, text).catch((err) => {
-      logError("webhook:couldNotLoadPhoto:send", err);
-      return null;
-    });
+    const mid = await sendToContact(contact, text);
     if (mid) await recordOutgoingMessage(contact.id, text, mid);
     return;
   }
@@ -572,9 +552,9 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // знать, о чём он спрашивает, ещё до того, как посмотрит обложку.
   const textForAi = ownMediaHint ? `${ownMediaHint}\n${textOrVoice ?? ""}`.trim() : textOrVoice ?? "";
 
-  debounceMessage(contact.id, textForAi, attachments, rescuedImages, async (mergedText, mergedAttachments, mergedRescued) => {
+  await debounceMessage(contact.id, textForAi, attachments, rescuedImages, async (mergedText, mergedAttachments, mergedRescued) => {
     const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
     if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
-    await aiReply(fresh, mergedText, mergedAttachments, mergedRescued).catch((err) => logError("webhook:aiReply", err));
+    await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
   });
 }

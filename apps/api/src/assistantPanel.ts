@@ -1,3 +1,4 @@
+import { guardGeneratedTone, FORMAL_TONE_RULE } from "./ai/replyPolicy.js";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma, getSetting, logError } from "./db.js";
@@ -279,6 +280,7 @@ function systemInstruction(): string {
   const today = new Date().toISOString().slice(0, 10);
   return [
     "Ты помощница Ширин — владелицы кондитерской онлайн-школы — внутри её панели управления.",
+    FORMAL_TONE_RULE,
     `Сегодня ${today}. Деньги — в сомони (с.).`,
     "ПРАВИЛА:",
     "1. Любые цифры, имена и факты бери ТОЛЬКО из результатов инструментов. Не помнишь — вызови инструмент. Не выдумывай.",
@@ -340,7 +342,7 @@ async function converse(input: AskInput, cfg: { keys: string[]; model: string },
     void logAiCall({ endpoint: ENDPOINT, model: result.model, usage: result.usage, ms: Date.now() - startedAt, ok: true });
 
     const calls = withTools ? (result.functionCalls ?? []) : [];
-    if (calls.length === 0) return { answer: result.text, sources, draft };
+    if (calls.length === 0) return { answer: guardGeneratedTone(result.text), sources, draft };
 
     // Модель попросила инструменты: неизвестные имена молча пропускаем —
     // модель могла выдумать название, а исполнять только то, что в TOOLS.
@@ -363,7 +365,7 @@ async function converse(input: AskInput, cfg: { keys: string[]; model: string },
       if (out.draft) draft = out.draft;
       responses.push({ functionResponse: { name: tool.name, response: { summary: out.summary, data: out.data ?? null } } });
     }
-    if (responses.length === 0) return { answer: result.text, sources, draft };
+    if (responses.length === 0) return { answer: guardGeneratedTone(result.text), sources, draft };
     contents.push({ role: "model", parts: modelParts }, { role: "user", parts: responses });
   }
   return { answer: null, sources, draft };

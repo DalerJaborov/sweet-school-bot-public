@@ -33,7 +33,7 @@ const SETTINGS: Record<string, string> = { telegramBotToken: "t", telegramOwnerC
 const contact = fakeContact({ askedAltScreenshotAt: null, paid: true }) as Parameters<typeof handleReceiptVerdict>[0];
 
 function valid70(hash = "hash-2") {
-  return { kind: "valid" as const, confidence: 98, amount: 70, receiptAt: null, reason: "чек на 70", imageHash: hash, imageUrl: "/media/r.jpg" };
+  return { kind: "valid" as const, confidence: 98, amount: 70, receiptAt: new Date(), recipientMatches: true, currency: "TJS", tamperingSuspected: false, reason: "чек на 70", imageHash: hash, imageUrl: "/media/r.jpg" };
 }
 
 beforeEach(() => {
@@ -97,9 +97,21 @@ describe("тот же перевод второй раз", () => {
     expect(created.data.reason).toMatch(/тот же перевод прислан второй раз/);
   });
 
-  it("без прежнего чека на ту же сумму — обычная выдача", async () => {
+  it("читаемый свежий чек с совпавшим получателем автоматически выдаёт курс", async () => {
     await handleReceiptVerdict(contact, valid70());
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
   });
+  it.each([
+    { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) },
+    { receiptAt: new Date(Date.now() + 3600000) }, { recipientMatches: false },
+    { recipientMatches: undefined }, { amount: null }, { currency: null },
+    { tamperingSuspected: true }, { confidence: 49 },
+  ])("incomplete or suspicious evidence never auto-grants: %j", async (overrides) => {
+    await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: false, ownerDecision: "PENDING" }) }));
+  });
+
 });

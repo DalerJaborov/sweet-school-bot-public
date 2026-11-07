@@ -133,6 +133,18 @@ export async function decideReceipt(
     };
   }
 
+  // A previous send failure preserves the paid purchase. Retry its delivery,
+  // rather than allocating another course from the same payment amount.
+  const pending = await prisma.purchase.findMany({
+    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null },
+  });
+  if (pending.some((p) => p.accessDeliveryUncertainAt)) {
+    await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
+    return { ok: false, reason: "no_access_configured", message: "Неизвестно, доставлена ли прежняя ссылка. Проверьте переписку и доступ ученицы; повторная отправка автоматически заблокирована." };
+  }
+  if (pending.length > 0) {
+    plan = { ...plan, grant: pending.map((p) => p.course).filter((c): c is Course => c === COURSE_50 || c === COURSE_70), note: "повтор доставки оплаченного доступа" };
+  }
   if (plan.grant.length === 0) {
     await prisma.receiptCheck.update({
       where: { id: receiptId },
@@ -141,8 +153,15 @@ export async function decideReceipt(
     return { ok: true, status: "approved_no_link", message: `Ссылка не отправлена: ${plan.note}` };
   }
 
-  const granted = await grantCourses(receipt.contact, plan, amount, { amount: receipt.amount, currency: "TJS" }, { byHuman: true });
-  if (granted.length === 0) {
+  let granted: Course[];
+  try {
+    granted = await grantCourses(receipt.contact, plan, amount, { amount: receipt.amount, currency: "TJS" }, { byHuman: true });
+  } catch (err) {
+    await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
+    throw err;
+  }
+  if (granted.length < plan.grant.length) {
+    await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
     return { ok: false, reason: "no_access_configured", message: "Не настроена группа/ссылка доступа" };
   }
 

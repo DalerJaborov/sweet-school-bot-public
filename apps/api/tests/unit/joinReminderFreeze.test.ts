@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeContact, mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
-const { createOneTimeInviteLink, sendTelegramMessage } = vi.hoisted(() => ({
-  createOneTimeInviteLink: vi.fn(), sendTelegramMessage: vi.fn(),
+const { createOneTimeInviteLink, sendTelegramMessage, sendToContact } = vi.hoisted(() => ({
+  createOneTimeInviteLink: vi.fn(), sendTelegramMessage: vi.fn(), sendToContact: vi.fn(),
 }));
 vi.mock("../../src/telegram.js", () => ({
   createOneTimeInviteLink, sendTelegramMessage,
   ownerAlertChatIds: async () => ["owner"],
 }));
+vi.mock("../../src/messaging/send.js", () => ({ sendToContact }));
+import { MetaDeliveryError } from "../../src/messaging/metaErrors.js";
 import { runJoinReminders } from "../../src/joinReminder.js";
 
 let db: PrismaMock;
@@ -15,10 +17,14 @@ let frozen = false;
 let mode = "web";
 let freezeOnTelegramChat = false;
 beforeEach(() => {
+  sendToContact.mockReset().mockResolvedValue("mid");
+  sendTelegramMessage.mockReset().mockResolvedValue(1);
   frozen = false;
   mode = "web";
   freezeOnTelegramChat = false;
   db = mockPrisma();
+  db.model("contact").findUnique.mockResolvedValue({ id: "contact-1", accessTokenId: null, accessIssuedAt: null });
+  db.model("contact").updateMany.mockResolvedValue({ count: 1 });
   db.model("setting").findUnique.mockImplementation(async (args) => {
     const key = (args as { where: { key: string } }).where.key;
     if (key === "telegramChatId70" && freezeOnTelegramChat) frozen = true;
@@ -35,6 +41,43 @@ beforeEach(() => {
 afterEach(restorePrisma);
 
 describe("in-flight join reminder freeze", () => {
+  it("closed Meta window never rotates links and owner sees the actual reason", async () => {
+    db.model("contact").findMany.mockResolvedValue([fakeContact()]);
+    db.model("message").findFirst.mockResolvedValue({ createdAt: new Date(Date.now() - 30 * 3600000), text: "курс" });
+    await runJoinReminders();
+    expect(db.model("purchase").findMany).not.toHaveBeenCalled();
+    expect(db.model("contact").update.mock.calls.some(([arg]) => "accessTokenId" in (arg as { data: object }).data)).toBe(false);
+    expect(sendToContact).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("окно Instagram закрыто");
+    expect(String(sendTelegramMessage.mock.calls[0][2])).not.toContain("перевыпущена");
+  });
+
+  it("failed delivery cannot be reported as successful; unnotified work remains retryable", async () => {
+    sendToContact.mockRejectedValueOnce(new Error("network error"));
+    sendTelegramMessage.mockRejectedValueOnce(new Error("owner unavailable"));
+    await runJoinReminders();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("НЕ доставлено");
+    expect(db.model("contact").update.mock.calls.some(([arg]) => "joinReminderAt" in (arg as { data: object }).data)).toBe(false);
+    expect(db.model("purchase").delete).not.toHaveBeenCalled();
+  });
+
+  it("ambiguous send stops automatic replay even when owner notification fails", async () => {
+    sendToContact.mockRejectedValueOnce(new MetaDeliveryError("AMBIGUOUS", 0));
+    sendTelegramMessage.mockRejectedValueOnce(new Error("owner unavailable"));
+    await runJoinReminders();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Доставка ссылки или напоминания неизвестна");
+    expect(db.model("contact").update.mock.calls.some(([arg]) => "joinReminderAt" in (arg as { data: object }).data)).toBe(true);
+    expect(db.model("purchase").update).not.toHaveBeenCalled();
+  });
+
+  it("an uncertain access delivery is never retried by the reminder worker", async () => {
+    db.model("purchase").count.mockResolvedValue(1);
+    await runJoinReminders();
+    expect(sendToContact).not.toHaveBeenCalled();
+    expect(db.model("purchase").findMany).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Доставка ссылки или напоминания неизвестна");
+  });
+
   it("freeze during purchase lookup prevents rotating a paid student's web link", async () => {
     db.model("purchase").findMany.mockImplementation(async () => {
       frozen = true;

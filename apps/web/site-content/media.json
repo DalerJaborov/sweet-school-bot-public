@@ -13,52 +13,40 @@
       "avifSm": "/img/desserts/klubnika-v-shokolade-sm.avif"
     },
     "Чизкейк «Дубайский шоколад»": {
-      "src": "/img/desserts/chizkejk-dubajskij-shokolad.webp",
-      "srcSm": "/img/desserts/chizkejk-dubajskij-shokolad-sm.webp",
-      "width": 1254,
-      "height": 1254,
+      "src": "/img/lessons/dubai.webp",
+      "width": 480,
+      "height": 854,
       "alt": {
-        "ru": "Чизкейк «Дубайский шоколад» с фисташковой крошкой",
-        "tg": "Чизкейки шоколади Убай бо орди писта"
-      },
-      "avif": "/img/desserts/chizkejk-dubajskij-shokolad.avif",
-      "avifSm": "/img/desserts/chizkejk-dubajskij-shokolad-sm.avif"
+        "ru": "Чизкейк «Дубайский шоколад»",
+        "tg": "Чизкейки Дубай"
+      }
     },
     "Пирожное «Сникерс»": {
-      "src": "/img/desserts/snikers.webp",
-      "srcSm": "/img/desserts/snikers-sm.webp",
-      "width": 800,
-      "height": 800,
+      "src": "/img/lessons/snickers.webp",
+      "width": 480,
+      "height": 854,
       "alt": {
-        "ru": "Пирожное «Сникерс» с карамелью и орехами",
-        "tg": "Пирожнии Сникерс бо карамел ва мағз"
-      },
-      "avif": "/img/desserts/snikers.avif",
-      "avifSm": "/img/desserts/snikers-sm.avif"
+        "ru": "Пирожное «Сникерс»",
+        "tg": "Пирожнии Сникерс"
+      }
     },
     "Фисташковое пирожное": {
-      "src": "/img/desserts/fistashkovoe-pirozhnoe.webp",
-      "srcSm": "/img/desserts/fistashkovoe-pirozhnoe-sm.webp",
-      "width": 800,
-      "height": 800,
+      "src": "/img/lessons/pistachio.webp",
+      "width": 480,
+      "height": 854,
       "alt": {
-        "ru": "Фисташковое пирожное с шоколадной глазурью",
-        "tg": "Пирожнии писта бо шоколад"
-      },
-      "avif": "/img/desserts/fistashkovoe-pirozhnoe.avif",
-      "avifSm": "/img/desserts/fistashkovoe-pirozhnoe-sm.avif"
+        "ru": "Фисташковое пирожное",
+        "tg": "Пирожнии писта"
+      }
     },
     "Пирожное «Красный бархат»": {
-      "src": "/img/desserts/krasnyj-barhat.webp",
-      "srcSm": "/img/desserts/krasnyj-barhat-sm.webp",
-      "width": 1254,
-      "height": 1254,
+      "src": "/img/lessons/velvet.webp",
+      "width": 480,
+      "height": 854,
       "alt": {
-        "ru": "Пирожное «Красный бархат» с клубникой",
-        "tg": "Пирожнии бархати сурх бо тути замини"
-      },
-      "avif": "/img/desserts/krasnyj-barhat.avif",
-      "avifSm": "/img/desserts/krasnyj-barhat-sm.avif"
+        "ru": "Пирожное «Красный бархат»",
+        "tg": "Бархати сурх"
+      }
     },
     "Пирожное «Рафаэлло»": {
       "src": "/img/desserts/rafaello.webp",
@@ -297,27 +285,21 @@
   },
   "heroPages": {
     "online-kurs": {
-      "src": "/img/hero/online-kurs.webp",
-      "srcSm": "/img/hero/online-kurs-sm.webp",
-      "avif": "/img/hero/online-kurs.avif",
-      "avifSm": "/img/hero/online-kurs-sm.avif",
-      "width": 1600,
-      "height": 900,
+      "src": "/img/lessons/dubai.webp",
+      "width": 480,
+      "height": 854,
       "alt": {
-        "ru": "Шоколадный торт с ягодами — курс «21 рецепт» Shirin Sweets",
-        "tg": "Торти шоколадӣ бо мева — курси «21 рецепт»-и Shirin Sweets"
+        "ru": "Чизкейк «Дубайский шоколад»",
+        "tg": "Чизкейки Дубай"
       }
     },
     "art-desserty": {
-      "src": "/img/hero/art-desserty.webp",
-      "srcSm": "/img/hero/art-desserty-sm.webp",
-      "avif": "/img/hero/art-desserty.avif",
-      "avifSm": "/img/hero/art-desserty-sm.avif",
-      "width": 1536,
-      "height": 864,
+      "src": "/img/lessons/mango.webp",
+      "width": 480,
+      "height": 854,
       "alt": {
-        "ru": "Муссовый десерт в глянцевой глазури — курс «Арт-десерты» Shirin Sweets",
-        "tg": "Ширинии мусс дар сирдорпӯши ялоқдор — курси «Арт-десерты»-и Shirin Sweets"
+        "ru": "Лимон и манго",
+        "tg": "Лимон ва манго"
       }
     }
   },
@@ -376,5 +358,217 @@
       "ru": "/img/covers/og-politika-konfidentsialnosti-ru.jpg",
       "tg": "/img/covers/og-politika-konfidentsialnosti-tg.jpg"
     }
-  }
+  },
+  "lessonSamples": [
+    {
+      "title": {
+        "ru": "Вупи пай",
+        "tg": "Вупи пай"
+      },
+      "course": "COURSE70",
+      "image": {
+        "src": "/img/lessons/whoopie.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Вупи пай",
+          "tg": "Вупи пай"
+        }
+      },
+      "video": "/img/lessons/whoopie-preview.mp4"
+    },
+    {
+      "title": {
+        "ru": "Трайфл",
+        "tg": "Трайфл"
+      },
+      "course": "COURSE70",
+      "image": {
+        "src": "/img/lessons/trifle.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Трайфл",
+          "tg": "Трайфл"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Фисташковое пирожное",
+        "tg": "Пирожнии писта"
+      },
+      "course": "COURSE70",
+      "image": {
+        "src": "/img/lessons/pistachio.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Фисташковое пирожное",
+          "tg": "Пирожнии писта"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Чизкейк «Дубайский шоколад»",
+        "tg": "Чизкейки Дубай"
+      },
+      "course": "COURSE70",
+      "image": {
+        "src": "/img/lessons/dubai.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Чизкейк «Дубайский шоколад»",
+          "tg": "Чизкейки Дубай"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Пирожное «Сникерс»",
+        "tg": "Пирожнии Сникерс"
+      },
+      "course": "COURSE70",
+      "image": {
+        "src": "/img/lessons/snickers.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Пирожное «Сникерс»",
+          "tg": "Пирожнии Сникерс"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Пирожное «Красный бархат»",
+        "tg": "Бархати сурх"
+      },
+      "course": "COURSE70",
+      "image": {
+        "src": "/img/lessons/velvet.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Пирожное «Красный бархат»",
+          "tg": "Бархати сурх"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Лимон и манго",
+        "tg": "Лимон ва манго"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/mango.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Лимон и манго",
+          "tg": "Лимон ва манго"
+        }
+      },
+      "video": "/img/lessons/mango-preview.mp4"
+    },
+    {
+      "title": {
+        "ru": "Малина",
+        "tg": "Тамашк"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/raspberry.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Малина",
+          "tg": "Тамашк"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Голубика",
+        "tg": "Голубика"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/blueberry.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Голубика",
+          "tg": "Голубика"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Кокос",
+        "tg": "Кокос"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/coconut.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Кокос",
+          "tg": "Кокос"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Фисташка",
+        "tg": "Писта"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/art-pistachio.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Фисташка",
+          "tg": "Писта"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Клубника и вишня",
+        "tg": "Клубника ва олуболу"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/cherry.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Клубника и вишня",
+          "tg": "Клубника ва олуболу"
+        }
+      }
+    },
+    {
+      "title": {
+        "ru": "Кофе",
+        "tg": "Қаҳва"
+      },
+      "course": "COURSE50",
+      "image": {
+        "src": "/img/lessons/coffee.webp",
+        "width": 480,
+        "height": 854,
+        "alt": {
+          "ru": "Кофе",
+          "tg": "Қаҳва"
+        }
+      }
+    }
+  ]
 }

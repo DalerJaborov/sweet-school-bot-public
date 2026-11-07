@@ -2145,3 +2145,7 @@ span.ingredient-row {
 .recipe-originals { margin-top: 24px; }
 .recipe-originals h2 { font-size: 20px; margin-bottom: 16px; }
 .recipe-originals .photos img { width: 100%; height: auto; object-fit: contain; }
+
+.recipe-originals .photos { display: block; }
+.recipe-originals .photos a { display: block; max-width: 640px; margin: 0 auto 16px; }
+.recipe-originals .photos img { width: 100%; height: auto; max-height: none; aspect-ratio: auto; }

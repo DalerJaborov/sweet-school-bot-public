@@ -181,7 +181,7 @@ export function buildAlwaysRules(t: SalesTexts = DEFAULT_SALES_TEXTS): string {
 export const ALWAYS_RULES = buildAlwaysRules();
 
 export const BUDGET_FALLBACK: Record<ClientLanguage, string> = {
-  ru: "Сегодня очень много сообщений — напишите завтра или звоните: 905 355 355 💚",
-  tg: "Имрӯз хеле бор аст — пагоҳ бознависед ё занг занед: 905 355 355 💚",
-  en: "Sorry, too many messages today — please write tomorrow or call: 905 355 355 💚",
+  ru: "Сейчас не получается ответить. Пожалуйста, напишите немного позже.",
+  tg: "Ҳоло ҷавоб додан имкон нашуд. Лутфан, каме дертар нависед.",
+  en: "I cannot answer right now. Please try again a little later.",
 };

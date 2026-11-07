@@ -1,3 +1,4 @@
+import { MetaDeliveryError, metaResponseError } from "./messaging/metaErrors.js";
 import { env } from "./env.js";
 import { getSetting, prisma, logWarn } from "./db.js";
 import { stripRepeatGreeting } from "./greeting.js";
@@ -88,13 +89,17 @@ async function callGraph(
       signal: controller.signal,
     });
     const text = await res.text();
-    if (!res.ok) throw new Error(`${channel} API ${res.status}: ${text.slice(0, 500)}`);
+    if (!res.ok) throw metaResponseError(res.status, text);
     try {
       return JSON.parse(text) as Record<string, unknown>;
     } catch {
       // Meta может ответить успехом с пустым телом — это не ошибка.
       return {};
     }
+  } catch (error) {
+    if (error instanceof MetaDeliveryError) throw error;
+    // No response does not mean no delivery. Never blindly replay this request.
+    throw new MetaDeliveryError("AMBIGUOUS", 0);
   } finally {
     clearTimeout(timer);
   }
@@ -178,21 +183,9 @@ export async function sendText(
   await sleep(typingDelayMs(clean));
 
   const payload = { recipient: { id: igUserId }, message: buildMessage(clean, buttons) };
-  // ОДИН ПОВТОР, И ТОЛЬКО ЕСЛИ ОТВЕТА НЕ БЫЛО ВООБЩЕ — тот же приём и то же
-  // обоснование, что у sendAttachment ниже: это самый частый путь отправки
-  // (текст, не вложение), раньше единственный без ретрая при обрыве соединения.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await assertMessagingAllowed();
-    try {
-      const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel);
-      return typeof res.message_id === "string" ? res.message_id : null;
-    } catch (err) {
-      const aborted = err instanceof Error && /abort|timeout|fetch failed|network/i.test(err.message);
-      if (!aborted || attempt === 1) throw err;
-      logWarn("instagram", `текст не ушёл с первой попытки, повторяю: ${err.message}`);
-    }
-  }
-  return null;
+  const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel);
+  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return res.message_id;
 }
 
 /** Ищет контакт по каналу и id, чтобы решить, здоровались ли уже. Контакта нет
@@ -223,7 +216,8 @@ export async function sendPrivateReply(
     { recipient: { comment_id: commentId }, message: buildMessage(toOwnerVoice(text), buttons) },
     channel
   );
-  return typeof res.message_id === "string" ? res.message_id : null;
+  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return res.message_id;
 }
 
 /** Удаляет комментарий под нашей публикацией — для спама, флирта и оскорблений:
@@ -248,7 +242,7 @@ export async function deleteComment(commentId: string, channel: MetaChannel = "I
   }
 
   const res = await fetch(url, { method: "DELETE", headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`${channel} API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw metaResponseError(res.status, await res.text());
 }
 
 /**
@@ -321,26 +315,7 @@ export async function sendAttachment(
   await assertMessagingAllowed();
   const payload = { recipient: { id: igUserId }, message: { attachment: { type, payload: { url } } } };
 
-  /**
-   * ОДИН ПОВТОР, И ТОЛЬКО ЕСЛИ ОТВЕТА НЕ БЫЛО ВОВСЕ.
-   *
-   * Повторять отправку опасно: если Meta приняла вложение, а ответ до нас не дошёл,
-   * человек получит его дважды. Но полученное дважды видео — мелкая неловкость, а
-   * НЕ полученное — оборванная воронка, из-за которой клиент не понимает, о чём речь.
-   * Из двух зол выбрано меньшее, и только для сетевого отказа: на ответ Meta с
-   * ошибкой (400 «плохая ссылка», 429 «слишком часто») повтор не помогает — там
-   * причина не во времени, и второй запрос лишь потратит лимит.
-   */
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await assertMessagingAllowed();
-    try {
-      const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS);
-      return typeof res.message_id === "string" ? res.message_id : null;
-    } catch (err) {
-      const aborted = err instanceof Error && /abort|timeout|fetch failed|network/i.test(err.message);
-      if (!aborted || attempt === 1) throw err;
-      logWarn("instagram", `вложение не ушло с первой попытки (${type}), повторяю: ${err.message}`);
-    }
-  }
-  return null;
+  const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS);
+  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return res.message_id;
 }

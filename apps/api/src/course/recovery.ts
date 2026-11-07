@@ -44,12 +44,13 @@ const MAX_AUTO_REISSUES = 3;
 const WINDOW_DAYS = 30;
 
 /**
- * Просьба о доступе, по-русски и по-таджикски. Специально широкая: пропустить
- * настоящую просьбу дороже, чем лишний раз выдать ссылку тому, кто уже её имеет
- * (ему просто придёт та же ссылка ещё раз).
+ * Require an explicit access subject and problem. Playback and recipe questions
+ * belong to support, not to token or device management.
  */
-const ASKS_ACCESS =
-  /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть|посмотр)|нет\s*доступ|新|ссылк[уа].*(нов|ещё|еще|снов|повтор)|(нов|снов|ещё|еще|повтор).*ссылк|смен(ил|ила)\s*телефон|нов(ый|ая)\s*телефон|дарс.*(намекуша|кушода намешавад)|линк.*(нав|дигар|кор намекунад)|кор намекунад|дастрас|надорам.*дарс)/iu;
+const ACCESS_SUBJECT = /(ссылк|доступ|кабинет|курс|урок[иов]*|линк|дастрас|дарс)/iu;
+const ACCESS_PROBLEM = /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
+const NEW_DEVICE = /(смен(ил|ила)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав)/iu;
+const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
 const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ/iu;
@@ -85,7 +86,8 @@ export type RecoveryResult =
 export function looksLikeAccessRequest(text: string): boolean {
   const trimmed = text?.trim();
   if (!trimmed || trimmed.length > 400) return false;
-  return ASKS_ACCESS.test(trimmed) || DEVICE_LIMIT_HINT.test(trimmed);
+  return DEVICE_LIMIT_HINT.test(trimmed) || NEW_DEVICE.test(trimmed) ||
+    (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed));
 }
 
 /**
@@ -147,28 +149,23 @@ export async function maybeRestoreAccess(contact: Contact, text: string): Promis
   // старое устройство ему больше недоступно. Самое давнее уходит первым.
   // Устройства и ссылка — на человека, поэтому по одному разу, не по курсам.
   if (await isBotFrozen()) return { handled: false };
-  await releaseOldestDevice(contact.id);
+  // A request for a link never implicitly removes another device.
+  const releaseDevice = DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text);
   if (await isBotFrozen()) return { handled: false };
   const url = await issueCourseLink(contact.id, { automatic: true });
-  const links: string[] = url ? [url] : [];
-  for (const purchase of active) {
-    await prisma.purchase
-      .update({
-        where: { id: purchase.id },
-        data: { linkReissueCount: { increment: 1 }, linkReissuedAt: new Date() },
-      })
-      .catch((err) => logError("recovery:countReissue", err));
-  }
-
-  if (links.length === 0) {
-    await reply(contact, TEXTS[language].pending);
-    await tellOwner(contact, "просит доступ, но выдать ссылку не вышло", active.length, reissuesUsed);
+  if (!url || !(await reply(contact, TEXTS[language].sent + url))) {
+    await tellOwner(contact, "ссылка НЕ доставлена — нужна ручная помощь; прежняя действующая ссылка сохранена", active.length, reissuesUsed);
     return { handled: true, outcome: "escalated" };
   }
-
-  await reply(contact, TEXTS[language].sent + links.join("\n\n"));
-  await tellOwner(contact, `бот сам выдал новую ссылку (${reissuesUsed + 1}-я за ${WINDOW_DAYS} дней)`, active.length, reissuesUsed + 1);
-  logInfo("course:recovery", `контакт ${contact.id}: выдано ссылок ${links.length}`);
+  if (releaseDevice && !(await isBotFrozen())) await releaseOldestDevice(contact.id);
+  for (const purchase of active) {
+    await prisma.purchase.update({
+      where: { id: purchase.id },
+      data: { linkReissueCount: { increment: 1 }, linkReissuedAt: new Date() },
+    }).catch((err) => logError("recovery:countReissue", err));
+  }
+  await tellOwner(contact, `бот сам выдал ссылку (${reissuesUsed + 1}-я за ${WINDOW_DAYS} дней)`, active.length, reissuesUsed + 1);
+  logInfo("course:recovery", `контакт ${contact.id}: ссылка доставлена`);
   return { handled: true, outcome: "reissued" };
 }
 
@@ -222,12 +219,15 @@ async function releaseOldestDevice(contactId: string): Promise<void> {
   await prisma.device.delete({ where: { id: oldest.id } }).catch((err) => logError("recovery:releaseDevice", err));
 }
 
-async function reply(contact: Contact, text: string): Promise<void> {
+async function reply(contact: Contact, text: string): Promise<boolean> {
   try {
     const mid = await sendToContact(contact, text);
+    if (!mid) return false;
     await recordOutgoingMessage(contact.id, text, mid);
+    return true;
   } catch (err) {
     logError("recovery:reply", err);
+    return false;
   }
 }
 

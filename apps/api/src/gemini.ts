@@ -123,6 +123,7 @@ export async function generateWithFallback(
   const deadline = Date.now() + totalBudgetMs;
   const models = [primaryModel, ...FALLBACK_MODELS.filter((m) => m !== primaryModel)];
   let lastDetail = "нет ответа";
+  let emptyResponses = 0;
 
   keys: for (const apiKey of apiKeys) {
     for (const model of models) {
@@ -153,6 +154,7 @@ export async function generateWithFallback(
               };
               finishReason?: string;
             }[];
+            promptFeedback?: { blockReason?: string };
             usageMetadata?: {
               promptTokenCount?: number;
               candidatesTokenCount?: number;
@@ -199,6 +201,12 @@ export async function generateWithFallback(
               args: p.functionCall!.args ?? {},
               ...(p.thoughtSignature ? { thoughtSignature: p.thoughtSignature } : {}),
             }));
+          if (!text && functionCalls.length === 0) {
+            lastDetail = `Gemini (${model}): empty response; finish=${candidate?.finishReason ?? "none"}; block=${data.promptFeedback?.blockReason ?? "none"}`;
+            emptyResponses++;
+            if (data.promptFeedback?.blockReason || emptyResponses >= 2) return { error: lastDetail };
+            continue;
+          }
           return { text: text || null, model, usage, ...(functionCalls.length > 0 ? { functionCalls } : {}) };
         } catch (err) {
           lastDetail = `Gemini (${model}): ${err instanceof Error ? err.message : String(err)}`;

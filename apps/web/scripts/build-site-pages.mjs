@@ -88,6 +88,7 @@ function stripMd(text) {
 }
 
 function pageUrl(site, slug, lang) {
+  if (slug === "404") return `${site.origin}/404`;
   if (!slug) return `${site.origin}${lang === "tg" ? "/" : "/ru/"}`;
   const base = lang === "ru" ? "" : "/tg";
   return `${site.origin}${base}/${slug}`;
@@ -444,6 +445,13 @@ const SECTIONS = {
 
   /** Инструменты кондитера — карточки-фото из media.tools. Автодобавляется
    * на главной, если media.json существует (см. renderPage). */
+  lessonSamples(s, lang, ctx) {
+    const only = ctx.page.slug === "art-desserty" ? "COURSE50" : "COURSE70";
+    const items = (ctx.media?.lessonSamples ?? []).filter((item) => item.course === only);
+    if (!items.length) return "";
+    return wrap(s, `${sectionHead({h2: {ru: "Десерты из наших уроков", tg: "Шириниҳо аз дарсҳои мо"}}, lang)}<div class="lesson-samples">${items.map((item) => `<figure>${item.video ? `<video controls playsinline preload="none" poster="${esc(item.image.src)}" width="${item.image.width}" height="${item.image.height}" aria-label="${esc(L(item.title, lang))}"><source src="${esc(item.video)}" type="video/mp4"></video>` : mediaImg(item.image, L(item.title, lang), {sizes: "(min-width: 720px) 280px, 45vw"})}<figcaption>${esc(L(item.title, lang))}</figcaption></figure>`).join("")}</div>`, ctx);
+  },
+
   tools(_s, lang, ctx) {
     const { media, ui } = ctx;
     const items = media?.tools ?? [];
@@ -750,7 +758,7 @@ function renderHead(site, page, lang, ctx) {
   // (иначе браузер скачает и прелоад, и другой кандидат). Все герой-страницы
   // (главная, курсы, FAQ…) начинаются с секции hero — прелоадим на каждой.
   const heroType = page.sections[0]?.type;
-  const heroEntry = ["hero", "heroBold"].includes(heroType) ? heroMedia(ctx.media, page) : null;
+  const heroEntry = ["hero", "heroBold"].includes(heroType) && !page.sections[0]?.compact ? heroMedia(ctx.media, page) : null;
   const preloadSizes = heroType === "heroBold" ? "100vw" : HERO_SIZES;
   // Preload the same format and candidates as <picture>, avoiding a second
   // WebP download when the browser selects the AVIF source.
@@ -803,6 +811,10 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
   const ui = site.ui[lang];
   const ctx = { site, page, ui, now, media, offlineProgramme, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
   let pageSections = page.sections;
+  if (["online-kurs", "art-desserty"].includes(page.slug) && media?.lessonSamples?.length) {
+    const at = Math.max(1, pageSections.findIndex((section) => section.type === "menu") + 1);
+    pageSections = [...pageSections.slice(0, at), {type: "lessonSamples", id: "iz-urokov"}, ...pageSections.slice(at)];
+  }
   // Секция «Инструменты» из media.tools автогенерируется на главной сразу
   // после первой из «Что входит» (cards) / «Офлайн-курс» (offline) —
   // контент-агент про media.json может не знать, поэтому явно её в JSON не
@@ -877,7 +889,7 @@ function renderNotFound(site, pages, now) {
       {
         type: "cta",
         h2: { ru: site.ui.ru.notFoundTitle, tg: site.ui.tg.notFoundTitle },
-        text: { ru: `${site.ui.ru.notFoundText} [Тоҷикӣ →](/tg/)`, tg: site.ui.tg.notFoundText },
+        text: { ru: `${site.ui.ru.notFoundText}`, tg: site.ui.tg.notFoundText },
         ctas: [
           { kind: "link", href: "/", label: { ru: site.ui.ru.home, tg: site.ui.tg.home } },
           {
@@ -896,14 +908,14 @@ function renderNotFound(site, pages, now) {
       },
     ],
   };
-  return renderPage(site, page, "ru", now);
+  return renderPage(site, page, "tg", now);
 }
 
 function renderSitemap(site, pages) {
   // Build time is not evidence of a substantive content change.
   const urls = pages.filter((p) => !p.noindex).flatMap((p) =>
     LANGS.map((lang) => {
-      const alts = [...LANGS.map((l) => [l, pageUrl(site, p.slug, l)]), ["x-default", pageUrl(site, p.slug, "ru")]]
+      const alts = [...LANGS.map((l) => [l, pageUrl(site, p.slug, l)]), ["x-default", pageUrl(site, p.slug, "tg")]]
         .map(([l, href]) => `    <xhtml:link rel="alternate" hreflang="${l}" href="${esc(href)}" />`)
         .join("\n");
       return `  <url>\n    <loc>${esc(pageUrl(site, p.slug, lang))}</loc>\n${alts}\n  </url>`;
