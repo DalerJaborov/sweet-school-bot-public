@@ -25,6 +25,7 @@ describe("receiveQuestion", () => {
     sendTelegramMessage.mockClear().mockResolvedValue(555);
     findQaAnswer.mockClear().mockResolvedValue(null);
     db.model("courseChatMessage").findMany.mockResolvedValue([]);
+    db.model("courseChatMessage").create.mockResolvedValue({ id: "msg-1" });
     db.model("contact").findUnique.mockResolvedValue({ username: "client", igUserId: "ig-1" });
   });
   afterEach(restorePrisma);
@@ -99,6 +100,34 @@ describe("receiveQuestion", () => {
 
     expect(sendTelegramMessage).not.toHaveBeenCalled();
     expect(db.model("courseChatMessage").create).toHaveBeenCalledTimes(1);
+  });
+
+  it("parallel questions retain their own Telegram response IDs when sends finish in reverse order", async () => {
+    db.model("setting").findUnique.mockImplementation(settings({ telegramBotToken: "token", telegramOwnerChatId: "chat" }));
+    db.model("courseChatMessage").create.mockImplementation(async (args) => ({ id: (args as { data: { text: string } }).data.text === "First" ? "q-first" : "q-second" }));
+    let finishFirst!: (id: number) => void;
+    let firstStarted!: () => void;
+    const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+    sendTelegramMessage.mockImplementationOnce(async () => { firstStarted(); return new Promise<number>((resolve) => { finishFirst = resolve; }); });
+    const first = receiveQuestion(purchase, "First", "lesson-1", false);
+    await started;
+    sendTelegramMessage.mockResolvedValueOnce(222);
+    await receiveQuestion(purchase, "Second", "lesson-2", false);
+    finishFirst(111);
+    await first;
+    expect(db.model("courseChatMessage").update.mock.calls).toEqual([
+      [{ where: { id: "q-second" }, data: { telegramMsgId: 222 } }],
+      [{ where: { id: "q-first" }, data: { telegramMsgId: 111 } }],
+    ]);
+    expect(db.model("courseChatMessage").findFirst).not.toHaveBeenCalled();
+  });
+
+  it("failed Telegram send preserves the exact question without a false delivery marker", async () => {
+    db.model("setting").findUnique.mockImplementation(settings({ telegramBotToken: "token", telegramOwnerChatId: "chat" }));
+    sendTelegramMessage.mockRejectedValueOnce(new Error("network failure"));
+    await expect(receiveQuestion(purchase, "Вопрос", null, false)).resolves.toEqual([]);
+    expect(db.model("courseChatMessage").create).toHaveBeenCalledOnce();
+    expect(db.model("courseChatMessage").update).not.toHaveBeenCalled();
   });
 
   it("message_id запоминается — по нему ответ реплаем вернётся этой ученице", async () => {

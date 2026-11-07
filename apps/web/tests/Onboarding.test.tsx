@@ -13,12 +13,12 @@ beforeEach(() => {
 });
 
 describe("Знакомство перед входом", () => {
-  it("сначала язык, и подписан он самоназванием — понятно без перевода", () => {
+  it("таджикский по умолчанию, оба языка доступны сразу", () => {
     render(<Onboarding onDone={() => undefined} />);
     expect(screen.getByRole("button", { name: "Тоҷикӣ" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Русский" })).toBeTruthy();
-    // Пока язык не выбран, имя не спрашиваем: человек читал бы вопрос на чужом языке.
-    expect(screen.queryByLabelText("Имя")).toBeNull();
+    expect(screen.getByText("Номи шумо чист?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Тоҷикӣ" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("после выбора таджикского вопрос про имя уже на таджикском", () => {

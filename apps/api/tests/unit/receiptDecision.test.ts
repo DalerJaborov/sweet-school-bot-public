@@ -36,6 +36,7 @@ describe("decideReceipt", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("purchase").findMany.mockResolvedValue([]);
   });
   afterEach(restorePrisma);
 
@@ -115,6 +116,27 @@ describe("decideReceipt", () => {
     const result = await decideReceipt("receipt-1", "approve", "BOTH");
 
     expect(result).toMatchObject({ ok: true, status: "approved_no_link" });
+    expect(grantCourses).not.toHaveBeenCalled();
+  });
+
+  it("failed delivery is retryable without allocating a second purchase", async () => {
+    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
+    db.model("receiptCheck").findUnique.mockResolvedValue(receipt());
+    vi.mocked(grantCourses).mockResolvedValueOnce([]);
+    await decideReceipt("receipt-1", "approve");
+    expect(db.model("receiptCheck").update).toHaveBeenLastCalledWith({ where: { id: "receipt-1" }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70", inviteLink: null }]);
+    vi.mocked(allocate).mockResolvedValueOnce({ grant: ["COURSE50"], note: "other" });
+    expect(await decideReceipt("receipt-1", "approve")).toMatchObject({ status: "approved" });
+    expect(grantCourses).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ grant: ["COURSE70"] }), 70, expect.anything(), { byHuman: true });
+  });
+
+  it("unknown delivery blocks a blind manual retry and explains why", async () => {
+    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
+    db.model("receiptCheck").findUnique.mockResolvedValue(receipt());
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70", inviteLink: null, accessDeliveryUncertainAt: new Date() }]);
+    const result = await decideReceipt("receipt-1", "approve");
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining("Неизвестно, доставлена") });
     expect(grantCourses).not.toHaveBeenCalled();
   });
 

@@ -22,6 +22,7 @@ import { logError } from "./db.js";
 const WINDOW_MS = 2_500;
 
 type Pending<TRescued> = {
+  completions: { resolve: () => void; reject: (err: unknown) => void }[];
   texts: string[];
   attachments: { url: string; kind: "image" | "video" | "audio" | "file" }[];
   rescued: TRescued[];
@@ -74,12 +75,21 @@ export function flushAllPending(): Promise<void> {
   for (const [contactId, entry] of pending) {
     clearTimeout(entry.timer);
     pending.delete(contactId);
-    const { texts, attachments, rescued, onFlush } = entry;
-    runAfterPrevious(contactId, () => onFlush(texts.join("\n"), attachments, rescued));
+    runAfterPrevious(contactId, () => flushEntry(entry));
     const chain = contactChains.get(contactId);
     if (chain) waits.push(chain);
   }
   return Promise.allSettled(waits).then(() => undefined);
+}
+
+async function flushEntry<T>(entry: Pending<T>): Promise<void> {
+  try {
+    await entry.onFlush(entry.texts.join("\n"), entry.attachments, entry.rescued);
+    entry.completions.forEach((waiter) => waiter.resolve());
+  } catch (err) {
+    entry.completions.forEach((waiter) => waiter.reject(err));
+    throw err;
+  }
 }
 
 /** Экспортируется отдельно от таймера окна — тест гоняет саму очередь напрямую,
@@ -117,7 +127,7 @@ export function debounceMessage<TRescued>(
     attachments: { url: string; kind: "image" | "video" | "audio" | "file" }[],
     rescuedImages: TRescued[]
   ) => void | Promise<void>
-): void {
+): Promise<void> {
   const existing = pending.get(contactId) as Pending<TRescued> | undefined;
   if (existing) clearTimeout(existing.timer);
 
@@ -125,12 +135,18 @@ export function debounceMessage<TRescued>(
   const merged = [...(existing?.attachments ?? []), ...attachments];
   const mergedRescued = [...(existing?.rescued ?? []), ...rescuedImages];
 
+  const completions = [...(existing?.completions ?? [])];
+  const done = new Promise<void>((resolve, reject) => completions.push({ resolve, reject }));
+  // Legacy callers may ignore completion; the inbox awaits the original promise.
+  void done.catch(() => undefined);
   const timer = setTimeout(() => {
+    const entry = pending.get(contactId);
     pending.delete(contactId);
-    runAfterPrevious(contactId, () => onFlush(texts.join("\n"), merged, mergedRescued));
+    if (entry) runAfterPrevious(contactId, () => flushEntry(entry));
   }, WINDOW_MS);
   // Таймер не должен держать процесс живым сам по себе (на случай остановки).
   timer.unref?.();
 
-  pending.set(contactId, { texts, attachments: merged, rescued: mergedRescued, timer, onFlush } as Pending<unknown>);
+  pending.set(contactId, { completions, texts, attachments: merged, rescued: mergedRescued, timer, onFlush } as Pending<unknown>);
+  return done;
 }

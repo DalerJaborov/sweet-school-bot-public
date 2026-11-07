@@ -1,3 +1,4 @@
+import { applyTheme, initTheme, THEME_KEY } from "../course/theme";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./site.css";
@@ -5,6 +6,7 @@ import { dict } from "./i18n";
 import { bindLangSwitch, pageLang, syncLangOnEntry } from "./lang";
 import { CoursesIsland } from "./CoursesIsland";
 import { OfflineForm } from "./OfflineForm";
+import { FreeLesson } from "./FreeLesson";
 import { openChat } from "./chat/bus";
 
 /**
@@ -13,6 +15,21 @@ import { openChat } from "./chat/bus";
  * чат. Всё остальное — разметка и CSS, чтобы главная открывалась мгновенно
  * и на 2G, и в поиске была с текстом.
  */
+
+initTheme();
+document.querySelector<HTMLButtonElement>("[data-theme-toggle]")?.addEventListener("click", (event) => {
+  const dark = document.documentElement.dataset.theme !== "dark";
+  applyTheme(dark ? "dark" : "light");
+  (event.currentTarget as HTMLButtonElement).setAttribute("aria-pressed", String(dark));
+  try {
+    localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
+  } catch {
+    /* Storage is optional. */
+  }
+});
+document
+  .querySelector("[data-theme-toggle]")
+  ?.setAttribute("aria-pressed", String(document.documentElement.dataset.theme === "dark"));
 
 if (!syncLangOnEntry()) {
   const lang = pageLang();
@@ -31,6 +48,8 @@ if (!syncLangOnEntry()) {
   bindLangSwitch();
   bindMobileMenu();
   bindChatButtons();
+  const trial = document.getElementById("free-lesson-island");
+  if (trial) createRoot(trial).render(<FreeLesson lang={lang} />);
 
   const courses = document.getElementById("courses-island");
   // Server-rendered catalogue links work without React. Do not replace them

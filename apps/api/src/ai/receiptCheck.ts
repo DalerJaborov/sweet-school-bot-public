@@ -32,6 +32,8 @@ export type ReceiptVerdict = {
    *  чек человеку глазами (handleReceiptVerdict переводит true в "suspicious",
    *  что и так уводит чек на карточку владельцу, а не отклоняет его). */
   tamperingSuspected: boolean;
+  /** Explicit OCR match of the visible recipient account/phone; absence is not a match. */
+  recipientMatches?: boolean;
 };
 
 /** Разбор чека — единственный ход, где отказ модели стоит денег: человек уже
@@ -72,8 +74,8 @@ export function buildInstruction(
     "приложение показало имя получателя и/или поле суммы, но кнопка «Перевести/Подтвердить» ещё не нажата — нет строки " +
     "«успешно», нет номера транзакции, нет чека. Такой скриншот люди присылают, чтобы спросить «правильно ли я ввёл?». " +
     'Это НЕ "suspicious" и не "valid" — именно "pre_transfer". ' +
-    'Если это чек и получатель/номер совпадают с нашими реквизитами (или скриншот слишком мал/обрезан, чтобы ' +
-    'проверить точно, но в целом похож на настоящий перевод) — "valid". ' +
+    'Только если это завершённый перевод и читаемый номер/счёт получателя совпадает с нашими реквизитами — "valid" и recipientMatches=true. ' +
+    'Если номер/счёт получателя отсутствует, обрезан, нечитаем или чужой — "suspicious" и recipientMatches=false. Не угадывай совпадение. ' +
     "ВАЖНО про имя получателя: в официальных чеках Алиф на перевод внутри самого Алиф (Alif-to-Alif) в поле " +
     "получателя вместо личного имени часто стоит просто «Alif» — это нормальный формат самого приложения, а не " +
     "подделка. Если номер получателя совпадает с нашим (+992905355355 / 905355355), а имя получателя — «Alif» " +
@@ -101,18 +103,19 @@ export function buildInstruction(
     "Ставь true только при явных, заметных признаках именно локального редактирования одного числа, а не при " +
     "лёгком сомнении; при малейшей неуверенности — false. Это поле никогда не должно САМО отклонять настоящую " +
     "оплату — оно только просит человека посмотреть внимательнее. " +
+    "Если дата И время перевода не видны полностью — receiptAt=null. Нельзя подставлять сегодняшнее число или полночь вместо отсутствующего времени. " +
     "Ответь СТРОГО JSON без пояснений вокруг: " +
     '{"kind":"valid"|"suspicious"|"not_receipt"|"pre_transfer","confidence":0-100,"amount":число или null,"currency":"TJS"|"RUB"|"USD"|"EUR"|"KZT"|"TRY"|null,' +
-    '"receiptAt":"2026-08-21T14:30:00" или null,"tamperingSuspected":true|false,"reason":"короткая причина по-русски"}'
+    '"receiptAt":"2026-08-21T14:30:00" или null,"tamperingSuspected":true|false,"recipientMatches":true|false,"reason":"короткая причина по-русски"}'
   );
 }
 
-function parseVerdict(raw: string, offsetHours: number = DEFAULT_OFFSET_HOURS): ReceiptVerdict | null {
+export function parseVerdict(raw: string, offsetHours: number = DEFAULT_OFFSET_HOURS): ReceiptVerdict | null {
   const cleaned = raw.replace(/^```json\s*|^```\s*|```\s*$/gim, "").trim();
   try {
     const data = JSON.parse(cleaned) as Partial<ReceiptVerdict> & { receiptAt?: string | null };
     if (data.kind !== "valid" && data.kind !== "suspicious" && data.kind !== "not_receipt" && data.kind !== "pre_transfer") return null;
-    const parsedDate = data.receiptAt ? parseReceiptDate(data.receiptAt, offsetHours) : null;
+    const parsedDate = typeof data.receiptAt === "string" && /[T ]\d{2}:\d{2}/.test(data.receiptAt) ? parseReceiptDate(data.receiptAt, offsetHours) : null;
     return {
       kind: data.kind,
       confidence: typeof data.confidence === "number" ? Math.max(0, Math.min(100, data.confidence)) : 0,
@@ -120,6 +123,7 @@ function parseVerdict(raw: string, offsetHours: number = DEFAULT_OFFSET_HOURS): 
       currency: typeof data.currency === "string" && data.currency.trim() ? data.currency.trim().toUpperCase() : null,
       receiptAt: parsedDate,
       tamperingSuspected: data.tamperingSuspected === true,
+      recipientMatches: data.recipientMatches === true,
       reason: typeof data.reason === "string" ? data.reason.slice(0, 300) : "",
     };
   } catch {

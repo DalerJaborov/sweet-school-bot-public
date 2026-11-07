@@ -53,7 +53,17 @@ export function CoursesIsland({ t, only }: { t: Dict; only?: string }) {
         {showBundle && (
           <article className="card course-card bundle-card">
             <div className="course-cover" aria-hidden="true">
-              <span>🎁</span>
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <path d="M3 4h6a4 4 0 0 1 3 2 4 4 0 0 1 3-2h6v16h-6a4 4 0 0 0-3 2 4 4 0 0 0-3-2H3V4Z M12 6v16" />
+              </svg>
             </div>
             <div className="course-body">
               <h3 className="h3">{t.bundleTitle}</h3>
@@ -134,12 +144,35 @@ function CourseCard({ course, t, whatsapp }: { course: SiteCourse; t: Dict; what
             decoding="async"
           />
         ) : (
-          <span aria-hidden="true">🍰</span>
+          <svg
+            width="32"
+            height="32"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+          >
+            <path d="M3 4h6a4 4 0 0 1 3 2 4 4 0 0 1 3-2h6v16h-6a4 4 0 0 0-3 2 4 4 0 0 0-3-2H3V4Z M12 6v16" />
+          </svg>
         )}
       </div>
       <div className="course-body">
         <h3 className="h3">{title}</h3>
         {description && <p>{description}</p>}
+        {!!course.lessonTitles?.length && (
+          <details className="course-syllabus">
+            <summary>{t.lessonsCount(course.lessonTitles.length)} →</summary>
+            <ul>
+              {course.lessonTitles.map((name, index) => (
+                <li key={`${index}-${name}`}>{name}</li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {!!course.lessonTitles?.length && (
+          <p className="course-preview">{course.lessonTitles.slice(0, 3).join(" · ")}</p>
+        )}
         <ul className="course-meta">
           <li className="chip">{t.lessonsCount(course.lessonsCount)}</li>
           {course.durationMin > 0 && <li className="chip">{t.durationMin(course.durationMin)}</li>}

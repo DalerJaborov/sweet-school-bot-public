@@ -15,6 +15,7 @@ export type SiteCourse = {
   coverUrl: string | null;
   lessonsCount: number;
   durationMin: number;
+  lessonTitles?: string[];
 };
 
 export type Catalog = {

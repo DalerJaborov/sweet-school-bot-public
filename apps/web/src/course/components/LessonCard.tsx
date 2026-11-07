@@ -1,4 +1,5 @@
 import type { LessonView } from "../api";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import { formatDuration, formatTime, type Dict } from "../i18n";
 import { offlineUrls, type OfflineLesson } from "../offline";
 
@@ -52,6 +53,7 @@ export function LessonCard({
   onOpen,
 }: LessonCardProps) {
   const isSaved = Boolean(saved);
+  const reduceMotion = useReducedMotion();
   const unavailable = !lesson.ready || (!online && !isSaved);
   const resumable = lesson.ready && !lesson.completed && lesson.positionSec >= RESUME_AFTER_SEC;
   const inProgress = lesson.ready && !lesson.completed && lesson.percent > 0;
@@ -93,7 +95,8 @@ export function LessonCard({
               src={lesson.teaserUrl ?? undefined}
               poster={cover ?? undefined}
               muted
-              autoPlay
+              autoPlay={!reduceMotion}
+              preload={reduceMotion ? "none" : "metadata"}
               loop
               playsInline
             />

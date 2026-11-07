@@ -223,7 +223,7 @@ courseRouter.get(`${API_BASE}/me`, async (req: Request, res: Response) => {
   // Язык выбирает сама ученица при первом входе. Пока не выбрала — русский:
   // это язык, на котором написан весь исходный текст, и показать его без
   // перевода честнее, чем гадать по стране входа.
-  const lang: CourseLanguage = isCourseLanguage(contact.preferredLanguage) ? contact.preferredLanguage : "ru";
+  const lang: CourseLanguage = isCourseLanguage(contact.preferredLanguage) ? contact.preferredLanguage : "tg";
   const profile = {
     firstName: contact.studentFirstName ?? null,
     lastName: contact.studentLastName ?? null,

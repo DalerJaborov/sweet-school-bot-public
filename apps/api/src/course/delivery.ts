@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { issueMagicLink } from "./access.js";
+import { issueMagicLink, LINK_TTL_DAYS, looksLikeShortCode } from "./access.js";
 import { courseByCode } from "../services/courseCatalog.js";
 import type { Course } from "../courses.js";
 import { assertAutomationAllowed } from "../messaging/automation.js";
@@ -36,23 +36,45 @@ export async function deliveryMode(): Promise<DeliveryMode> {
  * поэтому канал WEB всегда получает ссылку на платформу, какой бы режим ни
  * стоял в настройках. Для Instagram/Messenger — как настроил владелец.
  */
-export async function deliveryModeFor(contact: { channel: string }): Promise<DeliveryMode> {
-  return ["WEB", "WHATSAPP"].includes(contact.channel) ? "web" : deliveryMode();
+export async function deliveryModeFor(contact: { channel: string; courseDeliveryChoice?: string | null }): Promise<DeliveryMode> {
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
+  if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web") return contact.courseDeliveryChoice;
+  return deliveryMode();
 }
 
 /**
  * Выдать ссылку на платформу для уже созданной покупки.
  *
- * Каждый вызов выпускает НОВУЮ ссылку и запоминает её идентификатор: прошлая
- * сразу перестаёт работать. Так «вернуть доступ» после ошибочного отзыва не
- * оживляет старое письмо, которое могли переслать.
+ * Automatic delivery reuses a valid link. Only explicit owner rotation invalidates
+ * a previous link; ordinary delivery and purchase retries preserve existing access.
  */
-export async function issueCourseLink(contactId: string, opts: { automatic?: boolean } = {}): Promise<string | null> {
+export async function issueCourseLink(contactId: string, opts: { automatic?: boolean; preserveExisting?: boolean } = {}): Promise<string | null> {
   const base = await courseLinkBase();
   if (!base) return null;
   // Fail closed for forgotten flags in future automated callers. Only an
   // explicitly authorized owner operation may bypass the automation pause.
   if (opts.automatic !== false) await assertAutomationAllowed();
+  // Automatic issuance uses compare-and-swap: concurrent recovery/grant calls
+  // converge on one code instead of invalidating each other's new links.
+  if (opts.automatic !== false || opts.preserveExisting) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await prisma.contact.findUnique({ where: { id: contactId } });
+      if (!current || current.accessRevokedAt || current.spamBlockedAt) return null;
+      if (current.accessTokenId && looksLikeShortCode(current.accessTokenId) && current.accessIssuedAt &&
+          Date.now() - current.accessIssuedAt.getTime() < LINK_TTL_DAYS * 86_400_000) {
+        return `${base.replace(/\/$/, "")}/l/${current.accessTokenId}`;
+      }
+      if (opts.automatic !== false) await assertAutomationAllowed();
+      const { url, jti } = issueMagicLink(contactId);
+      const claimed = await prisma.contact.updateMany({
+        where: { id: contactId, accessTokenId: current.accessTokenId ?? null,
+          accessIssuedAt: current.accessIssuedAt ?? null, accessRevokedAt: null, spamBlockedAt: null },
+        data: { accessTokenId: jti, accessIssuedAt: new Date() },
+      });
+      if (claimed.count === 1) return url;
+    }
+    throw new Error("Concurrent access-link change; retry delivery");
+  }
   // Ссылка — на ЧЕЛОВЕКА: одна на все купленные курсы (см. access.ts).
   const { url, jti } = issueMagicLink(contactId);
   await prisma.contact.update({

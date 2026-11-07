@@ -32,3 +32,5 @@ services/whatsapp-bridge/data/
 .env.*
 !.env.example
 !.env.*.example
+
+apps/web/ru/

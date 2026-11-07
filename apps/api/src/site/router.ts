@@ -136,6 +136,7 @@ type Catalog = {
     coverUrl: string | null;
     lessonsCount: number;
     durationMin: number;
+    lessonTitles: string[];
   }[];
   bundle: { price: number; fullPrice: number } | null;
   offline: { price: number; currency: "TJS"; nextStartDate: string | null; info: { ru: string; tg: string } };
@@ -151,7 +152,8 @@ async function buildCatalog(): Promise<Catalog> {
   const lessons = courses.length
     ? await prisma.lesson.findMany({
         where: { deletedAt: null, module: { courseId: { in: courses.map((c) => c.id) } } },
-        select: { durationSec: true, module: { select: { courseId: true } } },
+        select: { title: true, durationSec: true, module: { select: { courseId: true } } },
+        orderBy: [{ module: { order: "asc" } }, { order: "asc" }, { id: "asc" }],
       })
     : [];
   const perCourse = new Map<string, { count: number; sec: number }>();
@@ -198,6 +200,7 @@ async function buildCatalog(): Promise<Catalog> {
       coverUrl: c.coverUrl ?? null,
       lessonsCount: stat.count,
       durationMin: Math.round(stat.sec / 60),
+      lessonTitles: lessons.filter((l) => l.module.courseId === c.id).map((l) => l.title),
     })),
     // Комплект «оба курса» имеет смысл только когда оба реально готовы.
     bundle: ready.length >= 2 ? { price: prices.bundle, fullPrice: prices.bundleFull } : null,

@@ -1,14 +1,15 @@
+import { awaitingDeliveryChoice, askDeliveryChoice } from "../course/deliveryChoice.js";
 import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automation.js";
 import { sendReceiptForReview } from "../telegram.js";
+import { grantCourses } from "./grantCourses.js";
+import { markExamplesAsSuccessful } from "./styleLearning.js";
 import { allocate } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
-import { markExamplesAsSuccessful } from "./styleLearning.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
-import { grantCourses } from "./grantCourses.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 
@@ -155,12 +156,18 @@ export async function handleReceiptVerdict(
     reason: string;
     currency?: string | null;
     tamperingSuspected?: boolean;
+    recipientMatches?: boolean;
     imageHash: string;
     imageUrl: string | null;
   },
   existingId?: string
 ): Promise<void> {
   if (await isBotFrozen()) return;
+  const previous = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
+  if (previous?.contactId === contact.id && previous.awaitingDeliveryChoice) {
+    await askDeliveryChoice(contact);
+    return;
+  }
   let kind = verdict.kind;
   let reason = verdict.reason;
 
@@ -240,25 +247,33 @@ export async function handleReceiptVerdict(
     reason = `${reason} (${plan.note})`;
   }
 
-  const isClean = kind === "valid" && verdict.confidence >= RECEIPT_CONFIDENCE_THRESHOLD && amount != null;
+  const ageMs = verdict.receiptAt ? Date.now() - verdict.receiptAt.getTime() : NaN;
+  const isClean = kind === "valid" && verdict.confidence >= RECEIPT_CONFIDENCE_THRESHOLD &&
+    amount != null && Number.isFinite(amount) && amount > 0 &&
+    verdict.recipientMatches === true && Boolean(verdict.currency) &&
+    Number.isFinite(ageMs) && ageMs >= -15 * 60_000 && ageMs <= RECEIPT_ODD_DATE_HOURS * 3_600_000;
   if (await isBotFrozen()) return;
 
+  // Owner-authorized heuristic automation: all readable receipt checks must pass.
+  // This is not a bank settlement confirmation; uncertain cases remain for review.
   let linkSent = false;
   if (isClean && plan && plan.grant.length > 0) {
     const granted = await withVerifiedReceiptDelivery(contact.id, verdict.imageHash, () => grantCourses(contact, plan, amount as number, verdict));
     // grantCourses can pause and roll back its own new purchase. Do not turn
     // that pause into a processed receipt, escalation or screenshot request.
     if (await isBotFrozen()) return;
-    linkSent = granted.length > 0;
+    linkSent = granted.length === plan.grant.length;
     if (linkSent) {
       reason = `${reason} (${plan.note})`;
       await markExamplesAsSuccessful(contact.id).catch((err) => logError("receiptVerdict:markSuccess", err));
     }
   }
+  if (!isClean) reason = `${reason} (не все признаки чека подтверждены: требуется проверка)`;
 
-  const needsOwner = !linkSent;
+  const waitingForChoice = isClean && await awaitingDeliveryChoice(contact.id);
+  const needsOwner = !linkSent && !waitingForChoice;
   const knownFraud = Boolean(blocked) || Boolean(reused);
-  const askClientFirst = needsOwner && !knownFraud && !duplicatePayment && !contact.askedAltScreenshotAt;
+  const askClientFirst = !isClean && needsOwner && !knownFraud && !duplicatePayment && !contact.askedAltScreenshotAt;
   if (askClientFirst) reason = `${reason} (попросили клиента прислать другой скриншот)`;
 
   const data = {
@@ -272,6 +287,7 @@ export async function handleReceiptVerdict(
     imageUrl: verdict.imageUrl,
     amount: amount != null ? Math.round(amount) : null,
     ownerDecision: needsOwner ? "PENDING" : null,
+    awaitingDeliveryChoice: waitingForChoice,
   };
 
   let saved: { id: string } | null = null;

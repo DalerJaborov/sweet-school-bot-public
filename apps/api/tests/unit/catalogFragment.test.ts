@@ -59,6 +59,16 @@ describe("server catalogue HTML", () => {
     expect(missing).not.toContain('class="price');
   });
 
+  it("renders lesson names in crawlable cards and escapes them", () => {
+    const data = catalog();
+    const withLessons = { ...data, courses: data.courses.map(c => ({ ...c, lessonTitles: ["Эклер", "<script>bad</script>"] })) };
+    const html = renderCatalogFragment(withLessons, "ru");
+    expect(html).toContain("Эклер");
+    expect(html).toContain("&lt;script&gt;bad&lt;/script&gt;");
+    expect(html).not.toContain("<script>bad");
+    expect(html).toContain('class="course-syllabus"');
+  });
+
   it.each(["ru", "tg"] as const)("failure fallback has a safe contact but no price: %s", (lang) => {
     const html = renderCatalogUnavailable(lang);
     expect(html).toContain('data-server-catalog="unavailable"');

@@ -163,8 +163,8 @@ describe("/api/site", () => {
       },
     ]);
     db.model("lesson").findMany.mockResolvedValue([
-      { durationSec: 600, module: { courseId: "c1" } },
-      { durationSec: 300, module: { courseId: "c1" } },
+      { title: "Эклеры", durationSec: 600, module: { courseId: "c1" } },
+      { title: "Пахлава", durationSec: 300, module: { courseId: "c1" } },
     ]);
     const res = await fetch(`${base}/api/site/courses`);
     expect(res.status).toBe(200);
@@ -181,6 +181,7 @@ describe("/api/site", () => {
         coverUrl: null,
         lessonsCount: 2,
         durationMin: 15,
+        lessonTitles: ["Эклеры", "Пахлава"],
       },
     ]);
     expect(body.bundle).toBeNull(); // один курс готов — комплекта не бывает

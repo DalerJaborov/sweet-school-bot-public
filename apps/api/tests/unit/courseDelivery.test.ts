@@ -6,6 +6,8 @@ describe("deliveryMode", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue({ id: "contact-1", accessTokenId: null, accessIssuedAt: null });
+    db.model("contact").updateMany.mockResolvedValue({ count: 1 });
   });
   afterEach(restorePrisma);
 
@@ -40,6 +42,8 @@ describe("issueCourseLink", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue({ id: "contact-1", accessTokenId: null, accessIssuedAt: null });
+    db.model("contact").updateMany.mockResolvedValue({ count: 1 });
   });
   afterEach(restorePrisma);
 
@@ -47,16 +51,40 @@ describe("issueCourseLink", () => {
     const url = await issueCourseLink("contact-1");
 
     expect(url).toMatch(/\/l\/[A-Za-z0-9]{10}/);
-    const call = db.model("contact").update.mock.calls[0][0] as {
+    const call = db.model("contact").updateMany.mock.calls[0][0] as {
       data: { accessTokenId: string; accessIssuedAt: Date };
     };
     expect(call.data.accessTokenId).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(call.data.accessIssuedAt).toBeInstanceOf(Date);
   });
 
+  it("automatic delivery preserves a valid link without extending its expiry", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ accessTokenId: "Ab3kQ9xZpm", accessIssuedAt: new Date() });
+    expect(await issueCourseLink("contact-1")).toContain("/l/Ab3kQ9xZpm");
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+  });
+  it("automatic delivery cannot reactivate revoked access", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ accessRevokedAt: new Date() });
+    expect(await issueCourseLink("contact-1")).toBeNull();
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+  });
+  it("parallel automatic issuance converges on one valid code using compare-and-swap", async () => {
+    let current = { id: "contact-1", accessTokenId: null as string | null, accessIssuedAt: null as Date | null };
+    db.model("contact").findUnique.mockImplementation(async () => ({ ...current }));
+    db.model("contact").updateMany.mockImplementation(async (args) => {
+      const call = args as { where: { accessTokenId: string | null }; data: { accessTokenId: string; accessIssuedAt: Date } };
+      if (call.where.accessTokenId !== current.accessTokenId) return { count: 0 };
+      current = { ...current, ...call.data };
+      return { count: 1 };
+    });
+    const links = await Promise.all([issueCourseLink("contact-1"), issueCourseLink("contact-1")]);
+    expect(links[0]).toBe(links[1]);
+    expect(links[0]).toContain(current.accessTokenId);
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+  });
   it("каждая выдача даёт новый идентификатор — старая ссылка не оживает", async () => {
-    await issueCourseLink("contact-1");
-    await issueCourseLink("contact-1");
+    await issueCourseLink("contact-1", { automatic: false });
+    await issueCourseLink("contact-1", { automatic: false });
 
     const calls = db.model("contact").update.mock.calls as { data: { accessTokenId: string } }[][];
     expect(calls[0][0].data.accessTokenId).not.toBe(calls[1][0].data.accessTokenId);
@@ -67,6 +95,8 @@ describe("linkPurchaseToCourse", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue({ id: "contact-1", accessTokenId: null, accessIssuedAt: null });
+    db.model("contact").updateMany.mockResolvedValue({ count: 1 });
   });
   afterEach(restorePrisma);
 

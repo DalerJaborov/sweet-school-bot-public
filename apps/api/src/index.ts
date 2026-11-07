@@ -10,13 +10,14 @@ import cors from "cors";
 import { adminAccessConfig, createAdminAccessGuard } from "./adminAccess.js";
 import { adminRevocations } from "./adminRevocations.js";
 import { env } from "./env.js";
-import { webhookRouter } from "./webhook.js";
+import { webhookRouter, runWebhookInbox } from "./webhook.js";
 import { adminRouter } from "./admin.js";
 import { mediaRouter } from "./upload.js";
 import { telegramRouter } from "./telegramWebhook.js";
 import { miniAppRouter } from "./miniApp.js";
 import { courseRouter } from "./course/router.js";
 import { siteRouter } from "./site/router.js";
+import { freeLessonRouter } from "./site/freeLesson.js";
 import { maybeSendDailyReport } from "./dailyReport.js";
 import { retryUncheckedReceipts } from "./receiptRetry.js";
 import { retryPendingAiReplies } from "./aiReplyRetry.js";
@@ -53,6 +54,7 @@ autoCatch(telegramRouter);
 autoCatch(miniAppRouter);
 autoCatch(courseRouter);
 autoCatch(siteRouter);
+autoCatch(freeLessonRouter);
 autoCatch(adminRouter);
 
 // Второй рубеж: если что-то всё-таки проскочит (сторонний код, таймер вне
@@ -92,6 +94,7 @@ app.use(webhookRouter);
 app.use(telegramRouter);
 app.use(courseRouter); // платформа курсов: своя сессия по куке, не админский JWT
 app.use(siteRouter); // публичное API сайта: кука посетителя, без токена
+app.use(freeLessonRouter);
 app.use(miniAppRouter); // до adminRouter: вход из Telegram идёт без токена
 app.use(adminRouter);
 
@@ -207,6 +210,7 @@ setInterval(() => {
     // they must neither issue access nor consume retry attempts while frozen.
     // Owner reports, learning maintenance and profile refresh remain separate.
     const tasks = [
+      withTimeout("webhookInbox", runWebhookInbox().catch((err) => logError("webhookInbox", err))),
       withTimeout("worker", runDueDeliveries().catch((err) => logError("worker", err))),
       withTimeout("dailyReport", maybeSendDailyReport().catch((err) => logError("dailyReport", err))),
       withTimeout("nightlyLearning", maybeRunNightlyLearning().catch((err) => logError("nightlyLearning", err))),

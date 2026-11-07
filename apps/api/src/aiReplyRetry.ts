@@ -1,4 +1,8 @@
-import { prisma, getSetting, logError } from "./db.js";
+import { canRetryMetaFailure } from "./messaging/metaErrors.js";
+import { notifyOwnerDirect } from "./systemAlerts.js";
+import { sendToContact } from "./messaging/send.js";
+import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
 import { isBotFrozen } from "./messaging/automation.js";
@@ -26,6 +30,12 @@ import { isBotFrozen } from "./messaging/automation.js";
  * ответ к утру, а не тишину.
  */
 
+const DELAY_NOTICES = {
+  ru: "Сейчас не получается подготовить ответ. Ваш вопрос сохранён, вернёмся к нему немного позже.",
+  tg: "Ҳоло ҷавоб омода нашуд. Саволи шумо нигоҳ дошта шуд, каме дертар ба он бармегардем.",
+  en: "Your question is saved. We cannot prepare an answer right now and will return to it later.",
+};
+
 const DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000]; // 1, 2, 5, 10, 15 минут
 const TRAILING_DELAY_MS = 20 * 60_000;
 const TRAILING_ATTEMPTS = 40; // ещё ~13 часов
@@ -44,8 +54,12 @@ export async function queuePendingAiReply(contactId: string, text: string): Prom
     where: { contactId, direction: "IN" },
     orderBy: { createdAt: "desc" },
   });
+  const snapshotAt = lastIn?.createdAt ?? new Date();
+  // aiReply is also called by this queue: do not create a new retry row on each failure.
+  const existing = await prisma.pendingAiReply.findFirst({ where: { contactId, snapshotAt } });
+  if (existing) return;
   await prisma.pendingAiReply
-    .create({ data: { contactId, text, snapshotAt: lastIn?.createdAt ?? new Date() } })
+    .create({ data: { contactId, text, snapshotAt } })
     .catch((err) => logError("aiReplyRetry:queue", err));
 }
 
@@ -88,7 +102,7 @@ async function runQueue(): Promise<void> {
     // Кто-то (хозяйка руками, обычный ход) уже ответил после — сдачу засчитываем
     // как успех, а не как повод пробовать снова поверх готового ответа.
     const answeredSince = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", createdAt: { gt: row.snapshotAt } },
+      where: { contactId: row.contactId, direction: "OUT", text: { notIn: Object.values(DELAY_NOTICES) }, createdAt: { gt: row.snapshotAt } },
     });
     if (answeredSince) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
@@ -109,11 +123,16 @@ async function runQueue(): Promise<void> {
       await aiReply(row.contact, row.text, [], []);
     } catch (err) {
       logError("aiReplyRetry:attempt", err);
+      if (!canRetryMetaFailure(err)) {
+        await notifyOwnerDirect(`Ответ для ${row.contactId} остановлен. Проверьте переписку перед повтором: ${err instanceof Error ? err.message : "неповторяемая ошибка"}`);
+        await prisma.pendingAiReply.delete({ where: { id: row.id } });
+        continue;
+      }
     }
 
     if (await isBotFrozen()) return;
     const sentNow = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", createdAt: { gt: row.snapshotAt } },
+      where: { contactId: row.contactId, direction: "OUT", text: { notIn: Object.values(DELAY_NOTICES) }, createdAt: { gt: row.snapshotAt } },
     });
     if (sentNow) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
@@ -121,6 +140,20 @@ async function runQueue(): Promise<void> {
     }
 
     const attempts = row.attempts + 1;
+    if (attempts >= 2 && !row.delayNoticeAt) {
+      // Claim before sending: a timeout is ambiguous, so never resend this notice blindly.
+      const claimed = await prisma.pendingAiReply.updateMany({
+        where: { id: row.id, delayNoticeAt: null }, data: { delayNoticeAt: new Date() },
+      });
+      if (claimed.count) {
+        const notice = DELAY_NOTICES[detectClientLanguage(row.text)];
+        try {
+          const mid = await sendToContact(row.contact, notice);
+          await recordOutgoingMessage(row.contactId, notice, mid);
+        } catch (error) { logError("aiReplyRetry:notice", error); }
+        await giveUp(row.contactId, row.text, true);
+      }
+    }
     if (attempts >= MAX_ATTEMPTS) {
       await giveUp(row.contactId, row.text);
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
@@ -133,7 +166,7 @@ async function runQueue(): Promise<void> {
 }
 
 /** Попытки кончились (~13 часов) — сообщаем владельцу, а не молчим, как раньше. */
-async function giveUp(contactId: string, text: string): Promise<void> {
+async function giveUp(contactId: string, text: string, early = false): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
   const recipients = [
@@ -149,7 +182,7 @@ async function giveUp(contactId: string, text: string): Promise<void> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const who = contact?.username ? `@${contact.username}` : contact?.igUserId;
   const message =
-    `⚠️ ИИ так и не смог ответить за всё время повтора (~13 часов).\n` +
+    (early ? "ИИ дважды не смог ответить. Вопрос сохранён, нужен человек.\n" : "ИИ не смог ответить за всё время повтора (~13 часов).\n") +
     `Человек: ${who}\n` +
     `Последнее: «${text.slice(0, 200)}»\n` +
     `Ответьте, пожалуйста, вручную.`;

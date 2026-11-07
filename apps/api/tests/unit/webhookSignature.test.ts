@@ -43,6 +43,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
   vi.spyOn(database, "logError").mockImplementation(() => {});
   db = mockPrisma();
+  db.model("webhookInbox").findMany.mockResolvedValue([]);
   settings = { appSecret: "", verifyToken: "test-verify-token", botFrozen: "true" };
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
     where.key in settings ? { key: where.key, value: settings[where.key] } : null);
@@ -92,6 +93,13 @@ describe.each([
   it("accepts correctly signed delivery once the secret is configured", async () => {
     settings.appSecret = "test-app-secret";
     expect((await post(path, empty, sign(empty))).status).toBe(200);
+  });
+  it("does not acknowledge an event when durable storage fails", async () => {
+    settings.appSecret = "test-app-secret";
+    const body = JSON.stringify({ object, entry: [{ id: "page", messaging: [{ sender: { id: "customer" }, message: { mid: "one", text: "hello" } }] }] });
+    db.model("webhookInbox").upsert.mockRejectedValue(new Error("SQLITE_BUSY"));
+    expect((await post(path, body, sign(body))).status).toBe(503);
+    expectNoProcessing();
   });
   it("rejects missing, malformed and tampered signatures with a configured secret", async () => {
     settings.appSecret = "test-app-secret";

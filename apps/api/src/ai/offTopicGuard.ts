@@ -501,8 +501,13 @@ const RECIPE_FOR_GUEST: Record<ClientLanguage, string> = {
 /**
  * @param isStudent человек оплатил курс — только ему можно звать в закрытый чат.
  */
-export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStudent = false): string {
+export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStudent = false, deliveryMode: "web" | "telegram" | "both" = "telegram"): string {
   if (kind === "recipe_question" && !isStudent) return RECIPE_FOR_GUEST[language];
+  if (kind === "recipe_question" && deliveryMode !== "telegram") return {
+    ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
+    tg: "Дарси худро дар кабинети шахсӣ кушоед ва «Савол»-ро пахш кунед — Ширин мебинад, ки савол дар бораи кадом дастур аст",
+    en: "Open your lesson and choose Question so Shirin can see which recipe you mean",
+  }[language];
   return REPLIES[kind][language];
 }
 

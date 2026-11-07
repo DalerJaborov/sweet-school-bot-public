@@ -43,7 +43,7 @@ vi.mock("../../src/learningCheckIn.js", () => ({ markStartedLearningIfReplied: v
 vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => undefined) }));
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));
 vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false) }));
-vi.mock("../../src/ai/offlineCourse.js", () => ({ maybeSendOfflineCard: vi.fn(async () => false) }));
+vi.mock("../../src/ai/offlineCourse.js", async (original) => ({ ...(await original<typeof import("../../src/ai/offlineCourse.js")>()), maybeSendOfflineCard: vi.fn(async () => false) }));
 vi.mock("../../src/ai/courseDate.js", () => ({ courseDateLabel: vi.fn(async () => "") }));
 vi.mock("../../src/ai/dailyBudget.js", () => ({
   isBudgetExceeded: vi.fn(async () => false),
@@ -203,5 +203,22 @@ describe("Контекст офлайн-курса держится по обе�
     await aiReply(web, "Кай мешавад?", [], []);
 
     expect(systemPromptOfCall(0)).not.toContain("ОФЛАЙН-курс");
+  });
+});
+
+
+describe("sales policy before delivery", () => {
+  it("corrects informal generated copy once before sending", async () => {
+    generateWithFallback.mockResolvedValueOnce(said("Ты можете открыть курс после оплаты")).mockResolvedValueOnce(said("Вы можете открыть курс после подтверждения оплаты"));
+    await aiReply(web, "Как открыть курс?", [], []);
+    expect(generateWithFallback).toHaveBeenCalledTimes(2);
+    expect(sendToContact).toHaveBeenCalledTimes(1);
+    expect(sendToContact.mock.calls[0][1]).toBe("Вы можете открыть курс после подтверждения оплаты");
+  });
+  it("holds invented price even if model repeats it", async () => {
+    generateWithFallback.mockResolvedValue(said("Курс стоит 999 сомони"));
+    await expect(aiReply(web, "Сколько стоит курс?", [], [])).rejects.toThrow("Generated reply held");
+    expect(generateWithFallback).toHaveBeenCalledTimes(2);
+    expect(sendToContact).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { FreeLessonSettings } from "../components/FreeLessonSettings";
 import { WhatsAppSettings } from "../components/WhatsAppSettings";
 import { KnowledgeReview } from "../components/KnowledgeReview";
 
@@ -295,6 +296,7 @@ export function SettingsPage() {
   return (
     <div className="card">
       <h2>{Icons.settings} Настройки</h2>
+      <FreeLessonSettings />
       <WhatsAppSettings />
       <KnowledgeReview />
       <p className="hint">Ключи и промт ИИ. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>

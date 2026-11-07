@@ -36,6 +36,7 @@ export function CourseCard({
         <span className="course-card-kicker">{t.lessonsCount(lessons.length)}</span>
         <span className="course-card-title">{course.title}</span>
         {course.description && <span className="course-card-desc">{course.description}</span>}
+        <span className="course-card-preview">{lessons.slice(0, 4).map((lesson) => lesson.title).join(" · ")}</span>
         <span className="course-card-open">{t.openCourse} →</span>
       </span>
       <span className="course-card-side">

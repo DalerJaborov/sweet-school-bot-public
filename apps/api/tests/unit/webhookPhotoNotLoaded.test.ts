@@ -9,6 +9,8 @@ import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../help
  * модели не доходит вовсе — отвечаем сами и честно, тем же приёмом, что и
  * ai/receiptClaim.ts для «отправила чек» без вложения.
  */
+vi.mock("../../src/course/deliveryChoice.js", () => ({ handleDeliveryChoiceReply: vi.fn(async () => false) }));
+
 const sendToContact = vi.fn(async () => "mid-out-1");
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[]) => sendToContact(...a) }));
 vi.mock("../../src/funnel.js", () => ({
@@ -34,6 +36,9 @@ vi.mock("../../src/ownMedia.js", () => ({ findOwnMedia: vi.fn(async () => null),
 vi.mock("../../src/ai/media.js", () => ({ fetchAttachment: vi.fn(async () => null) }));
 vi.mock("../../src/upload.js", () => ({ saveOwnerMedia: vi.fn(() => null) }));
 
+import { handleDeliveryChoiceReply } from "../../src/course/deliveryChoice.js";
+import { upsertContact } from "../../src/funnel.js";
+import { voiceToText } from "../../src/ai/voiceToText.js";
 import { handleMessage, type MessagingEvent } from "../../src/webhook.js";
 
 let db: PrismaMock;
@@ -45,6 +50,7 @@ const photoEvent: MessagingEvent = {
 
 beforeEach(() => {
   db = mockPrisma();
+  vi.mocked(handleDeliveryChoiceReply).mockReset().mockResolvedValue(false);
   db.model("contact").findUnique.mockResolvedValue({ ...fakeContact(), humanSilencedUntil: null });
   db.model("message").create.mockResolvedValue({});
   db.model("message").findFirst.mockResolvedValue({ text: "Ба ман курси онлайни 70 сомона лозим" });
@@ -101,5 +107,52 @@ describe("Фото пришло, но не скачалось — честный
     await handleMessage({ ...photoEvent, message: { ...photoEvent.message, text: "Вот чек" } });
     expect(sendToContact).not.toHaveBeenCalled();
     expect(debounceMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("incoming message claim", () => {
+  const voice: MessagingEvent = { sender: { id: "customer" }, message: { mid: "voice-mid", attachments: [{ type: "audio", payload: { url: "https://example.invalid/voice" } }] } };
+  it("does not transcribe a duplicate delivery", async () => {
+    db.model("message").create.mockRejectedValue(Object.assign(new Error("duplicate"), { code: "P2002" }));
+    await handleMessage(voice);
+    expect(voiceToText).not.toHaveBeenCalled();
+  });
+  it("propagates database outages instead of silently treating them as duplicates", async () => {
+    db.model("message").create.mockRejectedValue(new Error("SQLITE_BUSY"));
+    await expect(handleMessage(voice)).rejects.toThrow("SQLITE_BUSY");
+    expect(voiceToText).not.toHaveBeenCalled();
+  });
+  it("replays AI work after a crash/error following the successful Message insert", async () => {
+    const incoming: MessagingEvent = { sender: { id: "customer" }, message: { mid: "persisted-before-crash", text: "Какие курсы есть?" } };
+    debounceMessage.mockImplementation(async (_id, text, attachments, rescued, flush) => flush(text, attachments, rescued));
+    aiReply.mockRejectedValueOnce(new Error("failure after Message commit")).mockResolvedValue(undefined);
+    await expect(handleMessage(incoming, undefined, "INSTAGRAM", true)).rejects.toThrow("failure after Message commit");
+    db.model("message").create.mockRejectedValue(Object.assign(new Error("already persisted"), { code: "P2002" }));
+    await handleMessage(incoming, undefined, "INSTAGRAM", true);
+    expect(aiReply).toHaveBeenCalledTimes(2);
+    expect(aiReply).toHaveBeenLastCalledWith(expect.objectContaining({ id: "contact-1" }), "Какие курсы есть?", [], []);
+    debounceMessage.mockReset();
+  });
+  it("can resume an accepted event with an already persisted incoming message", async () => {
+    db.model("message").create.mockRejectedValue(Object.assign(new Error("duplicate"), { code: "P2002" }));
+    await handleMessage(voice, undefined, "INSTAGRAM", true);
+    expect(voiceToText).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("delivery choice after human takeover", () => {
+  it("routes a pending course choice to its evidence gate while ordinary AI stays silent", async () => {
+    vi.mocked(upsertContact).mockResolvedValueOnce({ ...fakeContact(), humanTakenOverAt: new Date() } as never);
+    vi.mocked(handleDeliveryChoiceReply).mockResolvedValueOnce(true);
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "choice", text: "Telegram есть" } });
+    expect(handleDeliveryChoiceReply).toHaveBeenCalledWith(expect.objectContaining({ humanTakenOverAt: expect.any(Date) }), "Telegram есть");
+    expect(debounceMessage).not.toHaveBeenCalled();
+  });
+  it("never routes a choice through the frozen gate", async () => {
+    db.model("setting").findUnique.mockResolvedValue({ value: "true" });
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "choice", text: "Telegram есть" } });
+    expect(handleDeliveryChoiceReply).not.toHaveBeenCalled();
   });
 });

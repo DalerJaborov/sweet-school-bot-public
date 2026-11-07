@@ -18,6 +18,6 @@ describe("outbound policy architecture", () => {
   it("receipt permission is entered only after automated or owner receipt decisions", () => {
     const callers = files(root).filter(file => /withVerifiedReceiptDelivery\(/.test(fs.readFileSync(file, "utf8")))
       .map(file => path.relative(root, file).replaceAll("\\", "/")).sort();
-    expect(callers).toEqual(["ai/receiptVerdict.ts", "receiptDecision.ts"]);
+    expect(callers).toEqual(["ai/receiptVerdict.ts", "course/deliveryChoice.ts", "receiptDecision.ts"]);
   });
 });

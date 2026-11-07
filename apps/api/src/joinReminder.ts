@@ -1,4 +1,6 @@
+import { awaitingDeliveryChoice, askDeliveryChoice } from "./course/deliveryChoice.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
+import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
 import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink } from "./telegram.js";
@@ -48,7 +50,7 @@ const TEXT_RU_WEB = "Вижу, что вы ещё не открыли свои �
  *  не вошёл — старую он мог потерять/не понять. Возвращает готовые строки для
  *  сообщения клиенту ("Название\nссылка" на каждый курс) — пусто, если выпустить
  *  ничего не вышло (нет токена бота или chatId группы не настроен). */
-async function reissueLinks(contactId: string, botToken: string | undefined, mode: DeliveryMode): Promise<string[]> {
+async function reissueLinks(contactId: string, botToken: string | undefined, mode: DeliveryMode, deliveredUpdates: { id: string; link: string }[]): Promise<string[]> {
   if ((await getSetting("botFrozen")) === "true") return [];
   // Режим доставки решает, КУДА зовём: в привычную группу, на платформу или
   // и туда, и туда (см. course/delivery.ts). В веб-режиме токен бота не нужен
@@ -60,11 +62,12 @@ async function reissueLinks(contactId: string, botToken: string | undefined, mod
 
   const purchases = await prisma.purchase.findMany({ where: { contactId, revokedAt: null, joinedAt: null } });
   if (purchases.length === 0) return [];
-  // Ссылку на платформу перевыпускаем всегда заново: прошлая гаснет, и
-  // пересланная кому-то старая перестаёт работать. Одна на человека — окно
-  // одно на все курсы, и одной строки в напоминании достаточно.
+  // Reuse the current valid platform link; a reminder must not revoke it.
   const sharedWebLink = wantWeb ? await issueCourseLink(contactId, { automatic: true }) : null;
-  if (wantWeb && !wantTelegram) return sharedWebLink ? [sharedWebLink] : [];
+  if (wantWeb && !wantTelegram) {
+    if (sharedWebLink) deliveredUpdates.push(...purchases.map((p) => ({ id: p.id, link: sharedWebLink })));
+    return sharedWebLink ? [sharedWebLink] : [];
+  }
 
   const lines: string[] = [];
   for (const purchase of purchases) {
@@ -81,7 +84,7 @@ async function reissueLinks(contactId: string, botToken: string | undefined, mod
     const link = tgLink;
     if (!link) continue;
     if (webLink) lines.push(webLink);
-    await prisma.purchase.update({ where: { id: purchase.id }, data: { inviteLink: link } });
+    deliveredUpdates.push({ id: purchase.id, link });
     await rememberInviteLink(contactId, link).catch((err) => {
       logError("joinReminder:rememberInviteLink", err);
     });
@@ -126,21 +129,29 @@ async function sweep(): Promise<void> {
 
   for (const contact of waiting) {
     if ((await getSetting("botFrozen")) === "true") return;
-    // Отметку ставим ПЕРВОЙ: напоминание обещано одно, и лучше пропустить его
-    // при сбое, чем послать дважды.
-    await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
+    if (await awaitingDeliveryChoice(contact.id)) {
+      await askDeliveryChoice(contact);
+      continue;
+    }
+    // Completion is recorded only after delivery or a confirmed owner handoff.
+
 
     const lastIn = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "IN" },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true, text: true },
     });
-    const windowOpen =
-      lastIn != null && (Date.now() - lastIn.createdAt.getTime()) / 3_600_000 < META_WINDOW_HOURS;
+    const pendingUncertain = (await prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null, accessDeliveryUncertainAt: { not: null } } })) > 0;
+    const windowOpen = !pendingUncertain &&
+      (contact.channel === "WEB" || (lastIn != null && (Date.now() - lastIn.createdAt.getTime()) / 3_600_000 < META_WINDOW_HOURS));
 
     // Пришедшая с сайта получает платформу при любом режиме (deliveryModeFor).
     const contactMode = await deliveryModeFor(contact);
-    const links = await reissueLinks(contact.id, botToken, contactMode);
+    const deliveredUpdates: { id: string; link: string }[] = [];
+    const links = windowOpen ? await reissueLinks(contact.id, botToken, contactMode, deliveredUpdates) : [];
+    let uncertain = pendingUncertain;
+    let delivered = false;
+    let ownerNotified = false;
     if ((await getSetting("botFrozen")) === "true") return;
 
     if (windowOpen) {
@@ -164,9 +175,15 @@ async function sweep(): Promise<void> {
             : TEXT_RU_NO_LINK;
       try {
         const mid = await sendToContact(contact, text);
+        if (!mid) throw new Error("Reminder delivery not confirmed");
+        delivered = true;
         await recordOutgoingMessage(contact.id, text, mid);
+        for (const update of deliveredUpdates) {
+          await prisma.purchase.updateMany({ where: { id: update.id, revokedAt: null }, data: { inviteLink: update.link } });
+        }
       } catch (err) {
-        logError("joinReminder:send", err);
+        uncertain = metaFailureKind(err) === "AMBIGUOUS";
+        logError(uncertain ? "joinReminder:deliveryUncertain" : "joinReminder:send", err);
       }
     }
 
@@ -174,16 +191,18 @@ async function sweep(): Promise<void> {
     // человеку нельзя. Тогда это единственный способ его не потерять.
     if (botToken && sisterChat) {
       const who = contact.username ? `@${contact.username}` : contact.igUserId;
-      const linkNote = links.length > 0 ? " Ссылка перевыпущена." : "";
-      const note = windowOpen
-        ? `бот напомнил.${linkNote}`
+      const linkNote = delivered && links.length > 0 ? " Ссылка доставлена." : "";
+      const note = uncertain ? "Доставка ссылки или напоминания неизвестна. Автоповтор остановлен; проверьте переписку вручную." : windowOpen
+        ? delivered ? `бот напомнил.${linkNote}` : "Напоминание НЕ доставлено — нужна ручная помощь; оплаченный доступ сохранён."
         : `написать боту уже нельзя — окно Instagram закрыто.${linkNote}`;
       const where = mode === "web" ? "не открыл(а) уроки" : "не зашёл(шла) в группу";
-      await sendTelegramMessage(
+      const ownerMessage = await sendTelegramMessage(
         botToken,
         sisterChat,
         `📌 ${who} оплатил(а), но за ${AFTER_HOURS} часов ${where}\n${note}`
-      ).catch((err) => logError("joinReminder:notify", err));
+      ).catch((err) => { logError("joinReminder:notify", err); return null; });
+      ownerNotified = Boolean(ownerMessage);
     }
+    if (delivered || ownerNotified || uncertain) await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
   }
 }
