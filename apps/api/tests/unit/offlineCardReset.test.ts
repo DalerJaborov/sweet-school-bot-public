@@ -14,6 +14,7 @@ const SETTINGS: Record<string, string> = { offlineCourseStartDate: "2026-10-03" 
 
 beforeEach(() => {
   db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
     SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null
   );

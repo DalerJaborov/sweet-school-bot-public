@@ -234,8 +234,8 @@ function toAttachments(raw: MessagingEvent["message"]): Attachment[] {
  *  1) наш же вызов sendText — mid уже есть в базе (мы сами его туда положили
  *     сразу после отправки), это просто подтверждение, ничего не делаем;
  *  2) ЖИВАЯ хозяйка ответила из приложения Instagram — такого mid в базе ещё
- *     нет. Записываем в историю (для памяти разговора) и молчим 20 минут с ЭТИМ
- *     клиентом — человек взял разговор на себя.
+ *     нет. Записываем в историю и выключаем обычные автоответы до явного
+ *     включения владельцем — человек взял разговор на себя.
  */
 /** Экспорт ради юнит-теста транзакции (tests/unit/webhookEcho.test.ts); из кода снаружи не вызывать. */
 export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "INSTAGRAM"): Promise<void> {
@@ -247,6 +247,35 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
   if (known) return; // наша же отправка, эхо от Meta — не человек
 
   const contact = await upsertContact(recipientId, null, channel);
+
+  // Запись эха и «замолчать боту» — ОДНОЙ транзакцией. Meta шлёт вебхук
+  // повторно, если не получила 200 вовремя: два одинаковых эха приходили
+  // почти одновременно, первый писал сообщение, второй падал на дубликате mid
+  // (P2002), но ОБА продлевали humanSilencedUntil и оба запускали обучение
+  // ниже — один и тот же ответ Ширин ложился в образцы дважды. Теперь дубликат
+  // откатывает транзакцию целиком и на этом заканчивает: всё нужное уже сделал
+  // первый вебхук.
+  const recorded = await prisma
+    .$transaction(async (tx) => {
+      await tx.message.create({
+        // byHuman: это писала Ширин из приложения, а не бот. Отсюда потом собирается
+        // список «бот ответил плохо — вот как надо» (см. раздел «Качество»).
+        data: { contactId: contact.id, direction: "OUT", mid: msg.mid, text: msg.text?.trim() || null, byHuman: true },
+      });
+      await tx.contact.updateMany({
+        where: { id: contact.id, humanTakenOverAt: null },
+        data: { humanTakenOverAt: new Date(), humanTakeoverMid: msg.mid, humanSilencedUntil: null },
+      });
+      return true;
+    })
+    .catch((err) => {
+      // P2002 = дубликат mid (гонка с параллельным вебхуком) — это нормально.
+      if ((err as { code?: string })?.code !== "P2002") {
+        logError("webhook:handleEcho:record", err);
+      }
+      return false;
+    });
+  if (!recorded) return;
 
   /**
    * ГОЛОСОВОЙ/ФОТО/ВИДЕО ОТВЕТ ХОЗЯЙКИ — СОХРАНЯЕМ И РАСШИФРОВЫВАЕМ (22.08,
@@ -266,9 +295,8 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
    * скачивается и сохраняется своей копией прямо здесь, даже если распознавание
    * речи не пригодится (фото/видео) или не получится.
    *
-   * Расшифровка и скачивание идут ДО записи в базу, чтобы текст и ссылка легли
-   * сразу: дописывать их потом значит гонку с ответом бота, который уже читает
-   * историю.
+   * Постоянная пауза уже записана выше. Медленные скачивание и расшифровка
+   * только дополняют историю и не оставляют окно для ответа бота.
    */
   const attachment = (msg.attachments ?? []).find(
     (a) => a.type === "audio" || a.type === "image" || a.type === "video"
@@ -287,34 +315,10 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
     if (savedUrl) ownerMedia = { url: savedUrl, type: attachment.type };
   }
 
-  // Запись эха и «замолчать боту» — ОДНОЙ транзакцией. Meta шлёт вебхук
-  // повторно, если не получила 200 вовремя: два одинаковых эха приходили
-  // почти одновременно, первый писал сообщение, второй падал на дубликате mid
-  // (P2002), но ОБА продлевали humanSilencedUntil и оба запускали обучение
-  // ниже — один и тот же ответ Ширин ложился в образцы дважды. Теперь дубликат
-  // откатывает транзакцию целиком и на этом заканчивает: всё нужное уже сделал
-  // первый вебхук.
-  const recorded = await prisma
-    .$transaction(async (tx) => {
-      await tx.message.create({
-        // byHuman: это писала Ширин из приложения, а не бот. Отсюда потом собирается
-        // список «бот ответил плохо — вот как надо» (см. раздел «Качество»).
-        data: { contactId: contact.id, direction: "OUT", mid: msg.mid, text: echoText ?? null, byHuman: true },
-      });
-      await tx.contact.update({
-        where: { id: contact.id },
-        data: { humanSilencedUntil: new Date(Date.now() + HUMAN_TAKEOVER_SILENCE_MS) },
-      });
-      return true;
-    })
-    .catch((err) => {
-      // P2002 = дубликат mid (гонка с параллельным вебхуком) — это нормально.
-      if ((err as { code?: string })?.code !== "P2002") {
-        logError("webhook:handleEcho:record", err);
-      }
-      return false;
-    });
-  if (!recorded) return;
+  // Enrich the already-recorded echo only after the durable takeover is active.
+  if (echoText || ownerMedia) {
+    await prisma.message.updateMany({ where: { mid: msg.mid, byHuman: true }, data: { text: echoText ?? null, ...(ownerMedia?.type === "image" ? { imageUrl: ownerMedia.url } : {}) } });
+  }
 
   // ЖИВОЕ ОБУЧЕНИЕ. Хозяйка ответила сама — значит показала, как надо. Берём
   // последнее сообщение клиента и её ответ (текст и/или сам файл) как образец:
@@ -346,8 +350,8 @@ const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> =
   spam: "рекламный спам",
 };
 
-function isHumanSilenced(contact: { humanSilencedUntil: Date | null }): boolean {
-  return !!contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now();
+function isHumanSilenced(contact: { humanSilencedUntil: Date | null; humanTakenOverAt?: Date | null }): boolean {
+  return Boolean(contact.humanTakenOverAt) || !!contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now();
 }
 
 /**
@@ -457,7 +461,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // в историю всё равно идёт: переписка сохраняется, просто без ответов бота.
   // То же для заблокированных за спам/флирт (владелец 05.09.2026) — снять
   // блок можно из панели «Ученицы».
-  if (contact.personal || contact.spamBlockedAt) {
+  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) {
     if (msg.mid) {
       await prisma.message
         .create({ data: { contactId: contact.id, direction: "IN", mid: msg.mid, text, payload } })
@@ -543,7 +547,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // вложение сообщения — картинка, текста нет, спасти не удалось (даже с
   // повтором в fetchAttachment) — отвечаем сами и честно, до модели этот ход
   // не доходит вовсе, тем же приёмом, что и ai/receiptClaim.ts.
-  if (hasImageAttachment && rescuedImages.length === 0 && !textOrVoice && (await getSetting("botFrozen")) !== "true") {
+  if (hasImageAttachment && rescuedImages.length === 0 && !textOrVoice && !isHumanSilenced(contact) && (await getSetting("botFrozen")) !== "true") {
     const lastIn = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "IN", text: { not: null } },
       orderBy: { createdAt: "desc" },
@@ -560,7 +564,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   }
 
   // Хозяйка сама ведёт разговор — бот не встревает, даже если пришли кнопка или
-  // ключевое слово воронки. Тишина снимается сама через 20 минут без её участия.
+  // ключевое слово воронки. Постоянную паузу снимает только владелец.
   if (isHumanSilenced(contact)) return;
 
   const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload);

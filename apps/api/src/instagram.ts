@@ -14,9 +14,9 @@ const FB_GRAPH_ORIGIN = "https://graph.facebook.com";
 
 /** Канал контакта. WEB — чат на сайте: в Meta такого человека нет, ему
  *  отвечает messaging/send.ts записью в базу, а не запросом к Graph API. */
-export type Channel = "INSTAGRAM" | "MESSENGER" | "WEB";
+export type Channel = "INSTAGRAM" | "MESSENGER" | "WEB" | "WHATSAPP";
 /** Каналы, у которых есть Graph API — только с ними умеют функции этого файла. */
-export type MetaChannel = Exclude<Channel, "WEB">;
+export type MetaChannel = Exclude<Channel, "WEB" | "WHATSAPP">;
 export type QuickButton = { title: string; payload: string };
 
 /** Канал контакта — им же и отвечаем: инстаграмному человеку через Instagram,
@@ -24,15 +24,16 @@ export type QuickButton = { title: string; payload: string };
  *  funnel.ts, чтобы ai.ts мог им пользоваться без круговой зависимости
  *  (funnel.ts уже импортирует ai.ts). */
 export function channelOf(contact: { channel: string }): Channel {
-  if (contact.channel === "WEB") return "WEB";
-  return contact.channel === "MESSENGER" ? "MESSENGER" : "INSTAGRAM";
+  if (["WEB", "WHATSAPP", "MESSENGER", "INSTAGRAM"].includes(contact.channel)) return contact.channel as Channel;
+  throw new Error(`Unsupported messaging channel: ${contact.channel}`);
 }
 
 /** Канал Meta для операций, которых у сайта не бывает (комментарии, private
  *  reply). Контакт WEB сюда попадать не должен — на всякий случай считаем его
  *  Instagram, как было до появления сайта. */
 export function metaChannelOf(contact: { channel: string }): MetaChannel {
-  return contact.channel === "MESSENGER" ? "MESSENGER" : "INSTAGRAM";
+  if (contact.channel === "INSTAGRAM" || contact.channel === "MESSENGER") return contact.channel;
+  throw new Error(`Not a Meta channel: ${contact.channel}`);
 }
 
 async function igToken(): Promise<string> {

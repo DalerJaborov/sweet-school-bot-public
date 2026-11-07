@@ -61,6 +61,7 @@ describe("handleIncomingDm", () => {
 
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
   });
   afterEach(restorePrisma);
 

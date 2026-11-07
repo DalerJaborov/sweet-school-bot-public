@@ -1,3 +1,4 @@
+import { withVerifiedReceiptDelivery } from "./messaging/automation.js";
 import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { sendToContact } from "./messaging/send.js";
@@ -141,7 +142,7 @@ export async function decideReceipt(
     return { ok: true, status: "approved_no_link", message: `Ссылка не отправлена: ${plan.note}` };
   }
 
-  const granted = await grantCourses(receipt.contact, plan, amount, { amount: receipt.amount, currency: "TJS" }, { byHuman: true });
+  const granted = await withVerifiedReceiptDelivery(receipt.contact.id, receipt.imageHash, () => grantCourses(receipt.contact, plan, amount, { amount: receipt.amount, currency: "TJS" }, { byHuman: true }));
   if (granted.length === 0) {
     return { ok: false, reason: "no_access_configured", message: "Не настроена группа/ссылка доступа" };
   }

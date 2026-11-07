@@ -18,6 +18,7 @@ vi.mock("../../src/ai/media.js", () => ({ fetchAttachment: vi.fn(async () => nul
 vi.mock("../../src/upload.js", () => ({ saveOwnerMedia: vi.fn(() => null) }));
 
 import { rememberOwnerReply } from "../../src/ai/styleLearning.js";
+import { voiceToText } from "../../src/ai/voiceToText.js";
 import { handleEcho, type MessagingEvent } from "../../src/webhook.js";
 
 const echo: MessagingEvent = {
@@ -45,8 +46,8 @@ describe("handleEcho — транзакция эха хозяйки", () => {
     expect(db.model("message").create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ mid: "mid-echo-1", byHuman: true, direction: "OUT" }) })
     );
-    expect(db.model("contact").update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { humanSilencedUntil: expect.any(Date) } })
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { humanTakenOverAt: expect.any(Date), humanTakeoverMid: "mid-echo-1", humanSilencedUntil: null } })
     );
     expect(rememberOwnerReply).toHaveBeenCalledTimes(1);
     expect(rememberOwnerReply).toHaveBeenCalledWith("Курс чанд пул?", echo.message!.text, "TAKEOVER", undefined, "contact-1");
@@ -60,7 +61,7 @@ describe("handleEcho — транзакция эха хозяйки", () => {
     await handleEcho(echo);
 
     expect(db.$transaction).toHaveBeenCalledTimes(2);
-    expect(db.model("contact").update).toHaveBeenCalledTimes(1); // только из первой транзакции
+    expect(db.model("contact").updateMany).toHaveBeenCalledTimes(1); // только из первой транзакции
     expect(rememberOwnerReply).toHaveBeenCalledTimes(1);
   });
 
@@ -71,6 +72,19 @@ describe("handleEcho — транзакция эха хозяйки", () => {
 
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(rememberOwnerReply).not.toHaveBeenCalled();
+  });
+
+  it("persists takeover before waiting for owner voice transcription", async () => {
+    vi.mocked(voiceToText).mockImplementationOnce(async () => {
+      expect(db.model("contact").updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ humanTakeoverMid: "mid-voice" }),
+      }));
+      return "Я отвечу сама";
+    });
+    await handleEcho({ recipient: { id: "ig-1" }, message: {
+      mid: "mid-voice", is_echo: true, attachments: [{ type: "audio", payload: { url: "https://example.com/voice" } }],
+    } });
+    expect(voiceToText).toHaveBeenCalled();
   });
 
   it("не P2002 (например, база недоступна) — тоже без обучения, но ошибка не глотается молча", async () => {

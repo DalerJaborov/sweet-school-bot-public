@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
-import { isBotFrozen, assertAutomationAllowed } from "./messaging/automation.js";
+import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, withContactMessaging } from "./messaging/automation.js";
 import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
@@ -182,7 +182,7 @@ export async function aiReply(
   // выключенном aiEnabled, см. её комментарий), и отзыв-скриншот, и сам ИИ-ответ
   // одним ранним выходом. Воронка (funnel.ts) вызывается из webhook.ts до
   // aiReply и этой проверки не видит вовсе — её выключить нельзя тем же флагом.
-  if ((await getSetting("botFrozen")) === "true") return;
+  if ((await getSetting("botFrozen")) === "true" || contactAutomationBlocked(contact)) return;
 
   // Побочный эффект, не влияющий на сам ответ: если человеку уже уходило
   // проверочное «как первый урок» (learningCheckIn.ts) и она хоть что-то
@@ -222,6 +222,7 @@ export async function aiReply(
   const apiKeys = await resolveGeminiKeys();
   if (apiKeys.length === 0) {
     logError("ai:aiReply:noGeminiKeys", new Error("Gemini API keys not configured — AI reply skipped"));
+    if (contact.channel === "WHATSAPP") throw new Error("WhatsAppGenerationRetry: no keys");
     return;
   }
   const primaryKey = apiKeys[0];
@@ -421,6 +422,7 @@ export async function aiReply(
     // Ни разу не ответили — раньше здесь была тишина навсегда (см. aiReplyRetry.ts).
     // Кладём ход в очередь: фоновый тик попробует снова, пока не получится или не
     // кончатся попытки (~13 часов), и владелец узнает, только если так и не вышло.
+    if (contact.channel === "WHATSAPP") throw new Error("WhatsAppGenerationRetry: generation unavailable");
     await queuePendingAiReply(contact.id, text).catch((err) => logError("aiReplyRetry:queue", err));
   } else {
     await recordAiCall(contact.id);
@@ -444,6 +446,7 @@ export async function aiReply(
         notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       } catch (err) {
         logError("ai:send", err);
+        if (contact.channel === "WHATSAPP") throw err;
       }
     }
   }
@@ -509,7 +512,7 @@ export async function aiReply(
  * кнопок: человек просто спросил что-то под роликом, продавать ему нечего.
  */
 export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<void> {
-  if (await isBotFrozen()) return;
+  if (await isBotFrozen() || contactAutomationBlocked(contact)) return;
   // Свой флаг, не aiEnabled — владелец 13.09.2026 попросил заглушить обычный
   // ИИ-ответ в директе, но оставить живыми ответы под комментариями; общий
   // флаг гасил бы оба сразу.
@@ -528,7 +531,8 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     if (isSilentKind(verdict.kind)) return;
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
-    await sendPrivateReply(commentId, guardReply(verdict.kind, language), [], metaChannelOf(contact)).catch((err) => {
+    const guardedText = guardReply(verdict.kind, language);
+    await withContactMessaging(contact.id, "reply", () => sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact))).catch((err) => {
       logError("ai:commentGuard:sendPrivateReply", err);
     });
     return;
@@ -578,7 +582,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
   await recordAiCall(contact.id);
   if (!result.text) return;
 
-  const mid = await sendPrivateReply(commentId, result.text, [], metaChannelOf(contact));
+  const mid = await withContactMessaging(contact.id, "reply", () => sendPrivateReply(commentId, result.text!, [], metaChannelOf(contact)));
   await recordOutgoingMessage(contact.id, result.text, mid);
 }
 

@@ -25,6 +25,7 @@ describe("sendToContact — маршрутизация по каналу", () =>
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
     sendText.mockClear().mockResolvedValue("mid-meta");
     sendAttachment.mockClear().mockResolvedValue("mid-att");
   });

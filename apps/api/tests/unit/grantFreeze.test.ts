@@ -20,6 +20,7 @@ let frozen = false;
 beforeEach(() => {
   frozen = false;
   db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(fakeContact());
   db.model("setting").findUnique.mockImplementation(async (args) => {
     const key = (args as { where: { key: string } }).where.key;
     return { value: key === "botFrozen" ? String(frozen) : "" };
