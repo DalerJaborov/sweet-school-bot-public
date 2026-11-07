@@ -336,3 +336,62 @@ describe("Плеер: сбои связи", () => {
     });
   });
 });
+
+// Safari's native path uses the same protected variant URLs as adaptive playback.
+describe("Native HLS quality", () => {
+  it("preserves position/rate when selecting a protected rendition and returning to Auto", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("probably");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: async () => '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=614000,RESOLUTION=360x640\n/protected/360.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=1296000,RESOLUTION=480x854\n/protected/480.m3u8' })));
+    const { video } = renderPlayer();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    video.currentTime = 27;
+    video.playbackRate = 1.5;
+    fireEvent.click(screen.getByRole("button", { name: /Качество/ }));
+    fireEvent.click(screen.getByRole("button", { name: "360p" }));
+    expect(video.src).toContain("/protected/360.m3u8");
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(27);
+    expect(video.playbackRate).toBe(1.5);
+    fireEvent.click(screen.getByRole("button", { name: /Качество/ }));
+    fireEvent.click(screen.getByRole("button", { name: t.qualityAuto }));
+    expect(video.src).toContain("/m3u8");
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("Network recovery cancellation", () => {
+  it("online resumes during backoff and cancels the obsolete scheduled restart", async () => {
+    renderPlayer();
+    const hls = await hlsReady();
+    vi.useFakeTimers();
+    const start = vi.spyOn(hls, "startLoad");
+    act(() => hls.emit("err", { fatal: true, type: "networkError", details: "fragLoadError" }));
+    fireEvent(window, new Event("online"));
+    expect(start).toHaveBeenCalledTimes(1);
+    act(() => vi.advanceTimersByTime(5000));
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+  it("does not duplicate a no-store manifest request on the hls.js path", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    renderPlayer();
+    await hlsReady();
+    expect(fetcher).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
+
+describe("SaveData player loading", () => {
+  it("does not start HLS segments before playback on a constrained connection", async () => {
+    Object.defineProperty(navigator, "connection", { configurable: true, value: { saveData: true, effectiveType: "4g" } });
+    const { video } = renderPlayer({ fast: true });
+    const hls = await hlsReady();
+    expect(hls.config.autoStartLoad).toBe(false);
+    const start = vi.spyOn(hls, "startLoad");
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.play(video);
+    expect(start).toHaveBeenCalledTimes(1);
+    Object.defineProperty(navigator, "connection", { configurable: true, value: undefined });
+  });
+});

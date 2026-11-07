@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { Lesson } from "../src/course/screens/Lesson";
 import { dict } from "../src/course/i18n";
 import type { LessonView } from "../src/course/api";
@@ -13,7 +13,7 @@ const t = dict("ru");
 // Lesson (геройский экран или плеер), а не как плеер работает изнутри
 // (это уже проверяет Player.test.tsx).
 vi.mock("../src/course/player/Player", () => ({
-  Player: ({ title }: { title: string }) => <div data-testid="player-stub">{title}</div>,
+  Player: ({ title, src, onFatalError }: { title: string; src: string; onFatalError?: () => void }) => <div data-testid="player-stub" data-src={src}><button onClick={onFatalError}>fail</button>{title}</div>,
 }));
 
 function lesson(over: Partial<LessonView> = {}): LessonView {
@@ -78,5 +78,52 @@ describe("Lesson — переключение геройского экрана 
     rerender(<Lesson state={fakeState()} lesson={lesson({ positionSec: 750 })} startAt={0} nonce={2} onBack={vi.fn()} />);
     expect(screen.queryByTestId("player-stub")).toBeNull();
     expect(screen.getByRole("button", { name: t.videoLabel("Наполеон") })).toBeTruthy();
+  });
+});
+
+
+describe("online cached playback authorization", () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+  function savedState() {
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { controller: {} } });
+    return { ...fakeState(), view: { speed: true }, offline: { l1: { photos: 0 } } } as unknown as CourseState;
+  }
+  it("never uses a cached copy after server denial", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 403 })));
+    render(<Lesson state={savedState()} lesson={lesson()} startAt={10} nonce={1} onBack={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toContain("/api/course/");
+  });
+  it("checks access, uses cache, then lets the student request online quality", async () => {
+    const fetcher = vi.fn(async () => ({ ok: true }));vi.stubGlobal("fetch", fetcher);
+    render(<Lesson state={savedState()} lesson={lesson()} startAt={10} nonce={1} onBack={vi.fn()} />);
+    expect(screen.queryByTestId("player-stub")).toBeNull();
+    await act(async () => { await Promise.resolve(); });
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ cache: "no-store", credentials: "include" });
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toBe("/offline/manifest/l1");
+    fireEvent.click(screen.getByRole("button", { name: t.onlineQuality }));
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toContain("/api/course/");
+  });
+  it("does not attempt cache playback without a controlling service worker", async () => {
+    const state = savedState();
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { controller: null } });
+    const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+    render(<Lesson state={state} lesson={lesson()} startAt={10} nonce={1} onBack={vi.fn()} />);
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toContain("/api/course/");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("falls back once to protected streaming when a cached segment is missing", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true })));
+    render(<Lesson state={savedState()} lesson={lesson()} startAt={10} nonce={1} onBack={vi.fn()} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toBe("/offline/manifest/l1");
+    fireEvent.click(screen.getByText("fail"));
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toContain("/api/course/");
+  });
+  it("times out a hanging authorization and falls back to the protected network path", async () => {
+    vi.useFakeTimers();vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    render(<Lesson state={savedState()} lesson={lesson()} startAt={10} nonce={1} onBack={vi.fn()} />);
+    await act(async () => vi.advanceTimersByTime(5000));
+    expect(screen.getByTestId("player-stub").getAttribute("data-src")).toContain("/api/course/");
   });
 });

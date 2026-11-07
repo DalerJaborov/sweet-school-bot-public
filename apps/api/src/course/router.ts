@@ -31,6 +31,7 @@ import {
   verifyCertificateNumber,
 } from "./certificate.js";
 import { getSetting } from "../db.js";
+import { speedModeOn } from "./speed.js";
 
 /**
  * ПУБЛИЧНОЕ API ПЛАТФОРМЫ КУРСОВ — то, с чем разговаривает телефон ученицы.
@@ -250,6 +251,7 @@ courseRouter.get(`${API_BASE}/me`, async (req: Request, res: Response) => {
       ready: false,
       message: "Курс готовится, загляните чуть позже",
       offlineUntil: device.offlineKeyExpiresAt,
+      speed: await speedModeOn(),
       profile,
       school,
       watermark,
@@ -364,6 +366,7 @@ courseRouter.get(`${API_BASE}/me`, async (req: Request, res: Response) => {
     school,
     offlineUntil: device.offlineKeyExpiresAt,
     offlineRendition: OFFLINE_RENDITION,
+    speed: await speedModeOn(),
     courses: out,
     // Алиас на один релиз: старая сборка приложения, закешированная сервис-
     // воркером в телефонах, ждёт единственный `course`.

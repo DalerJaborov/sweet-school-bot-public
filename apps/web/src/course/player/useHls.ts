@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject, type R
 import type HlsType from "hls.js";
 import type { PlayerErrorKind } from "./ErrorOverlay";
 import { isSlowNetwork, SLOW_START_HEIGHT } from "./network";
+import { nativeLevels } from "./nativeLevels";
+import { loadBandwidth, saveBandwidth } from "../speed";
 
 export type QualityLevel = { index: number; height: number };
 
@@ -47,7 +49,9 @@ export const retryDelayMs = (attempt: number): number => 1000 * 2 ** attempt;
 export function useHls(
   videoRef: RefObject<HTMLVideoElement>,
   src: string,
-  posRef: MutableRefObject<number>
+  posRef: MutableRefObject<number>,
+  /** Рубильник ускорения: старт с низкого качества, память о скорости канала. */
+  fast = false
 ): {
   native: boolean;
   levels: QualityLevel[];
@@ -60,6 +64,8 @@ export function useHls(
   stalled: boolean;
   retry: () => void;
 } {
+  const nativeSources = useRef<string[]>([]);
+  const nativeSeek = useRef<(() => void) | null>(null);
   const hlsRef = useRef<HlsType | null>(null);
   const [native, setNative] = useState(false);
   const [levels, setLevels] = useState<QualityLevel[]>([]);
@@ -82,12 +88,27 @@ export function useHls(
     mediaRecoveries.current = 0;
     networkRetries.current = 0;
 
+    nativeSources.current = [];
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
       setNative(true);
       video.src = src;
+      const abort = new AbortController();
+      // Safari still adapts automatically. Reading the small master adds manual
+      // choices without downloading hls.js or exposing a different access path.
+      void fetch(src, { credentials: "include", signal: abort.signal })
+        .then(async (response) => response.ok ? response.text() : "")
+        .then((body) => {
+          if (abort.signal.aborted) return;
+          const parsed = nativeLevels(body, new URL(src, location.href).href);
+          nativeSources.current = parsed.map((item) => item.url);
+          setLevels(parsed.map((item, index) => ({ index, height: item.height })));
+        }).catch(() => undefined);
       const onError = () => setError("network");
       video.addEventListener("error", onError);
       return () => {
+        abort.abort();
+        if (nativeSeek.current) video.removeEventListener("loadedmetadata", nativeSeek.current);
+        nativeSeek.current = null;
         video.removeEventListener("error", onError);
         video.removeAttribute("src");
         video.load();
@@ -96,11 +117,8 @@ export function useHls(
 
     setNative(false);
     let disposed = false;
-    // Манифест греем сразу, параллельно с загрузкой куска hls.js (~190 КБ
-    // сжатых): иначе на первом открытии они шли бы друг за другом, и на 3g
-    // это лишняя секунда до первого кадра. Ответ ляжет в HTTP-кэш, hls.js
-    // возьмёт его оттуда. Ошибка здесь не важна — hls.js запросит сам.
-    if (typeof fetch === "function") void fetch(src, { credentials: "include" }).catch(() => undefined);
+    let startOnPlay: (() => void) | undefined;
+    // Authenticated manifests are no-store: a warm-up fetch only duplicates traffic.
     void import("hls.js").then(({ default: Hls }) => {
       if (disposed) return;
       if (!Hls.isSupported()) {
@@ -108,6 +126,7 @@ export function useHls(
         return;
       }
       const slow = isSlowNetwork();
+      const knownBw = fast && !slow ? loadBandwidth() : null;
       const hls = new Hls({
         // Ключ и сегменты идут с нашей же сессией: без куки сервер не отдаст ключ.
         xhrSetup: (xhr) => {
@@ -115,11 +134,16 @@ export function useHls(
         },
         enableWorker: true, // разбор сегментов в воркере — интерфейс не дёргается
         lowLatencyMode: false, // это записи, не эфир: латентность не важна, важна плавность
-        startLevel: -1,
+        // Ускорение: первый сегмент всегда с самой лёгкой дорожки (кадр
+        // важнее чёткости), дальше ABR сам поднимает качество; префетч
+        // первого фрагмента экономит круг до сервера.
+        startLevel: fast ? 0 : -1,
+        autoStartLoad: !slow,
+        startFragPrefetch: fast,
         maxBufferLength: 60,
         maxMaxBufferLength: 120,
         backBufferLength: 30,
-        abrEwmaDefaultEstimate: 500_000,
+        abrEwmaDefaultEstimate: knownBw ?? 500_000,
         capLevelToPlayerSize: true,
         fragLoadingMaxRetry: 8,
         levelLoadingMaxRetry: 8,
@@ -128,18 +152,27 @@ export function useHls(
       hlsRef.current = hls;
       hls.loadSource(src);
       hls.attachMedia(video);
+      if (slow) {
+        startOnPlay = () => hls.startLoad(posRef.current);
+        video.addEventListener("play", startOnPlay);
+        if (!video.paused) startOnPlay();
+      }
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        const parsed = hls.levels.map((l, index) => ({ index, height: l.height }));
+        const parsed = hls.levels.map((l, index) => ({ index, height: l.width ? Math.min(l.width, l.height) : l.height }));
         setLevels(parsed);
         // Слабая связь: первый фрагмент — с 480p (или ближайшей снизу), потом авто.
-        if (slow && parsed.length > 1) {
+        if (!fast && slow && parsed.length > 1) {
           const fit = parsed.filter((l) => l.height <= SLOW_START_HEIGHT).sort((a, b) => b.height - a.height)[0];
           if (fit) hls.startLevel = fit.index;
         }
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => setAutoLevel(data.level));
+      let bufferedFrags = 0;
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        // Запоминаем скорость канала раз в несколько сегментов: следующий
+        // урок стартует с честной оценкой, а не с консервативных 500 кбит/с.
+        if (fast && ++bufferedFrags % 4 === 0) saveBandwidth(hls.bandwidthEstimate);
         setStalled(false);
         networkRetries.current = 0; // связь ожила — счётчик повторов с нуля
       });
@@ -160,6 +193,8 @@ export function useHls(
               if (!disposed) hls.startLoad(posRef.current);
             }, retryDelayMs(attempt));
           } else {
+            if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+            retryTimer.current = null;
             setStalled(false);
             setError("network");
           }
@@ -175,6 +210,7 @@ export function useHls(
 
     return () => {
       disposed = true;
+      if (startOnPlay) video.removeEventListener("play", startOnPlay);
       if (retryTimer.current !== null) {
         window.clearTimeout(retryTimer.current);
         retryTimer.current = null;
@@ -182,11 +218,15 @@ export function useHls(
       hlsRef.current?.destroy();
       hlsRef.current = null;
     };
-  }, [videoRef, src, posRef]);
+  }, [videoRef, src, posRef, fast]);
 
   const retry = useCallback(() => {
     setError(null);
     setStalled(false);
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
     const video = videoRef.current;
     const hls = hlsRef.current;
     const pos = posRef.current;
@@ -209,17 +249,38 @@ export function useHls(
 
   // Связь вернулась — повторяем сами, не дожидаясь нажатия.
   useEffect(() => {
-    if (error !== "network") return;
+    if (error !== "network" && !stalled) return;
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
-  }, [error, retry]);
+  }, [error, stalled, retry]);
 
   const setLevel = useCallback((index: number) => {
+    if (native) {
+      const video = videoRef.current;
+      if (!video || !Number.isInteger(index) || index < -1 || index >= nativeSources.current.length) return;
+      const position = video.currentTime;
+      const playing = !video.paused;
+      const rate = video.playbackRate;
+      if (nativeSeek.current) video.removeEventListener("loadedmetadata", nativeSeek.current);
+      const restore = () => {
+        video.currentTime = position;
+        video.playbackRate = rate;
+        if (playing) void video.play().catch(() => undefined);
+        nativeSeek.current = null;
+      };
+      nativeSeek.current = restore;
+      video.addEventListener("loadedmetadata", restore, { once: true });
+      video.src = index === -1 ? src : nativeSources.current[index];
+      video.load();
+      setLevelState(index);
+      setError(null);
+      return;
+    }
     const hls = hlsRef.current;
-    if (!hls) return;
+    if (!hls || !Number.isInteger(index) || index < -1 || index >= hls.levels.length) return;
     hls.currentLevel = index;
     setLevelState(index);
-  }, []);
+  }, [native, videoRef, src]);
 
   return { native, levels, level, autoLevel, setLevel, error, stalled, retry };
 }

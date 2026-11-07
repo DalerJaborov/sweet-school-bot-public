@@ -70,10 +70,14 @@ export type PlayerProps = {
   nonce: number;
   /** Скрыть выбор качества (офлайн — одна дорожка; нативный HLS — не умеет). */
   showQuality: boolean;
+  /** Рубильник ускорения (view.speed): см. speed.ts и useHls. */
+  fast?: boolean;
+  /** Плеер исчерпал повторы и показал ошибку — экран может сменить источник. */
+  onFatalError?: () => void;
   onProgress: (positionSec: number, percent: number, via: ProgressVia) => void;
 };
 
-export function Player({ t, src, title, watermark, startAt, nonce, showQuality, onProgress }: PlayerProps) {
+export function Player({ t, src, title, watermark, startAt, nonce, showQuality, fast = false, onFatalError, onProgress }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const posRef = useRef(0);
@@ -91,7 +95,12 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
   const [captureBlocked, setCaptureBlocked] = useState(false);
   const [hint, setHint] = useState(() => !hintSeen());
 
-  const hls = useHls(videoRef, src, posRef);
+  const hls = useHls(videoRef, src, posRef, fast);
+  const fatalRef = useRef(onFatalError);
+  fatalRef.current = onFatalError;
+  useEffect(() => {
+    if (hls.error) fatalRef.current?.();
+  }, [hls.error]);
   const fs = useFullscreen(wrapperRef, videoRef);
   useWakeLock(videoRef, playing);
 
@@ -367,7 +376,7 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
         levels={hls.levels}
         level={hls.level}
         autoLevel={hls.autoLevel}
-        showQuality={showQuality && !hls.native}
+        showQuality={showQuality}
         fullscreen={fs.active}
         onPlayPause={playPause}
         onSeek={seekTo}
