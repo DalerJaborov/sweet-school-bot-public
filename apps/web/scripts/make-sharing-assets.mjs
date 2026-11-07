@@ -76,5 +76,6 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 manifest.name = site.brand; manifest.short_name = "Shirin"; manifest.lang = "tg";
 manifest.theme_color = accent; manifest.background_color = paper;
 manifest.icons.find((icon) => icon.purpose === "maskable").src = "/icons/icon-512-maskable.png";
+for (const icon of manifest.icons) icon.src = icon.src.split("?")[0] + "?v=20261108-brand";
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 console.log(`Brand assets: favicon ICO/SVG/PNG, app icons, ${pages.length * 2} localized social cards.`);
