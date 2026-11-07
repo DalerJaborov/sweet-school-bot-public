@@ -7,7 +7,11 @@ export function adminAccessConfig(source: NodeJS.ProcessEnv = process.env) {
     throw new Error("SCHOOL_ACCESS_REQUIRED must be 0 or 1");
   }
   if (source.SCHOOL_ACCESS_REQUIRED !== "1") {
-    if (source.NODE_ENV === "production") throw new Error("Production admin requires Cloudflare Access");
+    // В бою режим выбирается ЯВНО (0 = пароль и подпись Telegram, 1 = Cloudflare Access):
+    // забытая переменная не должна молча сменить способ входа.
+    if (source.NODE_ENV === "production" && source.SCHOOL_ACCESS_REQUIRED !== "0") {
+      throw new Error("Production admin mode must be explicit: SCHOOL_ACCESS_REQUIRED=0 or 1");
+    }
     return null;
   }
   const domain = source.SCHOOL_ACCESS_TEAM_DOMAIN ?? "";

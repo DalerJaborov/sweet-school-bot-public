@@ -3,6 +3,8 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "./env.js";
 import { getSetting, logError } from "./db.js";
+import { createRateLimiter } from "./services/rateLimit.js";
+import { clientIp } from "./course/access.js";
 
 /**
  * ВХОД В ПАНЕЛЬ ИЗ TELEGRAM — без пароля.
@@ -19,6 +21,11 @@ import { getSetting, logError } from "./db.js";
  */
 
 export const miniAppRouter = Router();
+
+/** Подпись не подобрать, но шум режем: 20 попыток с адреса и 100 всего за 15 минут. */
+const perIp = createRateLimiter({ limit: 20, windowMs: 15 * 60_000 });
+const overall = createRateLimiter({ limit: 100, windowMs: 15 * 60_000 });
+export const resetMiniAppLimits = () => { perIp.reset(); overall.reset(); };
 
 /** Подпись живёт недолго: даже перехваченная строка станет бесполезной. */
 const MAX_AGE_SECONDS = 24 * 3600;
@@ -65,8 +72,11 @@ async function isAllowed(userId: string): Promise<boolean> {
  * работает ровно как сайт — теми же запросами, с тем же токеном.
  */
 miniAppRouter.post("/admin/telegram-login", async (req, res) => {
-  if (process.env.SCHOOL_ACCESS_REQUIRED === "1" || process.env.NODE_ENV === "production") {
+  if (process.env.SCHOOL_ACCESS_REQUIRED === "1") {
     res.status(403).json({ error: "Вход через Telegram отключён. Откройте панель в браузере." }); return;
+  }
+  if (!perIp.hit(clientIp(req) ?? "unknown").ok || !overall.hit("all").ok) {
+    res.status(429).json({ error: "Слишком много попыток. Подождите немного." }); return;
   }
   const initData = typeof req.body?.initData === "string" ? req.body.initData : "";
   if (!initData) {

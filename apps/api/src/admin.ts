@@ -3,6 +3,8 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import nodeCrypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { adminAccessConfig } from "./adminAccess.js";
+import { createRateLimiter } from "./services/rateLimit.js";
+import { clientIp } from "./course/access.js";
 import { z } from "zod";
 import { env } from "./env.js";
 import { prisma, getSetting, logError } from "./db.js";
@@ -33,10 +35,25 @@ export const adminRouter = Router();
 
 // ---------- вход ----------
 
+// Защита входа по паролю: 8 попыток с адреса и 40 всего за 15 минут (общий счётчик — на
+// случай подделки адреса заголовком). Вход из Telegram от этого не страдает.
+const loginPerIp = createRateLimiter({ limit: 8, windowMs: 15 * 60_000 });
+const loginOverall = createRateLimiter({ limit: 40, windowMs: 15 * 60_000 });
+export const resetLoginLimits = () => { loginPerIp.reset(); loginOverall.reset(); };
+
+function samePassword(given: string, expected: string): boolean {
+  const a = nodeCrypto.createHash("sha256").update(given).digest();
+  const b = nodeCrypto.createHash("sha256").update(expected).digest();
+  return nodeCrypto.timingSafeEqual(a, b);
+}
+
 adminRouter.post("/admin/login", (req, res) => {
   if (adminAccessConfig()) { res.status(403).json({ error: "Используйте защищённый вход" }); return; }
-  const parsed = z.object({ password: z.string().min(1) }).safeParse(req.body);
-  if (!parsed.success || parsed.data.password !== env.adminPassword) {
+  if (!loginPerIp.hit(clientIp(req) ?? "unknown").ok || !loginOverall.hit("all").ok) {
+    res.status(429).json({ error: "Слишком много попыток. Подождите 15 минут или войдите через Telegram." }); return;
+  }
+  const parsed = z.object({ password: z.string().min(1).max(256) }).safeParse(req.body);
+  if (!parsed.success || !samePassword(parsed.data.password, env.adminPassword)) {
     res.status(401).json({ error: "Неверный пароль" });
     return;
   }
