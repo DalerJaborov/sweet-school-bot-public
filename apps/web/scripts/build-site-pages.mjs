@@ -149,7 +149,7 @@ function mediaImg(entry, alt, opts = {}) {
 /** Абсолютный URL картинки превью ссылки: своя на страницу+язык, иначе общая. */
 function ogImage(site, page, lang, media) {
   const own = media?.ogPages?.[page.slug]?.[lang];
-  return { url: site.origin + (own ?? site.ogImage), custom: Boolean(own) };
+  return { url: site.origin + (own ?? site.ogImage) + "?v=20261108-brand", custom: Boolean(own) };
 }
 
 // ---------- шапка / подвал ----------
@@ -792,8 +792,15 @@ function renderHead(site, page, lang, ctx) {
     ${og.custom ? '<meta property="og:image:width" content="1200" /><meta property="og:image:height" content="630" />' : ""}
     <meta name="twitter:card" content="${og.custom ? "summary_large_image" : "summary"}" />
     <meta name="twitter:image" content="${esc(og.url)}" />
-    <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:alt" content="${esc(L(page.h1, lang))}" />
+    <meta name="twitter:title" content="${esc(title)}" />
+    <meta name="twitter:description" content="${esc(desc)}" />
+    <meta name="twitter:image:alt" content="${esc(L(page.h1, lang))}" />
+    <link rel="icon" href="/favicon.ico?v=20261108-brand" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.svg?v=20261108-brand" type="image/svg+xml" sizes="any" />
+    <link rel="icon" href="/icons/favicon-32.png?v=20261108-brand" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png?v=20261108-brand" />
     <!-- Inter не блокирует отрисовку: подключаем как print, после загрузки
          переключаем на all. Системный шрифт виден сразу (display=swap). -->
     <script>try{if(localStorage.getItem('ssb_theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
