@@ -1,5 +1,5 @@
 import type { CourseInfo, LessonView } from "../api";
-import { AskFab } from "../components/AskFab";
+import { StudentNav } from "../components/StudentNav";
 import { Avatar } from "../components/Avatar";
 import { Banner } from "../components/Banner";
 import { ContactsBlock } from "../components/ContactsBlock";
@@ -95,7 +95,7 @@ export function Home({
       <ContactsBlock t={t} school={view?.school} />
       <StorageNote t={t} />
 
-      <AskFab t={t} onClick={onOpenChat} />
+      <StudentNav t={t} onQuestion={onOpenChat} onTools={single && (single.toolsData?.length ?? 0) > 0 ? () => onOpenTools(single) : undefined} />
     </div>
   );
 }

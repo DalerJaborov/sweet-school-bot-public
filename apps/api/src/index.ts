@@ -17,6 +17,7 @@ import { telegramRouter } from "./telegramWebhook.js";
 import { miniAppRouter } from "./miniApp.js";
 import { courseRouter } from "./course/router.js";
 import { siteRouter } from "./site/router.js";
+import { freeLessonRouter } from "./site/freeLesson.js";
 import { maybeSendDailyReport } from "./dailyReport.js";
 import { retryUncheckedReceipts } from "./receiptRetry.js";
 import { retryPendingAiReplies } from "./aiReplyRetry.js";
@@ -52,6 +53,7 @@ autoCatch(telegramRouter);
 autoCatch(miniAppRouter);
 autoCatch(courseRouter);
 autoCatch(siteRouter);
+autoCatch(freeLessonRouter);
 autoCatch(adminRouter);
 
 // Второй рубеж: если что-то всё-таки проскочит (сторонний код, таймер вне
@@ -91,6 +93,7 @@ app.use(webhookRouter);
 app.use(telegramRouter);
 app.use(courseRouter); // платформа курсов: своя сессия по куке, не админский JWT
 app.use(siteRouter); // публичное API сайта: кука посетителя, без токена
+app.use(freeLessonRouter);
 app.use(miniAppRouter); // до adminRouter: вход из Telegram идёт без токена
 app.use(adminRouter);
 

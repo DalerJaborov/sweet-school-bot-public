@@ -1,3 +1,4 @@
+import { freeLessonAdminRouter } from "./site/freeLessonAdmin.js";
 import express, { Router, type Request, type Response, type NextFunction } from "express";
 import nodeCrypto from "node:crypto";
 import jwt from "jsonwebtoken";
@@ -379,6 +380,8 @@ adminRouter.put("/admin/settings", async (req, res) => {
   await writeSettings(parsed.data);
   res.json({ ok: true });
 });
+
+adminRouter.use(freeLessonAdminRouter);
 
 /**
  * ПОДКЛЮЧИТЬ ВЕБХУК TELEGRAM С СЕКРЕТОМ.

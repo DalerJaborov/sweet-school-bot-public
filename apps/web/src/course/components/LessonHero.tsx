@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useReducedMotion } from "../hooks/useReducedMotion";
 import type { LessonView } from "../api";
 import { formatDuration, type Dict } from "../i18n";
 import { shareOrOpenImage } from "../shareImage";
@@ -22,6 +23,7 @@ import { shareOrOpenImage } from "../shareImage";
  */
 export function LessonHero({ t, lesson, onStart }: { t: Dict; lesson: LessonView; onStart: () => void }) {
   const [sharing, setSharing] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   // Тот же порядок фолбэков, что у карточки урока в сетке: сторис → обложка →
   // постер транскода → ничего (плейсхолдер), но самый вертикальный формат
@@ -49,7 +51,8 @@ export function LessonHero({ t, lesson, onStart }: { t: Dict; lesson: LessonView
             src={lesson.teaserUrl ?? undefined}
             poster={cover ?? undefined}
             muted
-            autoPlay
+            autoPlay={!reduceMotion}
+            preload={reduceMotion ? "none" : "metadata"}
             loop
             playsInline
           />

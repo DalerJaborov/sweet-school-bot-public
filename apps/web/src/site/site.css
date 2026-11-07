@@ -1,57 +1,4 @@
-/**
- * Стили публичного сайта shirinsweets.online.
- *
- * Токены скопированы из src/course/course.css (строки 1–60), чтобы сайт и
- * приложение ученицы выглядели одним продуктом: та же малина #c9376b, те же
- * радиусы 12/16/20/24, те же тени, Inter. Тёмной темы у сайта нет намеренно:
- * сайт — витрина, и она должна совпадать со скриншотами в рекламе.
- *
- * Мобильный сначала: одна колонка, крупный текст, цели для пальца 48px;
- * от 720px — две колонки в сетках, от 1024px — контейнер 1080px.
- */
-
-:root {
-  color-scheme: light;
-
-  --c-bg: #fff8f3;
-  --c-surface: #ffffff;
-  --c-ink: #2b1d1f;
-  --c-muted: #7a6b6c;
-  --c-line: #f0e3da;
-  --c-accent: #c9376b;
-  --c-accent-2: #e8628f;
-  --c-accent-ink: #ffffff;
-  --c-accent-soft: #fbe8ef;
-  --c-gold: #c9a227;
-  --c-gold-soft: #f7efd8;
-  --c-ok: #1f8a4c;
-  --c-ok-soft: #e3f5ea;
-  --c-warn: #8a5a00;
-  --c-warn-soft: #fdf1dc;
-  --c-danger: #b3261e;
-  --c-danger-soft: #fbe3e1;
-  --c-focus: #4f46e5;
-  --g-hero: linear-gradient(135deg, var(--c-accent) 0%, var(--c-accent-2) 100%);
-
-  --r-1: 12px;
-  --r-2: 16px;
-  --r-3: 20px;
-  --r-4: 24px;
-  --e-1: 0 1px 2px rgba(23, 24, 28, 0.04), 0 6px 20px rgba(23, 24, 28, 0.06);
-  --e-2: 0 10px 30px rgba(23, 24, 28, 0.14);
-  --e-hero: 0 12px 28px rgba(201, 55, 107, 0.32);
-  --c-tap: 48px;
-  --dur: 180ms;
-  --safe-b: env(safe-area-inset-bottom, 0px);
-  --container: 1080px;
-
-  /* Шрифты: Inter — текст (уже используется приложением ученицы), Montserrat —
-     заголовки/цены. Montserrat выбран как display-шрифт из-за проверенного
-     покрытия subset=cyrillic-ext, где живут таджикские буквы ғ ққ ҳ ҷ ӯ —
-     без этого подмножества они рисуются fallback-шрифтом и ломают ритм. */
-  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
-  --font-display: "Montserrat", var(--font-body);
-}
+@import "../tokens.css";
 
 @media (prefers-reduced-motion: reduce) {
   :root {
@@ -108,7 +55,7 @@ svg {
   height: auto;
   display: block;
 }
-/* <picture> — просто обёртка над <img>: не должна ломать flex/grid-раскладку. */
+
 picture {
   display: contents;
 }
@@ -159,7 +106,7 @@ a {
   margin-inline: auto;
 }
 
-/* ---- типографика ---- */
+
 
 .h1,
 .h2 {
@@ -168,19 +115,19 @@ a {
 }
 .h1 {
   font-size: clamp(30px, 6vw, 48px);
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.08;
 }
 .h2 {
   font-size: clamp(24px, 4.2vw, 34px);
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.025em;
   line-height: 1.15;
 }
 .h3 {
   font-size: 19px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.3;
 }
 .lead {
@@ -194,9 +141,9 @@ a {
 .eyebrow {
   display: inline-block;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--c-accent);
   margin-bottom: 12px;
 }
@@ -211,7 +158,7 @@ a {
   margin-top: 6px;
 }
 
-/* ---- кнопки ---- */
+
 
 .btn {
   display: inline-flex;
@@ -224,11 +171,11 @@ a {
   border-radius: 999px;
   background: var(--c-accent);
   color: var(--c-accent-ink);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 16px;
   text-decoration: none;
   cursor: pointer;
-  box-shadow: 0 6px 18px rgba(201, 55, 107, 0.28);
+  box-shadow: 0 6px 18px var(--overlay-black-8);
   transition:
     transform var(--dur) ease,
     box-shadow var(--dur) ease,
@@ -237,7 +184,7 @@ a {
   user-select: none;
 }
 .btn:hover {
-  background: #b82f60;
+  background: var(--c-accent);
 }
 .btn:active {
   transform: scale(0.97);
@@ -262,7 +209,7 @@ a {
   box-shadow: none;
 }
 .btn-soft:hover {
-  background: #f7d6e2;
+  background: var(--c-accent-soft);
 }
 .btn-lg {
   min-height: 56px;
@@ -278,13 +225,13 @@ a {
   gap: 12px;
 }
 
-/* ---- шапка ---- */
+
 
 .site-header {
   position: sticky;
   top: 0;
   z-index: 40;
-  background: rgba(255, 248, 243, 0.86);
+  background: var(--c-bg);
   -webkit-backdrop-filter: saturate(160%) blur(12px);
   backdrop-filter: saturate(160%) blur(12px);
   border-bottom: 1px solid var(--c-line);
@@ -303,7 +250,7 @@ a {
   gap: 10px;
   color: var(--c-ink);
   text-decoration: none;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.02em;
   font-size: 18px;
   min-height: var(--c-tap);
@@ -330,7 +277,7 @@ a {
   font-weight: 600;
   color: var(--c-muted);
   letter-spacing: 0.1em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 .site-nav {
   display: none;
@@ -383,7 +330,7 @@ a {
   border: none;
   background: transparent;
   color: var(--c-muted);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 14px;
   text-decoration: none;
   cursor: pointer;
@@ -486,7 +433,7 @@ a {
   scroll-margin-top: 96px;
 }
 
-/* ---- секции ---- */
+
 
 .section {
   padding: 48px 0;
@@ -544,7 +491,7 @@ a {
   }
 }
 
-/* ---- герой ---- */
+
 
 .hero {
   padding: 32px 0 40px;
@@ -554,8 +501,7 @@ a {
   display: grid;
   gap: 20px;
 }
-/* Фото — герой десктопного макета: карточка слева, кадр 4:5 справа.
-   На мобильном фото уходит под текст, чтобы CTA были видны сразу. */
+
 @media (min-width: 860px) {
   .hero-grid.has-photo {
     grid-template-columns: 1.15fr 0.85fr;
@@ -578,15 +524,13 @@ a {
   object-fit: cover;
   background: var(--c-accent-soft);
 }
-/* Мягкое малиновое свечение позади фото десерта — брендовый акцент вместо
-   голой тени, брифом заявлено явно («soft raspberry glow»). Живёт в
-   отдельном слое без overflow:hidden, иначе его обрежет рамка фото. */
+
 .hero-photo-glow {
   position: absolute;
   inset: -12%;
   z-index: 0;
   border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(201, 55, 107, 0.5), rgba(201, 55, 107, 0) 72%);
+  background: radial-gradient(closest-side, var(--overlay-black-8), var(--overlay-black-8) 72%);
   filter: blur(10px);
 }
 .hero-card {
@@ -606,14 +550,14 @@ a {
   width: 280px;
   height: 280px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--overlay-white-14);
   pointer-events: none;
 }
 .hero-card .eyebrow {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--overlay-white-85);
 }
 .hero-card .lead {
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--overlay-white-92);
   margin-top: 14px;
 }
 .hero-card .btn-row {
@@ -627,7 +571,7 @@ a {
   margin-top: 18px;
   font-size: 14px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
+  color: var(--overlay-white-92);
 }
 .trust-row li {
   display: inline-flex;
@@ -638,25 +582,22 @@ a {
 .hero-card .btn {
   background: var(--c-surface);
   color: var(--c-accent);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 20px var(--overlay-black-15);
 }
 .hero-card .btn:hover {
-  background: #fff3f7;
+  background: var(--c-accent-soft);
 }
 .hero-card .btn-ghost {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--overlay-white-16);
   color: var(--c-accent-ink);
-  border-color: rgba(255, 255, 255, 0.35);
+  border-color: var(--overlay-white-35);
   box-shadow: none;
 }
 .hero-card .btn-ghost:hover {
-  background: rgba(255, 255, 255, 0.26);
+  background: var(--overlay-white-26);
 }
 
-/* ---- герой-витрина одного курса (heroBold) — полноэкранное фото десерта,
-   крупный заголовок поверх, круглая печать-сертификат, бегущая строка фактов
-   снизу. Приём премиальных лендингов кондитерских брендов, в токенах бренда
-   Ширин (малиновый/золото), не донора-референса. */
+
 .hero.hero-bold {
   position: relative;
   padding: 0;
@@ -686,7 +627,7 @@ a {
 .hero-bold-scrim {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(23, 14, 16, 0.88) 0%, rgba(23, 14, 16, 0.58) 36%, rgba(23, 14, 16, 0.1) 60%, rgba(23, 14, 16, 0.4) 100%);
+  background: linear-gradient(180deg, var(--overlay-black-88) 0%, var(--overlay-black-58) 36%, var(--overlay-black-10) 60%, var(--overlay-black-40) 100%);
 }
 .hero-bold-overlay {
   position: relative;
@@ -701,43 +642,42 @@ a {
 }
 .hero-bold-card {
   max-width: 620px;
-  color: #fff;
+  color: var(--c-white);
 }
 .eyebrow-light {
   display: inline-block;
-  background: rgba(255, 255, 255, 0.14);
-  border: 1px solid rgba(255, 255, 255, 0.32);
-  color: #fff;
+  background: var(--overlay-white-14);
+  border: 1px solid var(--overlay-white-32);
+  color: var(--c-white);
   padding: 6px 14px;
   border-radius: 999px;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 13px;
 }
 .hero-bold-card .h1 {
   font-size: clamp(30px, 6vw, 54px);
-  font-weight: 900;
+  font-weight: 600;
   line-height: 1.05;
   letter-spacing: -0.01em;
-  text-transform: uppercase;
+  text-transform: none;
   margin-top: 14px;
-  color: #fff;
-  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
+  color: var(--c-white);
+  text-shadow: 0 2px 24px var(--overlay-black-40);
 }
 .lead-light {
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--overlay-white-94);
   margin-top: 16px;
   font-size: 17px;
   max-width: 520px;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.35);
+  text-shadow: 0 1px 12px var(--overlay-black-35);
 }
 .hero-bold .btn-row {
   margin-top: 26px;
 }
 .hero-bold .trust-row {
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--overlay-white-88);
 }
-/* Круглая печать-сертификат — текст по кругу через SVG textPath, не
-   картинка: масштабируется без потери резкости на ретине. */
+
 .hero-stamp {
   position: absolute;
   right: 0;
@@ -753,7 +693,7 @@ a {
 }
 .hero-stamp text {
   font-size: 8.4px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.12em;
   fill: currentColor;
 }
@@ -770,13 +710,12 @@ a {
     display: none;
   }
 }
-/* Бегущая строка фактов — сплошная полоса под героем, дорожка удвоена и
-   анимация уезжает ровно на половину своей ширины, стык копий незаметен. */
+
 .hero-ticker {
   position: relative;
   z-index: 1;
   background: var(--c-ink);
-  color: #fff;
+  color: var(--c-white);
   overflow: hidden;
   padding: 12px 0;
 }
@@ -785,7 +724,7 @@ a {
   width: max-content;
   gap: 16px;
   white-space: nowrap;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 14px;
   animation: hero-ticker-scroll 26s linear infinite;
 }
@@ -825,7 +764,7 @@ a {
 .stat b {
   display: block;
   font-size: clamp(22px, 5vw, 30px);
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.03em;
   color: var(--c-accent);
   line-height: 1.1;
@@ -848,7 +787,7 @@ a {
   }
 }
 
-/* ---- «обо мне» ---- */
+
 
 .about {
   display: grid;
@@ -866,9 +805,7 @@ a {
   align-items: center;
   justify-content: center;
 }
-/* Декоративное «пятно» позади рамки — брифом заявлено явно («illustration
-   in a rounded frame with a decorative blob»). Родитель без overflow:hidden,
-   иначе пятно обрежется по краю рамки. */
+
 .about-figure::before {
   content: "";
   position: absolute;
@@ -904,7 +841,7 @@ a {
   }
 }
 
-/* ---- форматы, факты, шаги ---- */
+
 
 .feature {
   display: flex;
@@ -973,7 +910,7 @@ a {
   border-radius: 50%;
   background: var(--c-accent);
   color: var(--c-accent-ink);
-  font-weight: 800;
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -985,7 +922,7 @@ a {
   color: var(--c-muted);
 }
 
-/* ---- карточки курсов ---- */
+
 
 .course-card {
   display: flex;
@@ -1053,7 +990,7 @@ a {
 }
 .price {
   font-size: 28px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.03em;
   margin-top: auto;
 }
@@ -1063,8 +1000,7 @@ a {
   color: var(--c-muted);
   margin-left: 8px;
 }
-/* Цена как крупная «таблетка» — брифом заявлено явно («price as a big
-   pill»), а не голая строка цифр среди чипов и текста. */
+
 .price-pill {
   display: inline-flex;
   align-items: baseline;
@@ -1077,11 +1013,11 @@ a {
   font-family: var(--font-display);
 }
 .bundle-card .price-pill {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--overlay-white-20);
   color: var(--c-accent-ink);
 }
 .bundle-card .price-pill s {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--overlay-white-75);
 }
 .bundle-card {
   background: var(--g-hero);
@@ -1090,17 +1026,17 @@ a {
 }
 .bundle-card .course-body p,
 .bundle-card .chip {
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--overlay-white-90);
 }
 .bundle-card .chip {
-  background: rgba(255, 255, 255, 0.18);
+  background: var(--overlay-white-18);
 }
 .bundle-card .btn {
   background: var(--c-surface);
   color: var(--c-accent);
 }
 .bundle-card .price s {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--overlay-white-75);
 }
 
 .skeleton {
@@ -1115,7 +1051,7 @@ a {
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  background: linear-gradient(90deg, transparent, var(--overlay-white-60), transparent);
   animation: shimmer 1.4s infinite;
 }
 @keyframes shimmer {
@@ -1145,7 +1081,7 @@ a {
   color: var(--c-ok);
 }
 
-/* ---- аккордеон (меню, FAQ) — нативный details, без JS ---- */
+
 
 .acc {
   display: grid;
@@ -1164,7 +1100,7 @@ a {
   gap: 12px;
   min-height: 56px;
   padding: 12px 18px;
-  font-weight: 700;
+  font-weight: 600;
   border-radius: var(--r-3);
 }
 .acc summary::-webkit-details-marker {
@@ -1207,8 +1143,7 @@ a {
   font-size: 22px;
 }
 
-/* Фотокарусель меню: горизонтальный скролл на мобильном (snap по карточкам),
-   сетка от 720px — там уже есть место, скролл не нужен. */
+
 .dessert-scroll {
   display: flex;
   gap: 12px;
@@ -1241,8 +1176,7 @@ a {
   transform: translateY(-3px);
   box-shadow: var(--e-2);
 }
-/* Десерт без фото: та же плитка, эмодзи на кремовом градиенте — ряд ровный,
-   заглушка не выглядит «дыркой» рядом с фото. */
+
 .dessert-photo .ico {
   display: flex;
   align-items: center;
@@ -1251,8 +1185,7 @@ a {
   background: linear-gradient(160deg, var(--c-surface), var(--c-accent-soft));
   border: 1px solid var(--c-line);
 }
-/* «Показать все 21» докручивает недостающие десерты сюда — уже сеткой, а
-   не горизонтальным скроллом, раз все карточки теперь на виду. */
+
 .dessert-more {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -1282,7 +1215,7 @@ a {
   }
 }
 
-/* «Что понадобится»: 2 колонки на мобильном, 5 — от 1024px (бриф). */
+
 .tools-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1314,7 +1247,7 @@ a {
   color: var(--c-muted);
 }
 
-/* ---- офлайн-курс и форма ---- */
+
 
 .offline {
   display: grid;
@@ -1333,7 +1266,7 @@ a {
   margin: 8px 0 16px;
   font-family: var(--font-display);
   font-size: 34px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.03em;
 }
 .price-tag small {
@@ -1379,7 +1312,7 @@ a {
   color: var(--c-muted);
 }
 
-/* ---- сертификат ---- */
+
 
 .cert {
   display: grid;
@@ -1399,15 +1332,13 @@ a {
   overflow: hidden;
   border: 3px solid var(--c-gold);
 }
-/* Стилизованная «печать» вместо фото — декоративные кольца по углам,
-   намёк на сертификатную розетку без реального изображения, тонкий золотой
-   акцент вместо белого — подчёркивает «премиальность» документа. */
+
 .cert-art::before,
 .cert-art::after {
   content: "";
   position: absolute;
   border-radius: 50%;
-  border: 2px solid rgba(201, 162, 39, 0.55);
+  border: 2px solid var(--c-line);
 }
 .cert-art::before {
   width: 140px;
@@ -1428,7 +1359,7 @@ a {
   }
 }
 
-/* ---- отзывы ---- */
+
 
 .review {
   display: flex;
@@ -1455,7 +1386,7 @@ a {
 }
 .review-who b {
   color: var(--c-ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 .review .avatar {
   width: 36px;
@@ -1463,17 +1394,17 @@ a {
   border-radius: 50%;
   background: var(--c-accent-soft);
   color: var(--c-accent);
-  font-weight: 700;
+  font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .stars {
-  color: #f0a500;
+  color: var(--c-warn);
   letter-spacing: 2px;
 }
 
-/* ---- контакты ---- */
+
 
 .contacts {
   list-style: none;
@@ -1518,7 +1449,7 @@ a {
   font-size: 13px;
 }
 
-/* ---- CTA-полоса ---- */
+
 
 .cta-band {
   text-align: center;
@@ -1531,7 +1462,7 @@ a {
   justify-content: center;
 }
 
-/* ---- крошки ---- */
+
 
 .crumbs {
   list-style: none;
@@ -1550,7 +1481,7 @@ a {
   color: var(--c-muted);
 }
 
-/* ---- подвал ---- */
+
 
 .site-footer {
   margin-top: 40px;
@@ -1569,7 +1500,7 @@ a {
 .footer-phone a {
   font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--c-ink);
   text-decoration: none;
@@ -1577,7 +1508,7 @@ a {
 .footer-phone a:hover {
   color: var(--c-accent);
 }
-/* 4 круглые кнопки соцсетей с инлайн-SVG (бриф п.12). */
+
 .social-row {
   list-style: none;
   display: flex;
@@ -1628,7 +1559,7 @@ a {
   }
 }
 
-/* ---- плавающая кнопка чата и виджет ---- */
+
 
 .chat-fab {
   position: fixed;
@@ -1641,13 +1572,13 @@ a {
   border: none;
   background: var(--c-accent);
   color: var(--c-accent-ink);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 15px;
   display: inline-flex;
   align-items: center;
   gap: 10px;
   cursor: pointer;
-  box-shadow: 0 10px 28px rgba(201, 55, 107, 0.4);
+  box-shadow: 0 10px 28px var(--overlay-black-8);
   transition: transform var(--dur) ease;
 }
 .chat-fab:active {
@@ -1656,12 +1587,7 @@ a {
 .chat-fab[hidden] {
   display: none;
 }
-/* На телефоне подпись прячем — круглая кнопка-иконка (как у WhatsApp/Intercom)
-   перекрывает намного меньше контента, чем широкая плашка с текстом; имя
-   кнопки для скринридера остаётся через aria-label. С 720px места достаточно,
-   возвращаем подпись и обычную форму пилюли. Раньше здесь FAB поднимался над
-   нижней липкой CTA-панелью — панель убрана (владелец 04.09.2026), поднимать
-   больше не над чем. */
+
 @media (max-width: 719px) {
   .chat-fab {
     width: 56px;
@@ -1678,7 +1604,7 @@ a {
   position: fixed;
   inset: 0;
   z-index: 70;
-  background: rgba(23, 24, 28, 0.35);
+  background: var(--overlay-black-35);
 }
 .chat-panel {
   position: fixed;
@@ -1697,7 +1623,7 @@ a {
 @keyframes sheet-in {
   from {
     transform: translateY(24px);
-    opacity: 0;
+    opacity: 1;
   }
 }
 @media (min-width: 720px) {
@@ -1729,11 +1655,11 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-weight: 800;
+  font-weight: 600;
 }
 .chat-head h2 {
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
 }
 .chat-head p {
   font-size: 13px;
@@ -1827,7 +1753,7 @@ a {
   background: var(--c-accent);
   color: var(--c-accent-ink) !important;
   text-decoration: none;
-  font-weight: 700;
+  font-weight: 600;
 }
 .typing {
   align-self: flex-start;
@@ -1930,11 +1856,9 @@ a {
   font-weight: 600;
 }
 
-/* ---- липучий CTA снизу (мобильный) ---- */
 
-/* Нижняя панель ОТКЛЮЧЕНА (владелец, 04.09): вместе с кнопкой чата и
-   кнопками в hero три кнопки внизу телефона съедали четверть экрана.
-   Кнопка чата «Спросить / Купить» покрывает оба сценария. */
+
+
 .sticky-cta {
   display: none !important;
   position: fixed;
@@ -1947,7 +1871,7 @@ a {
   padding: 10px 16px calc(10px + var(--safe-b));
   background: var(--c-surface);
   border-top: 1px solid var(--c-line);
-  box-shadow: 0 -6px 20px rgba(23, 24, 28, 0.08);
+  box-shadow: 0 -6px 20px var(--overlay-black-8);
 }
 .sticky-cta .btn {
   flex: 1;
@@ -1963,15 +1887,109 @@ a {
     display: none;
   }
 }
-/* Чат открыт (data-chat-open="1" на <html>, выставляет чат-виджет) — не
-   перекрываем его своей панелью. */
+
 :root[data-chat-open="1"] .sticky-cta {
   display: none;
 }
-/* Резерв места снизу под липучую панель на мобильном, чтобы контент/подвал
-   не оказались под ней. */
+
 @media (max-width: 719px) {
   body {
     padding-bottom: calc(64px + var(--safe-b));
   }
 }
+
+
+
+/* Layout only: colours and fonts belong to tokens.css. */
+.theme-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 48px; border: 0; border-radius: var(--r-1); color: var(--c-ink); background: var(--c-surface); cursor: pointer; }
+.site-header { background: var(--c-bg); backdrop-filter: none; border: 0; }
+.logo-mark { background: var(--c-ink); color: var(--c-surface); box-shadow: none; }
+.logo small { letter-spacing: 0; text-transform: none; }
+.hero { padding-block: 28px 40px; }
+.hero-grid { gap: 28px; }
+.hero-card { background: transparent; color: var(--c-ink); padding: 0; border-radius: 0; box-shadow: none; overflow: visible; }
+.hero-card::after, .hero-photo-glow { display: none; }
+.h1 { font-size: clamp(32px, 3.8vw, 50px); line-height: 1.12; font-weight: 600; letter-spacing: -.035em; text-wrap: balance; }
+.h2 { font-size: clamp(26px, 3vw, 36px); font-weight: 600; letter-spacing: -.025em; }
+.h3 { font-weight: 600; }
+.hero-card .lead { color: var(--c-muted); font-size: 16px; max-width: 54ch; line-height: 1.6; }
+.hero-card .trust-row { color: var(--c-muted); font-weight: 400; }
+.hero-card .btn, .btn { background: var(--c-accent); color: var(--c-accent-ink); box-shadow: none; border: 0; border-radius: var(--r-1); min-height: 48px; }
+.hero-card .btn:hover, .btn:hover { background: var(--c-accent); filter: brightness(.95); box-shadow: none; }
+.hero-card .btn-ghost, .btn-ghost, .btn-soft { background: var(--c-surface); color: var(--c-ink); border: 0; }
+.hero-card .btn-ghost:hover { background: var(--c-surface); }
+.hero-photo { width: 100%; max-width: none; aspect-ratio: 4 / 3; }
+.hero-photo picture { display: block; width: 100%; height: 100%; }
+.hero-photo img { box-shadow: none; border-radius: var(--r-4); }
+.stats { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 24px; }
+.stat { background: transparent; box-shadow: none; border: 0; padding: 16px 0; text-align: left; }
+.card { border: 0; border-radius: var(--r-3); box-shadow: var(--e-1); }
+.section { padding-block: 40px; }
+.feature { background: transparent; box-shadow: none; padding-inline: 0; }
+.course-card { overflow: hidden; }
+.course-cover { aspect-ratio: 4 / 3; background: var(--c-bg); }
+.course-body { padding: 24px; gap: 16px; }
+.course-body > p { color: var(--c-muted); }
+.course-syllabus { font-size: 15px; }
+.course-syllabus summary { cursor: pointer; min-height: 48px; display: flex; align-items: center; font-weight: 500; }
+.course-syllabus ul { padding-left: 20px; display: grid; gap: 8px; margin-bottom: 12px; }
+.course-preview { margin: 0; font-size: 15px; line-height: 1.6; }
+.chip { border: 0; background: var(--c-bg); color: var(--c-muted); font-weight: 400; }
+.price-pill { background: transparent; color: var(--c-ink); padding: 0; border-radius: 0; }
+.bundle-card { background: var(--c-surface); color: var(--c-ink); }
+.bundle-card .course-cover, .bundle-card .chip { background: var(--c-bg); color: var(--c-ink); }
+.bundle-card p, .bundle-card .price, .bundle-card s { color: var(--c-ink); }
+.dessert-grid { gap: 20px; }
+.dessert-card { border: 0; box-shadow: none; }
+.dessert-name { font-weight: 500; }
+.site-footer { background: var(--c-surface); color: var(--c-ink); }
+.lang-pill, .site-nav a, .mobile-nav a { min-height: 48px; display: inline-flex; align-items: center; justify-content: center; }
+.lang-pill { min-width: 48px; }
+.lang-pill.on { background: var(--c-ink); color: var(--c-surface); }
+.eyebrow { display: none; }
+@media (min-width: 860px) {
+  .hero-grid.has-photo { grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .hero-photo { aspect-ratio: 1; }
+  .hero { padding-block: 48px; }
+  .section { padding-block: 56px; }
+}
+@media (max-width: 600px) {
+  .site-header .wrap { gap: 8px; flex-wrap: wrap; }
+  .logo { font-size: 16px; }
+  .logo-mark { width: 36px; height: 36px; }
+  .logo small { display: none; }
+  .header-tools { gap: 4px; }
+  .header-tools .lang-switch { gap: 0; }
+  .header-tools .lang-pill { min-width: 48px; }
+  .hero-grid { gap: 24px; }
+  .hero-card .lead { font-size: 15px; }
+  .hero-card .btn-row { margin-top: 20px; }
+  .trust-row { display: none; }
+  .hero-photo { aspect-ratio: 16 / 9; }
+  .course-body { padding: 20px; }
+  .btn-row { align-items: stretch; }
+  .btn-row .btn { flex: 1 1 100%; }
+  .stats { gap: 16px; }
+}
+
+.free-lesson { margin: 24px 0 48px; padding: 24px; display: grid; gap: 24px; }
+.free-lesson h3 { margin-block: 12px; }
+.free-lesson form { display: grid; gap: 16px; }
+.free-lesson label { display: grid; gap: 8px; }
+.free-lesson input { min-height: 48px; width: 100%; border: 1px solid var(--c-line); border-radius: var(--r-1); background: var(--c-bg); color: var(--c-ink); padding: 12px; font: inherit; }
+.free-lesson img, .free-lesson video { width: 100%; border-radius: var(--r-2); height: auto; }
+.free-recipe { white-space: pre-wrap; margin-block: 16px; }
+@media(min-width: 860px) { .free-lesson { grid-template-columns: 1fr 1fr; padding: 32px; } }
+
+.feature-icon, .facts .ico, .dessert-grid .ico, .contact .ico { color: var(--c-muted); background: var(--c-bg); }
+.cert-art { border: 0; background: var(--c-bg); box-shadow: none; }
+.cert-art::before, .cert-art::after { display: none; }
+.cert-art svg { width: 64px; height: 64px; }
+.stat b { color: var(--c-ink); }
+.hero-card .h1 { font-size: clamp(32px, 3.8vw, 50px); }
+
+.chat-head .avatar { background: var(--c-bg); color: var(--c-ink); }
+.card-soft, .cta-band { background: var(--c-surface); color: var(--c-ink); }
+.course-cover > svg { color: var(--c-muted); width: 48px; height: 48px; }
+
+.social { width: 48px; height: 48px; }

@@ -268,7 +268,7 @@ function CornerBlobs() {
           aria-hidden="true"
           focusable="false"
         >
-          <path d={path} fill="#c9376b" />
+          <path d={path} fill="currentColor" />
         </svg>
       ))}
     </>

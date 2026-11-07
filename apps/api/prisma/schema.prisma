@@ -636,6 +636,16 @@ model QaExample {
 
 /// Курс как товар. Заменяет константы COURSE50/COURSE70 в courses.ts: пока они
 /// в коде, добавить третий курс нельзя без правки и деплоя.
+model FreeLessonLead {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String
+  lang      String
+  lessonId  String
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
 model Course {
   id          String     @id @default(uuid())
   /// Стабильный код, совпадает с Purchase.course сегодня: "COURSE50" | "COURSE70".

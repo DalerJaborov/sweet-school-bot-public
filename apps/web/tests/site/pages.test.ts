@@ -58,17 +58,17 @@ describe("Статичные страницы сайта", () => {
     expect(body).toContain('id="mobile-nav"');
   });
 
-  it("картинки: герой-коллаж с прелоадом и AVIF, своё og:image на каждой странице и языке", () => {
+  it("картинки: фото десерта с прелоадом и AVIF, своё og:image на каждой странице и языке", () => {
     const body = files.get("site.html")!;
     // LCP: прелоад совпадает с кандидатами <img> (imagesrcset/imagesizes), иначе качается дважды.
     expect(body).toMatch(
-      /<link rel="preload" as="image" href="\/img\/covers\/hero\.avif" type="image\/avif" imagesrcset="[^"]+" imagesizes="[^"]+" fetchpriority="high" \/>/,
+      /<link rel="preload" as="image" href="\/img\/desserts\/chizkejk-dubajskij-shokolad\.avif" type="image\/avif" imagesrcset="[^"]+" imagesizes="[^"]+" fetchpriority="high" \/>/,
     );
     expect(body).toContain(
-      '<picture><source type="image/avif" srcset="/img/covers/hero-sm.avif 500w, /img/covers/hero.avif 1000w"',
+      '<picture><source type="image/avif" srcset="/img/desserts/chizkejk-dubajskij-shokolad-sm.avif 627w, /img/desserts/chizkejk-dubajskij-shokolad.avif 1254w"',
     );
     expect(body).toMatch(
-      /<img src="\/img\/covers\/hero\.webp"[^>]*width="1000" height="1250"[^>]*fetchpriority="high"/,
+      /<img src="\/img\/desserts\/chizkejk-dubajskij-shokolad\.webp"[^>]*width="1254" height="1254"[^>]*fetchpriority="high"/,
     );
     // Плитки десертов: явные размеры и lazy — без сдвига раскладки.
     expect(body).toMatch(

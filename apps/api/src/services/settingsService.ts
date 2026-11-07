@@ -9,6 +9,8 @@ import { getSetting, setSetting } from "../db.js";
  */
 
 export const SETTING_KEYS = [
+  "freeLessonEnabled",
+  "freeLessonId",
   "igToken",
   "appSecret",
   "verifyToken",

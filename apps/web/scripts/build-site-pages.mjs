@@ -178,6 +178,7 @@ function renderHeader(site, page, lang, ctx) {
     </a>
     <nav class="site-nav" aria-label="${esc(ui.menu)}">${navLinks()}</nav>
     <div class="header-tools">
+      <button type="button" class="theme-toggle" data-theme-toggle aria-label="${lang === 'tg' ? 'Мавзӯи торик' : 'Тёмная тема'}" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></svg></button>
       <div class="lang-switch" role="group" aria-label="${esc(ui.langLabel)}">${langSwitch}</div>
       <a class="btn btn-ghost header-cta" href="/course">${esc(ui.ctaLessons)}</a>
       <a class="btn header-cta" href="${esc(ctx.wa)}" data-chat="${esc(ui.ctaBuyPrefill)}">${esc(ui.ctaBuy)}</a>
@@ -277,7 +278,7 @@ function trustRow(site, lang) {
     { icon: "📱", text: { ru: "с телефона", tg: "аз телефон" } },
   ].filter(Boolean);
   return `<ul class="trust-row">${items
-    .map((it) => `<li><span aria-hidden="true">${it.icon}</span>${esc(L(it.text, lang))}</li>`)
+    .map((it) => `<li><span aria-hidden="true">${contentIcon(it.icon)}</span>${esc(L(it.text, lang))}</li>`)
     .join("")}</ul>`;
 }
 
@@ -288,8 +289,25 @@ const HERO_SIZES = "(min-width: 860px) 420px, 100vw";
  *  коллаж media.hero, иначе первое фото десерта. */
 function heroMedia(media, page) {
   if (page?.slug && media?.heroPages?.[page.slug]?.src) return media.heroPages[page.slug];
+  if (media?.desserts?.["Чизкейк «Дубайский шоколад»"]) return media.desserts["Чизкейк «Дубайский шоколад»"];
   if (media?.hero?.src) return media.hero;
   return (media?.desserts && Object.values(media.desserts)[0]) || null;
+}
+
+
+// Shared outline vocabulary for decorative content; source copy remains intact.
+function contentIcon(symbol) {
+  const paths = {
+    phone: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4"/>',
+    award: '<circle cx="12" cy="8" r="5"/><path d="m8 12-2 10 6-3 6 3-2-10"/>',
+    home: '<path d="m3 10 9-7 9 7v11H3V10Z M9 21v-8h6v8"/>',
+    book: '<path d="M3 4h6a4 4 0 0 1 3 2 4 4 0 0 1 3-2h6v16h-6a4 4 0 0 0-3 2 4 4 0 0 0-3-2H3V4Z M12 6v16"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    chat: '<path d="M3 4h18v13H9l-6 4V4Z"/>',
+    cake: '<path d="M3 11h18v10H3V11Z M6 11V7h12v4 M9 7V3m6 4V3 M3 15c3 3 5-3 9 0s6-3 9 0"/>',
+  };
+  const kind = /📱|🎬/.test(symbol) ? 'phone' : /🏅|🎓/.test(symbol) ? 'award' : /🏠|🏡|🗺|📍/.test(symbol) ? 'home' : /💬|📩/.test(symbol) ? 'chat' : /📖|📚/.test(symbol) ? 'book' : /✓|✅|♾/.test(symbol) ? 'check' : 'cake';
+  return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[kind]}</svg>`;
 }
 
 const SECTIONS = {
@@ -300,7 +318,7 @@ const SECTIONS = {
     // раскладка герой-карточки (grid) одинаково работает и с фото, и без него.
     const heroEntry = heroMedia(media, page);
     const photo = heroEntry
-      ? `<div class="hero-photo"><span class="hero-photo-glow" aria-hidden="true"></span>${mediaImg(
+      ? `<div class="hero-photo">${mediaImg(
           heroEntry,
           L(heroEntry.alt, lang) || L(page.h1, lang),
           {
@@ -310,12 +328,12 @@ const SECTIONS = {
         )}</div>`
       : "";
     return `<section class="hero"><div class="wrap"><div class="hero-grid${photo ? " has-photo" : ""}"><div class="hero-card">
-      ${s.eyebrow ? `<span class="eyebrow">${esc(L(s.eyebrow, lang))}</span>` : ""}
+
       <h1 class="h1">${esc(L(page.h1, lang))}</h1>
       <p class="lead">${esc(L(s.lead, lang))}</p>
       <div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>
       ${trustRow(site, lang)}
-    </div>${photo}</div>${s.stats ? statsList(site, lang) : ""}</div></section>`;
+    </div>${photo}</div>${s.stats ? statsList(site, lang) : ""}</div></section><div class="wrap" id="free-lesson-island"></div>`;
   },
 
   /**
@@ -327,51 +345,14 @@ const SECTIONS = {
    * Без фото ведёт себя как обычный hero (без photo-класса).
    */
   heroBold(s, lang, ctx) {
-    const { site, page, media } = ctx;
-    const heroEntry = heroMedia(media, page);
-    const photo = heroEntry
-      ? mediaImg(heroEntry, L(heroEntry.alt, lang) || L(page.h1, lang), {
-          eager: true,
-          cls: "hero-bold-img",
-          sizes: "100vw",
-        })
-      : "";
-    const stamp = s.stamp
-      ? `<div class="hero-stamp" aria-hidden="true">
-          <svg viewBox="0 0 120 120"><path id="stampCircle" fill="none" d="M60,60 m-46,0 a46,46 0 1,1 92,0 a46,46 0 1,1 -92,0"/>
-            <text><textPath href="#stampCircle">${esc(L(s.stamp, lang))}</textPath></text>
-          </svg>
-          <span class="hero-stamp-core">${s.stampIcon ?? "🏅"}</span>
-        </div>`
-      : "";
-    const ticker = s.ticker
-      ? (() => {
-          const items = L(s.ticker, lang)
-            .map((t) => `<span>${esc(t)}</span>`)
-            .join('<span class="dot">·</span>');
-          // Дорожка удвоена подряд — при анимации translateX(-50%) стык
-          // первой и второй копии незаметен, бегущая строка кажется бесконечной.
-          return `<div class="hero-ticker" role="note"><div class="hero-ticker-track">${items}<span class="dot">·</span>${items}</div></div>`;
-        })()
-      : "";
-    return `<section class="hero hero-bold${photo ? " has-photo" : ""}">
-      <div class="hero-bold-media">${photo}<span class="hero-bold-scrim" aria-hidden="true"></span></div>
-      <div class="hero-bold-overlay"><div class="wrap"><div class="hero-bold-card">
-        ${s.eyebrow ? `<span class="eyebrow eyebrow-light">${esc(L(s.eyebrow, lang))}</span>` : ""}
-        <h1 class="h1">${esc(L(page.h1, lang))}</h1>
-        <p class="lead lead-light">${esc(L(s.lead, lang))}</p>
-        <div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>
-        ${trustRow(site, lang)}
-      </div>${stamp}</div></div>
-      ${ticker}
-    </section>`;
+    return SECTIONS.hero(s, lang, ctx);
   },
 
   formats(s, lang, ctx) {
     const items = s.items
       .map(
         (it) => `<article class="card feature">
-        <span class="feature-icon" aria-hidden="true">${it.icon}</span>
+        <span class="feature-icon" aria-hidden="true">${contentIcon(it.icon)}</span>
         <div><h3 class="h3">${esc(L(it.title, lang))}</h3><p>${esc(L(it.text, lang))}</p>
         ${it.href ? `<p style="margin-top:10px"><a href="${esc(localHref(it.href, lang))}">${esc(L(it.linkLabel, lang))}</a></p>` : ""}</div>
       </article>`,
@@ -384,7 +365,7 @@ const SECTIONS = {
     const items = s.items
       .map(
         (it) => `<article class="card feature">
-        <span class="feature-icon" aria-hidden="true">${it.icon}</span>
+        <span class="feature-icon" aria-hidden="true">${contentIcon(it.icon)}</span>
         <div><h3 class="h3">${esc(L(it.title, lang))}</h3><p>${esc(L(it.text, lang))}</p></div>
       </article>`,
       )
@@ -420,13 +401,13 @@ const SECTIONS = {
     const card = (d) => {
       const entry = photos?.[d.ru ?? L(d, "ru")];
       const img = entry ? mediaImg(entry, L(d, lang), { sizes: "(min-width: 720px) 180px, 42vw" }) : "";
-      return `<figure class="dessert-photo">${img || `<span class="ico" aria-hidden="true">${d.icon}</span>`}<figcaption>${esc(
+      return `<figure class="dessert-photo">${img || `<span class="ico" aria-hidden="true">${contentIcon(d.icon)}</span>`}<figcaption>${esc(
         L(d, lang),
       )}</figcaption></figure>`;
     };
     if (!photos) {
       const list = `<ul class="dessert-grid">${desserts
-        .map((d) => `<li><span class="ico" aria-hidden="true">${d.icon}</span><span>${esc(L(d, lang))}</span></li>`)
+        .map((d) => `<li><span class="ico" aria-hidden="true">${contentIcon(d.icon)}</span><span>${esc(L(d, lang))}</span></li>`)
         .join("")}</ul>`;
       return wrap(s, `${sectionHead(s, lang)}${list}`, ctx);
     }
@@ -475,8 +456,10 @@ const SECTIONS = {
 
   offline(s, lang, ctx) {
     const { site, ui } = ctx;
+    const programme = ctx.offlineProgramme;
+    const syllabus = programme ? `<details class="course-syllabus"><summary>${esc(L(programme.h2, lang))}</summary>${L(programme.paragraphs, lang).map((text) => `<p>${esc(text)}</p>`).join("")}</details>` : "";
     const facts = `<ul class="facts">${s.facts
-      .map((f) => `<li><span class="ico" aria-hidden="true">${f.icon}</span><span>${esc(L(f.text, lang))}</span></li>`)
+      .map((f) => `<li><span class="ico" aria-hidden="true">${contentIcon(f.icon)}</span><span>${esc(L(f.text, lang))}</span></li>`)
       .join("")}</ul>`;
     const price = site.offline.price;
     const fallback = `<div class="card"><div class="price-tag">${price} ${lang === "tg" ? "сомонӣ" : "сомони"}<small>${esc(
@@ -486,7 +469,7 @@ const SECTIONS = {
       <a class="btn btn-ghost" href="${esc(site.contacts.telegram)}" rel="noopener">${esc(ui.ctaTelegram)}</a></div></div>`;
     return wrap(
       s,
-      `${sectionHead(s, lang)}<div class="offline"><div class="card">${facts}${moreLink(s, lang)}</div>
+      `${sectionHead(s, lang)}<div class="offline"><div class="card">${facts}${syllabus}${moreLink(s, lang)}</div>
       <div id="offline-form-island" data-price="${price}">${fallback}</div></div>`,
       ctx,
     );
@@ -498,7 +481,7 @@ const SECTIONS = {
       .join("");
     return wrap(
       s,
-      `<div class="cert"><div class="cert-art" aria-hidden="true">🏅</div><div class="prose">${sectionHead(s, lang)}${ps}${moreLink(s, lang)}</div></div>`,
+      `<div class="cert"><div class="cert-art" aria-hidden="true">${contentIcon("🏅")}</div><div class="prose">${sectionHead(s, lang)}${ps}${moreLink(s, lang)}</div></div>`,
       ctx,
     );
   },
@@ -539,7 +522,7 @@ const SECTIONS = {
       ? `<img src="${esc(shirin.svg)}" alt="" loading="lazy" />`
       : shirin?.png
         ? `<img src="${esc(shirin.png)}" alt="" loading="lazy" />`
-        : `<span class="emoji" aria-hidden="true">👩‍🍳</span>`;
+        : `<span class="emoji" aria-hidden="true">${contentIcon("📖")}</span>`;
     return wrap(
       s,
       `<div class="about"><div class="about-figure" role="img" aria-label="${esc(L(s.h2, lang))}">${figure}</div>
@@ -564,7 +547,7 @@ const SECTIONS = {
 
   facts(s, lang, ctx) {
     const items = s.items
-      .map((f) => `<li><span class="ico" aria-hidden="true">${f.icon}</span><span>${esc(L(f.text, lang))}</span></li>`)
+      .map((f) => `<li><span class="ico" aria-hidden="true">${contentIcon(f.icon)}</span><span>${esc(L(f.text, lang))}</span></li>`)
       .join("");
     return wrap(s, `${sectionHead(s, lang)}<ul class="facts card">${items}</ul>`, ctx);
   },
@@ -753,8 +736,7 @@ function renderHead(site, page, lang, ctx) {
   // Montserrat — display-шрифт для заголовков и цен: subset cyrillic-ext
   // покрывает таджикские буквы ғ ққ ҳ ҷ ӯ (Inter грузится тем же <link>,
   // одним запросом, чтобы не плодить preconnect-соединения).
-  const fonts =
-    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Montserrat:wght@700;800&display=swap&subset=cyrillic-ext";
+
   // Прелоад герой-фото на главной — это LCP-элемент, браузер должен начать
   // качать его до разбора CSS, а не после первого рендера <img>.
   // imagesrcset/imagesizes — чтобы прелоад совпал с тем, что выберет <img>
@@ -799,17 +781,14 @@ function renderHead(site, page, lang, ctx) {
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
     <!-- Inter не блокирует отрисовку: подключаем как print, после загрузки
          переключаем на all. Системный шрифт виден сразу (display=swap). -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="${fonts}" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="${fonts}" /></noscript>
+    <script>try{if(localStorage.getItem('ssb_theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
     ${heroPreload}
     <script type="application/ld+json">${ld}</script>`;
 }
 
-export function renderPage(site, page, lang, now = new Date(), media = null) {
+export function renderPage(site, page, lang, now = new Date(), media = null, offlineProgramme = null) {
   const ui = site.ui[lang];
-  const ctx = { site, page, ui, now, media, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
+  const ctx = { site, page, ui, now, media, offlineProgramme, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
   let pageSections = page.sections;
   // Секция «Инструменты» из media.tools автогенерируется на главной сразу
   // после первой из «Что входит» (cards) / «Офлайн-курс» (offline) —
@@ -956,8 +935,9 @@ export function loadContent(dir = CONTENT_DIR) {
 /** Чистая сборка: контент → Map<относительный путь от apps/web, содержимое>. */
 export function renderSite({ site, pages, media = null }, now = new Date()) {
   const files = new Map();
+  const offlineProgramme = pages.find((page) => page.slug === "kursy-konditera-dushanbe")?.sections.find((section) => section.id === "programma");
   for (const page of pages) {
-    for (const lang of LANGS) files.set(outFile(page.slug, lang), renderPage(site, page, lang, now, media));
+    for (const lang of LANGS) files.set(outFile(page.slug, lang), renderPage(site, page, lang, now, media, offlineProgramme));
   }
   files.set("404.html", renderNotFound(site, pages, now));
   files.set("public/sitemap.xml", renderSitemap(site, pages, now));
