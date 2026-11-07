@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { isBotFrozen } from "../messaging/automation.js";
+import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automation.js";
 import { sendReceiptForReview } from "../telegram.js";
 import { allocate } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
@@ -245,7 +245,7 @@ export async function handleReceiptVerdict(
 
   let linkSent = false;
   if (isClean && plan && plan.grant.length > 0) {
-    const granted = await grantCourses(contact, plan, amount as number, verdict);
+    const granted = await withVerifiedReceiptDelivery(contact.id, verdict.imageHash, () => grantCourses(contact, plan, amount as number, verdict));
     // grantCourses can pause and roll back its own new purchase. Do not turn
     // that pause into a processed receipt, escalation or screenshot request.
     if (await isBotFrozen()) return;

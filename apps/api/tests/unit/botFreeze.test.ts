@@ -14,6 +14,7 @@ let db: PrismaMock;
 const contact = fakeContact({ channel: "WEB" }) as unknown as Contact;
 beforeEach(() => {
   db = mockPrisma();
+  db.model("contact").findUnique.mockResolvedValue(contact);
   db.model("setting").findUnique.mockImplementation(async (args) => {
     const key = (args as { where: { key: string } }).where.key;
     // Conflicting subordinate flags cannot override the master pause.

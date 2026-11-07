@@ -98,7 +98,7 @@ async function autoAnswer(purchase: Purchase, text: string, lessonId: string | n
   try {
     // findQaAnswer отдаёт САМ пример из архива; ученице уходит только текст
     // ответа Ширин, без её вопроса и служебных полей.
-    const example = await findQaAnswer(text);
+    const example = purchase.courseId ? await findQaAnswer(text, { courseId: purchase.courseId }) : null;
     if (example?.ownerText) return example.ownerText;
   } catch (err) {
     // Сбой поиска не должен съесть вопрос: идём дальше по ступеням.

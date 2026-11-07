@@ -69,6 +69,11 @@ async function runQueue(): Promise<void> {
 
   for (const row of due) {
     if (await isBotFrozen()) return;
+    // WhatsApp retries belong to its durable inbox and require the original incoming turn.
+    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || row.contact.humanTakenOverAt)) {
+      await prisma.pendingAiReply.delete({ where: { id: row.id } });
+      continue;
+    }
     // Пришло более свежее входящее с момента постановки — эта попытка устарела:
     // новое сообщение либо уже своя запись в очереди, либо на него уже ответили
     // обычным ходом. Повторять СТАРЫЙ текст поверх нового разговора нельзя.

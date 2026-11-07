@@ -12,7 +12,7 @@ import {
   coursePlatformReady,
 } from "../course/delivery.js";
 import type { Contact } from "@prisma/client";
-import { isBotFrozen } from "../messaging/automation.js";
+import { isBotFrozen, currentReceiptEvidence, assertContactMessagingAllowed } from "../messaging/automation.js";
 
 /**
  * Выдача доступа к курсам после подтверждения оплаты.
@@ -29,6 +29,8 @@ export async function grantCourses(
   opts: { byHuman?: boolean } = {}
 ): Promise<Course[]> {
   if (!opts.byHuman && (await isBotFrozen())) return [];
+  const sendOpts = { ...opts, ...(currentReceiptEvidence()?.contactId === contact.id ? { purpose: "verified_receipt_access" as const } : {}) };
+  await assertContactMessagingAllowed(contact.id, opts.byHuman ? "human" : sendOpts.purpose ?? "reply");
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const done: Course[] = [];
 
@@ -144,7 +146,7 @@ export async function grantCourses(
           webLink,
           withTitle: plan.grant.length > 1,
         }) ?? link;
-      const mid = await sendToContact(contact, text, [], opts);
+      const mid = await sendToContact(contact, text, [], sendOpts);
       if (mid) await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.update({ where: { id: purchaseId }, data: { inviteLink: telegramLink ?? link } });
       // Связь «ссылка → человек» нужна, чтобы узнать его в Telegram при входе.
@@ -188,7 +190,7 @@ export async function grantCourses(
         added: hadBefore > 0,
       }) ?? sharedWebLink;
     try {
-      const mid = await sendToContact(contact, text, [], opts);
+      const mid = await sendToContact(contact, text, [], sendOpts);
       if (mid) await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.updateMany({
         where: { id: { in: pendingWeb.map((p) => p.purchaseId) } },

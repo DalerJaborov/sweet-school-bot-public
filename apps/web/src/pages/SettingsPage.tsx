@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { WhatsAppSettings } from "../components/WhatsAppSettings";
+import { KnowledgeReview } from "../components/KnowledgeReview";
 
 /** Ответ живой проверки модели (POST /admin/gemini-test). */
 interface CheckResult {
@@ -293,6 +295,8 @@ export function SettingsPage() {
   return (
     <div className="card">
       <h2>{Icons.settings} Настройки</h2>
+      <WhatsAppSettings />
+      <KnowledgeReview />
       <p className="hint">Ключи и промт ИИ. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}
       {values.botFrozen === "true" && (

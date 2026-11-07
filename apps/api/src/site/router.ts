@@ -32,6 +32,13 @@ import { renderCatalogFragment, renderCatalogUnavailable } from "./catalogFragme
 export const siteRouter = Router();
 
 const API_BASE = "/api/site";
+siteRouter.get(`${API_BASE}/chat-status`, async (_req, res) => {
+  try {
+    const [frozen, enabled] = await Promise.all([getSetting("botFrozen"), getSetting("aiEnabled")]);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ enabled: enabled === "true" && frozen !== "true" });
+  } catch { res.status(503).json({ enabled: false }); }
+});
 
 const HISTORY_TAKE = 50;
 const CATALOG_TTL_MS = 60_000;

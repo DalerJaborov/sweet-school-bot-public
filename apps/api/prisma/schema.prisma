@@ -67,6 +67,9 @@ model Contact {
   /// До этого момента бот молчит с этим человеком — потому что в переписку
   /// ответила ЖИВАЯ хозяйка из приложения Instagram (эхо-событие без нашего mid).
   /// null — бот отвечает как обычно.
+  humanTakenOverAt     DateTime?
+  humanTakeoverMid     String?
+  whatsappSavedContact Boolean          @default(false)
   humanSilencedUntil   DateTime?
   /// Заблокирован ботом за флирт/оскорбления/спам/видео без текста (ai/abuseFilter.ts,
   /// webhook.ts). Бот молчит, входящие пишутся; снимается из панели «Ученицы».
@@ -612,6 +615,8 @@ model QaMessage {
 /// QaMessage, когда приходит сообщение от владелицы (см. qaGroup.ts). Свой пул,
 /// не смешивается со StyleExample (продающая манера Instagram-директа).
 model QaExample {
+  approvedForAnswer Boolean @default(false)
+  courseId String?
   id               String   @id @default(uuid())
   studentText      String
   ownerText        String
@@ -907,4 +912,21 @@ model Certificate {
   updatedAt DateTime @updatedAt
 
   @@unique([contactId, courseId])
+}
+
+/// Durable WhatsApp inbox; only accepted new events are processed.
+model WhatsAppInbox {
+  id String @id
+  accountId String
+  chatId String
+  contactId String?
+  kind String
+  payload String
+  replyToId String?
+  status String @default("pending")
+  attempts Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, createdAt])
+  @@index([chatId, createdAt])
 }

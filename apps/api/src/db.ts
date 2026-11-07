@@ -76,9 +76,20 @@ export async function recordOutgoingMessage(contactId: string, text: string, mid
     if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
     if (!mid) return;
     const existing = await prisma.message.findUnique({ where: { mid } });
-    if (existing?.byHuman) {
+    if (existing?.byHuman && existing.contactId === contactId) {
       await prisma.message.update({ where: { mid }, data: { byHuman: false, text } });
-      await prisma.contact.update({ where: { id: contactId }, data: { humanSilencedUntil: null } }).catch(() => null);
+      const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+      // Never clear a real takeover because a different outgoing echo raced us.
+      if (contact?.humanTakeoverMid === mid && contact.humanTakenOverAt) {
+        const laterHuman = await prisma.message.findFirst({
+          where: { contactId, direction: "OUT", byHuman: true, mid: { not: mid }, createdAt: { gte: contact.humanTakenOverAt } },
+          orderBy: { createdAt: "desc" },
+        });
+        await prisma.contact.updateMany({
+          where: { id: contactId, humanTakeoverMid: mid },
+          data: { humanTakenOverAt: laterHuman?.createdAt ?? null, humanTakeoverMid: laterHuman?.mid ?? null },
+        });
+      }
     }
   }
 }

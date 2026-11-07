@@ -1,0 +1,143 @@
+import { prisma, getSetting, logError } from "../db.js";
+import { aiReply, rescueImage, type RescuedImage } from "../ai.js";
+import { bridgeRequest, bridgeEventSchema, whatsappConfigured, whatsappMessageId, type BridgeEvent, type ContactStatus } from "./client.js";
+import { withWhatsAppTurn } from "./context.js";
+import type { Attachment } from "../ai/media.js";
+import { saveOwnerMedia } from "../upload.js";
+
+let ingesting = false;
+const processing = new Set<string>();
+export async function ingestWhatsAppEvents(): Promise<void> {
+  if (!whatsappConfigured() || ingesting) return;
+  ingesting = true;
+  try {
+    const batch = await bridgeRequest<{ events: unknown[] }>("/events");
+    for (const raw of batch.events) {
+      const e = bridgeEventSchema.parse(raw);
+      const id = `${e.accountId}:${e.id}`;
+      const externalContact = `${e.accountId}:${e.chatId}`;
+      const contact = await prisma.contact.upsert({
+        where: { channel_igUserId: { channel: "WHATSAPP", igUserId: externalContact } },
+        create: { channel: "WHATSAPP", igUserId: externalContact }, update: {},
+      });
+      await prisma.$transaction(async tx => {
+        await tx.whatsAppInbox.upsert({ where: { id }, create: {
+          id, accountId: e.accountId, chatId: e.chatId, contactId: contact.id,
+          kind: e.type, replyToId: e.messageId, payload: JSON.stringify(e), status: e.type === "human" ? "done" : "pending",
+        }, update: {} });
+        await tx.message.upsert({ where: { mid: whatsappMessageId(e.accountId, e.messageId) }, create: {
+          contactId: contact.id, mid: whatsappMessageId(e.accountId, e.messageId), direction: e.type === "human" ? "OUT" : "IN",
+          text: e.text || null, byHuman: e.type === "human", createdAt: new Date(e.timestamp),
+        }, update: {} });
+        if (e.type === "human") await tx.contact.update({ where: { id: contact.id }, data: {
+          humanTakenOverAt: new Date(e.timestamp), humanTakeoverMid: whatsappMessageId(e.accountId, e.messageId),
+        } });
+      });
+      await bridgeRequest(`/events/${encodeURIComponent(e.id)}/ack`, {});
+    }
+  } finally { ingesting = false; }
+}
+
+export async function processInbox(id: string): Promise<void> {
+  const row = await prisma.whatsAppInbox.findUnique({ where: { id } });
+  if (!row?.contactId) return;
+  const event = bridgeEventSchema.parse(JSON.parse(row.payload));
+  const payload = JSON.parse(row.payload) as BridgeEvent & { imageHash?: string; imageUrl?: string; queuedId?: string };
+  const contact = await prisma.contact.findUnique({ where: { id: row.contactId } });
+  if (!contact) return;
+  const connection = await bridgeRequest<{ accountId?: string; enabled?: boolean; contactsReady?: boolean }>("/status");
+  if (connection.accountId !== row.accountId) throw new Error("Подключён другой аккаунт WhatsApp");
+  if (!connection.enabled || !connection.contactsReady) throw Object.assign(new Error("WhatsApp на паузе"), { code: "WhatsAppPaused" });
+  const check = await bridgeRequest<ContactStatus>(`/contact-status?chatId=${encodeURIComponent(row.chatId)}`);
+  if (check.isMyContact || check.blocked) {
+    await prisma.contact.update({ where: { id: contact.id }, data: { whatsappSavedContact: true } });
+    await prisma.whatsAppInbox.update({ where: { id }, data: { status: "blocked", payload: JSON.stringify({ ...payload, media: undefined }) } });
+    return;
+  }
+  if (!check.identityResolved) throw new Error("Не удалось проверить контакт WhatsApp");
+  const stamp = event.timestamp;
+  if (Date.now() - stamp > 86400000 || stamp > Date.now() + 60000) {
+    await prisma.whatsAppInbox.update({ where: { id }, data: { status: "expired", payload: JSON.stringify({ ...payload, media: undefined }) } });
+    return;
+  }
+  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) {
+    await prisma.whatsAppInbox.update({ where: { id }, data: { status: "blocked" } }); return;
+  }
+  if (check.takenOver && !contact.humanTakenOverAt) {
+    await prisma.contact.update({ where: { id: contact.id }, data: { humanTakenOverAt: new Date() } });
+  }
+  if (event.mediaUnavailable) throw new Error(`Вложение WhatsApp недоступно: ${event.mediaUnavailable}; нужен ответ хозяйки`);
+  if (!event.text.trim() && !event.media) throw new Error("Пустое сообщение WhatsApp не передаётся ИИ");
+  await withWhatsAppTurn({ inboxId: id, contactId: contact.id, accountId: row.accountId, chatId: row.chatId, messageId: event.messageId }, async () => {
+    const images: RescuedImage[] = [];
+    const attachments: Attachment[] = [];
+    if (event.media?.mimeType.startsWith("image/")) {
+      const buffer = Buffer.from(event.media.data, "base64");
+      if (buffer.length > 8 * 1024 * 1024) throw new Error("Слишком большое вложение");
+      const image = payload.imageHash && payload.imageUrl
+        ? { buffer, mimeType: event.media.mimeType, hash: payload.imageHash, url: payload.imageUrl, queuedId: payload.queuedId ?? null }
+        : await rescueImage(contact, buffer, event.media.mimeType);
+      if (!image.url || !image.queuedId) throw new Error("Не удалось сохранить чек");
+      images.push(image); attachments.push({ url: image.url, kind: "image" });
+      payload.imageHash = image.hash; payload.imageUrl = image.url; payload.queuedId = image.queuedId;
+      await prisma.whatsAppInbox.update({ where: { id }, data: { payload: JSON.stringify(payload) } });
+      await prisma.message.update({ where: { mid: whatsappMessageId(event.accountId, event.messageId) }, data: { imageUrl: image.url } });
+    }
+    // Owner takeover suppresses ordinary conversation but image intake remains
+    // durable: the existing verified receipt worker can deliver paid access.
+    const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
+    if (!fresh || fresh.humanTakenOverAt || check.takenOver) return;
+    if (event.media && !event.media.mimeType.startsWith("image/")) {
+      if (!event.media.mimeType.startsWith("audio/")) throw new Error("Вложение требует ответа хозяйки");
+      const buffer = Buffer.from(event.media.data, "base64");
+      if (buffer.length > 8 * 1024 * 1024) throw new Error("Слишком большое голосовое");
+      const url = saveOwnerMedia(buffer, event.media.mimeType);
+      if (!url) throw new Error("Не удалось сохранить голосовое");
+      attachments.push({ url, kind: "audio" });
+    }
+    await aiReply(fresh, event.text, attachments, images);
+  });
+  await prisma.whatsAppInbox.update({ where: { id }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+}
+
+export async function dispatchWhatsAppInbox(): Promise<void> {
+  if (!whatsappConfigured() || await getSetting("botFrozen") === "true") return;
+  const connection = await bridgeRequest<{ enabled?: boolean; contactsReady?: boolean }>("/status");
+  if (!connection.enabled || !connection.contactsReady) return;
+  const rows = await prisma.whatsAppInbox.findMany({
+    where: { status: "pending", updatedAt: { lte: new Date(Date.now() - 2500) } }, orderBy: { createdAt: "asc" }, take: 30,
+  });
+  for (const row of rows) {
+    const chatKey = `${row.accountId}:${row.chatId}`;
+    if (processing.size >= 4 || processing.has(chatKey)) continue;
+    processing.add(chatKey);
+    void (async () => {
+      const claim = await prisma.whatsAppInbox.updateMany({ where: { id: row.id, status: "pending" }, data: { status: "processing", attempts: { increment: 1 } } });
+      if (!claim.count) return;
+      try { await processInbox(row.id); }
+      catch (error) {
+        if ((error as { code?: string })?.code === "WhatsAppPaused") {
+          await prisma.whatsAppInbox.update({ where: { id: row.id }, data: { status: "pending", attempts: { decrement: 1 } } });
+          return;
+        }
+        const retryable = isWhatsAppGenerationRetry(error) && row.attempts < 2;
+        await prisma.whatsAppInbox.update({ where: { id: row.id }, data: { status: retryable ? "pending" : "attention" } });
+        logError("whatsapp:inbox", error);
+      }
+    })().catch(e => logError("whatsapp:worker", e)).finally(() => processing.delete(chatKey));
+  }
+}
+
+export function isWhatsAppGenerationRetry(error: unknown): boolean {
+  return (error as { code?: string })?.code === "WhatsAppGenerationRetry" ||
+    (error instanceof Error && error.message.startsWith("WhatsAppGenerationRetry:"));
+}
+
+export function startWhatsAppWorker(): void {
+  if (!whatsappConfigured()) return;
+  // A process interrupted after dispatch may already have sent something.
+  // Never blindly replay such a turn on restart.
+  void prisma.whatsAppInbox.updateMany({ where: { status: "processing" }, data: { status: "attention" } }).catch(e => logError("whatsapp:recover", e));
+  setInterval(() => { void ingestWhatsAppEvents().catch(e => logError("whatsapp:connection", e)); }, 2500).unref();
+  setInterval(() => { void dispatchWhatsAppInbox().catch(e => logError("whatsapp:queue", e)); }, 3000).unref();
+}
