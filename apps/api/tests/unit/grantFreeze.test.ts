@@ -95,7 +95,7 @@ describe("in-flight course grants", () => {
     db.model("purchase").findUnique.mockResolvedValue({ id: "new-purchase-only", inviteLink: null, revokedAt: null });
     expect(await grantCourses(contact, plan, 70, { amount: 70 })).toEqual(["COURSE70"]);
     expect(db.model("purchase").create).toHaveBeenCalledTimes(1);
-    expect(db.model("purchase").updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { inviteLink: "/course/new-link" } }));
+    expect(db.model("purchase").updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ inviteLink: "/course/new-link" }) }));
   });
 
   it("retry never revives a revoked purchase", async () => {

@@ -36,8 +36,10 @@ export async function deliveryMode(): Promise<DeliveryMode> {
  * поэтому канал WEB всегда получает ссылку на платформу, какой бы режим ни
  * стоял в настройках. Для Instagram/Messenger — как настроил владелец.
  */
-export async function deliveryModeFor(contact: { channel: string }): Promise<DeliveryMode> {
-  return contact.channel === "WEB" ? "web" : deliveryMode();
+export async function deliveryModeFor(contact: { channel: string; courseDeliveryChoice?: string | null }): Promise<DeliveryMode> {
+  if (contact.channel === "WEB" || contact.channel === "MANUAL") return "web";
+  if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web") return contact.courseDeliveryChoice;
+  return deliveryMode();
 }
 
 /**

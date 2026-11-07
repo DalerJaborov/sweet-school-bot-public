@@ -1,3 +1,4 @@
+import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError } from "./ai/replyPolicy.js";
 import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
@@ -185,6 +186,8 @@ export async function aiReply(
   // одним ранним выходом. Воронка (funnel.ts) вызывается из webhook.ts до
   // aiReply и этой проверки не видит вовсе — её выключить нельзя тем же флагом.
   if ((await getSetting("botFrozen")) === "true") return;
+
+  if (text && await handleDeliveryChoiceReply(contact, text)) return;
 
   // Побочный эффект, не влияющий на сам ответ: если человеку уже уходило
   // проверочное «как первый урок» (learningCheckIn.ts) и она хоть что-то

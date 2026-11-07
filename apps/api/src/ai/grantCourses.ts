@@ -1,3 +1,4 @@
+import { deferGrantForChoice } from "../course/deliveryChoice.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { detectClientLanguage } from "./clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
@@ -27,9 +28,10 @@ export async function grantCourses(
   plan: Allocation,
   amount: number,
   verdict: { amount: number | null; currency?: string | null },
-  opts: { byHuman?: boolean } = {}
+  opts: { byHuman?: boolean; fromDeliveryChoice?: boolean } = {}
 ): Promise<Course[]> {
   if (!opts.byHuman && (await isBotFrozen())) return [];
+  if (!opts.fromDeliveryChoice && await deferGrantForChoice(contact, plan, amount, verdict, opts)) return [];
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const done: Course[] = [];
 
@@ -84,7 +86,8 @@ export async function grantCourses(
     const existing = await prisma.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
     if (existing) {
       // Resume only an undelivered active purchase; never revive revoked access.
-      if (existing.revokedAt || existing.inviteLink || existing.accessDeliveryUncertainAt) continue;
+      if (existing.revokedAt || existing.inviteLink || existing.accessDeliveryUncertainAt ||
+          (existing.deliveryAwaitingChoice && !opts.fromDeliveryChoice)) continue;
       purchaseId = existing.id;
     } else {
       try {
@@ -123,7 +126,7 @@ export async function grantCourses(
       telegramLink = wantTelegram
         ? botToken && chatId
           ? await createOneTimeInviteLink(botToken, chatId)
-          : (await getSetting("courseAccessLink"))?.trim() || null
+          : contact.courseDeliveryChoice === "telegram" ? null : (await getSetting("courseAccessLink"))?.trim() || null
         : null;
     // Пустой курс (материалы ещё не завезли) не должен уходить как «готово» —
     // если веб-ссылки для него нет, ниже сработает штатное «ссылки нет» и
@@ -163,7 +166,7 @@ export async function grantCourses(
       const mid = await sendToContact(contact, text, [], opts);
       if (!mid) throw new Error("Access message delivery not confirmed");
       await recordOutgoingMessage(contact.id, text, mid);
-      await prisma.purchase.update({ where: { id: purchaseId }, data: { inviteLink: telegramLink ?? link } });
+      await prisma.purchase.update({ where: { id: purchaseId }, data: { inviteLink: telegramLink ?? link, deliveryAwaitingChoice: false } });
       // Связь «ссылка → человек» нужна, чтобы узнать его в Telegram при входе.
       // Веб-ссылку сюда класть нельзя: по ней в группу никто не входит, и
       // handleChatMember искал бы по ней вошедшего впустую.
@@ -202,7 +205,7 @@ export async function grantCourses(
       await recordOutgoingMessage(contact.id, text, mid);
       await prisma.purchase.updateMany({
         where: { id: { in: pendingWeb.map((p) => p.purchaseId) } },
-        data: { inviteLink: sharedWebLink },
+        data: { inviteLink: sharedWebLink, deliveryAwaitingChoice: false },
       });
       done.push(...pendingWeb.map((p) => p.course));
     } catch (err) {

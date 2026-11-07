@@ -158,6 +158,13 @@ model Contact {
   /// определения по тексту (ai/clientLanguage.ts) — то догадка по переписке,
   /// это осознанный выбор, и он важнее.
   preferredLanguage    String?
+  /// Explicit answer to the paid-course delivery question, not device detection.
+  courseDeliveryChoice String?
+  deliveryChoiceAskedAt DateTime?
+  deliveryChoicePromptState String?
+  deliveryChoicePromptMid String?
+  /// Durable claim; a crash during sending must not blindly replay access.
+  deliveryChoiceDispatchAt DateTime?
   /// Карточка офлайн-курса (цена, даты, адрес) уже отправлена этому человеку.
   /// Ставится один раз: спросил повторно — не заваливаем той же простынёй,
   /// дальше разговор ведёт обычный консультант (см. ai/offlineCourse.ts).
@@ -216,6 +223,7 @@ model ReceiptCheck {
   /// владельцу. Страховка от повтора: тот же чек может пройти через разбор
   /// дважды (сразу и из очереди перепроверки), а сообщение должно уйти один раз.
   customerNotifiedAt DateTime?
+  awaitingDeliveryChoice Boolean @default(false)
 }
 
 /// Журнал вызовов Gemini — модель, токены, оценочная стоимость (см. ai/pricing.ts).
@@ -336,6 +344,7 @@ model Funnel {
 /// код видел `paid=true` и молчал. Теперь каждая покупка — своя строка.
 model Purchase {
   accessDeliveryUncertainAt DateTime?
+  deliveryAwaitingChoice Boolean @default(false)
   id                    String    @id @default(uuid())
   contactId             String
   contact               Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)

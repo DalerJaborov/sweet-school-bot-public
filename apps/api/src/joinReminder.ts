@@ -1,3 +1,4 @@
+import { awaitingDeliveryChoice, askDeliveryChoice } from "./course/deliveryChoice.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
@@ -128,6 +129,10 @@ async function sweep(): Promise<void> {
 
   for (const contact of waiting) {
     if ((await getSetting("botFrozen")) === "true") return;
+    if (await awaitingDeliveryChoice(contact.id)) {
+      await askDeliveryChoice(contact);
+      continue;
+    }
     // Completion is recorded only after delivery or a confirmed owner handoff.
 
 

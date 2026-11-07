@@ -1,3 +1,4 @@
+import { awaitingDeliveryChoice, askDeliveryChoice } from "../course/deliveryChoice.js";
 import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
@@ -162,6 +163,11 @@ export async function handleReceiptVerdict(
   existingId?: string
 ): Promise<void> {
   if (await isBotFrozen()) return;
+  const previous = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
+  if (previous?.contactId === contact.id && previous.awaitingDeliveryChoice) {
+    await askDeliveryChoice(contact);
+    return;
+  }
   let kind = verdict.kind;
   let reason = verdict.reason;
 
@@ -262,7 +268,8 @@ export async function handleReceiptVerdict(
   }
   if (!isClean) reason = `${reason} (не все признаки чека подтверждены: требуется проверка)`;
 
-  const needsOwner = !linkSent;
+  const waitingForChoice = isClean && await awaitingDeliveryChoice(contact.id);
+  const needsOwner = !linkSent && !waitingForChoice;
   const knownFraud = Boolean(blocked) || Boolean(reused);
   const askClientFirst = !isClean && needsOwner && !knownFraud && !duplicatePayment && !contact.askedAltScreenshotAt;
   if (askClientFirst) reason = `${reason} (попросили клиента прислать другой скриншот)`;
@@ -278,6 +285,7 @@ export async function handleReceiptVerdict(
     imageUrl: verdict.imageUrl,
     amount: amount != null ? Math.round(amount) : null,
     ownerDecision: needsOwner ? "PENDING" : null,
+    awaitingDeliveryChoice: waitingForChoice,
   };
 
   let saved: { id: string } | null = null;

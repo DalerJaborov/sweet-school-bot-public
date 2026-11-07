@@ -71,7 +71,7 @@ describe("in-flight join reminder freeze", () => {
   });
 
   it("an uncertain access delivery is never retried by the reminder worker", async () => {
-    db.model("purchase").count.mockResolvedValue(1);
+    db.model("purchase").count.mockImplementation(async (args: any) => args.where.accessDeliveryUncertainAt ? 1 : 0);
     await runJoinReminders();
     expect(sendToContact).not.toHaveBeenCalled();
     expect(db.model("purchase").findMany).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { awaitingDeliveryChoice } from "./course/deliveryChoice.js";
 import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { sendToContact } from "./messaging/send.js";
@@ -159,6 +160,10 @@ export async function decideReceipt(
   } catch (err) {
     await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
     throw err;
+  }
+  if (await awaitingDeliveryChoice(receipt.contactId)) {
+    await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "APPROVED", awaitingDeliveryChoice: true, linkSent: false, decidedAt: new Date() } });
+    return { ok: true, status: "approved_no_link", message: "Оплата сохранена. Доступ ожидает выбора Telegram или сайта." };
   }
   if (granted.length < plan.grant.length) {
     await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
