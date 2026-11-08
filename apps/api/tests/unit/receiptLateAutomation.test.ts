@@ -138,8 +138,7 @@ describe("случай 2: отложенная автоматика после �
     db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+abcDEF123", createdAt: new Date(Date.now() - 60_000) }]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(true); // вторая покупка ещё ждёт
     // одна ссылка закрывает не больше одной покупки
-    const closedIds = db.model("purchase").updateMany.mock.calls.map((c) => ((c[0] as { where: { id?: { in?: string[] } } }).where.id?.in ?? [])).flat();
-    expect(closedIds.length).toBeLessThanOrEqual(1);
+    expect(db.model("purchase").update.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it("ссылка на рилс, сайт или ник не считается выдачей", async () => {
@@ -166,8 +165,8 @@ describe("случай 2: отложенная автоматика после �
       { id: "p1", createdAt: new Date(Date.now() - 600_000), inviteLink: "https://x/l/abc" },
     ]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(false);
-    expect(db.model("purchase").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: { in: ["p1"] } }, data: expect.objectContaining({ deliveryAwaitingChoice: false }) }),
+    expect(db.model("purchase").update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "p1" }, data: expect.objectContaining({ deliveryAwaitingChoice: false }) }),
     );
     await askDeliveryChoice(contact);
     expect(sendToContact).not.toHaveBeenCalled();
@@ -180,7 +179,7 @@ describe("случай 2: отложенная автоматика после �
     ]);
     db.model("message").findMany.mockResolvedValue([{ text: "Рахмат, ждите" }]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(true);
-    expect(db.model("purchase").updateMany).not.toHaveBeenCalled();
+    expect(db.model("purchase").update).not.toHaveBeenCalled();
   });
 
   it("снимается только покупка с выданной ссылкой, вторая ждущая остаётся", async () => {
@@ -191,9 +190,7 @@ describe("случай 2: отложенная автоматика после �
     ]);
     db.model("message").findMany.mockResolvedValue([]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(true);
-    expect(db.model("purchase").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: { in: ["p1"] } } }),
-    );
+    expect(db.model("purchase").update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "p1" } }));
   });
 });
 

@@ -128,4 +128,14 @@ describe("настоящая отправка: напоминание про Tel
     await handleReceiptVerdict(fresh as typeof c, verdict("s3-first"));
     expect(sendText).toHaveBeenCalledTimes(1);
   });
+
+  it("тот же номер операции, пока ждём ответа, Ширин перехватила чат: напоминание доходит (отпечаток принятого чека передан)", async () => {
+    const c = await waitingContact("s4");
+    await db.receiptCheck.updateMany({ where: { contactId: c.id }, data: { transactionId: "TXN-S4-111111" } });
+    await db.contact.update({ where: { id: c.id }, data: { humanTakenOverAt: new Date() } });
+    const fresh = await db.contact.findUnique({ where: { id: c.id } });
+    await handleReceiptVerdict(fresh as typeof c, verdict("s4-second", { transactionId: "TXN-S4-111111" }));
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(String(sendText.mock.calls[0][1])).toMatch(/Telegram/);
+  });
 });

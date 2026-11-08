@@ -44,10 +44,10 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
   // его запутало бы. Отвечаем, что перевод уже принят.
   const justPaid = await prisma.receiptCheck.findFirst({
     where: { contactId: contact.id, OR: ACCEPTED_WHERE, createdAt: { gte: new Date(Date.now() - 2 * SAME_TRANSFER_WINDOW_MS) } },
-    select: { id: true },
+    select: { id: true, imageHash: true },
   });
   if (justPaid) {
-    await tellAlreadyAccepted(contact, lastText);
+    await tellAlreadyAccepted(contact, lastText, justPaid.imageHash);
     return;
   }
   const texts = await getSalesTexts();
@@ -408,11 +408,12 @@ export async function handleReceiptVerdict(
   // перевод. Тот же номер у другого человека — стоп; у того же — это второй
   // скриншот одного перевода.
   let sameTxn = false;
+  let seenHash: string | null = null;
   const txn = verdict.transactionId?.trim();
   if (txn && txn.length >= 6) {
     const seen = await prisma.receiptCheck.findFirst({
       where: { transactionId: txn, imageHash: { not: verdict.imageHash }, OR: ACCEPTED_WHERE },
-      select: { contactId: true, createdAt: true },
+      select: { contactId: true, createdAt: true, imageHash: true },
     });
     if (seen && seen.contactId !== contact.id) {
       kind = "suspicious";
@@ -421,6 +422,7 @@ export async function handleReceiptVerdict(
       doubts.push("номер операции уже использован другим человеком");
     } else if (seen) {
       sameTxn = true;
+      seenHash = seen.imageHash;
     }
   }
 
@@ -429,7 +431,7 @@ export async function handleReceiptVerdict(
   // платёж и не повод для тревоги.
   let sameTransfer: "settled" | "pending" | null = sameTxn && kind === "valid" ? "settled" : null;
   let sameTransferProven = sameTxn;
-  let sameTransferHash: string | null = null;
+  let sameTransferHash: string | null = seenHash;
   if (kind === "valid" && amount != null && !sameTransfer) {
     const recent = await prisma.receiptCheck.findFirst({
       where: {

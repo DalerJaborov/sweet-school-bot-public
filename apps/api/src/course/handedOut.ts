@@ -21,15 +21,21 @@ import type { Course } from "../courses.js";
  */
 const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
 
-/** Моменты, когда Ширин вручную присылала настоящую ссылку (по возрастанию). */
-export async function manualLinkTimes(contactId: string, since: Date): Promise<Date[]> {
+const MANUAL_LINK_ALL = /(?:https?:\/\/)?[^\s]*\/l\/[A-Za-z0-9_-]{10,}|(?:https?:\/\/)?t\.me\/(?:\+|joinchat\/)[\w-]+/gi;
+
+/** Настоящие ссылки, которые Ширин вручную присылала клиентке, ПОШТУЧНО (по возрастанию времени). */
+export async function manualLinks(contactId: string, since: Date): Promise<{ url: string; at: Date }[]> {
   const rows = await prisma.message.findMany({
     where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
     orderBy: { createdAt: "asc" },
     take: 30,
     select: { text: true, createdAt: true },
   });
-  return (rows ?? []).filter((m) => m.text && MANUAL_LINK.test(m.text)).map((m) => m.createdAt);
+  const out: { url: string; at: Date }[] = [];
+  for (const m of rows ?? []) {
+    for (const hit of (m.text ?? "").match(MANUAL_LINK_ALL) ?? []) out.push({ url: hit, at: m.createdAt });
+  }
+  return out;
 }
 
 export async function manualLinkSince(contactId: string, since: Date): Promise<boolean> {
@@ -84,21 +90,36 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
   });
   if (!waiting || waiting.length === 0) return false;
   const settled: string[] = [];
+  const urlFor = new Map<string, string>();
   const open = waiting.filter((p) => !p.inviteLink);
   for (const p of waiting) if (p.inviteLink) settled.push(p.id);
-  // Одна ручная ссылка Ширин закрывает НЕ БОЛЬШЕ ОДНОЙ покупки - последней, созданной
-  // до этой ссылки (ревью PR 72): две оплаты и одна ссылка - вторая покупка ждёт.
+  // Каждая ручная ссылка "тратится" один раз (ревью PR 72): закрывает не больше одной
+  // покупки - последней, созданной до неё, - и её адрес записывается в покупку, так что
+  // следующие проверки эту ссылку уже не учитывают. Две ссылки в одном сообщении
+  // закрывают две покупки.
   const at = (d: Date | undefined | null): number => (d instanceof Date ? d.getTime() : 0);
   const since = new Date(Math.min(...waiting.map((p) => at(p.createdAt))));
-  const links = await manualLinkTimes(contactId, since);
-  for (const t of links) {
-    const candidates = open.filter((p) => !settled.includes(p.id) && at(p.createdAt) <= at(t));
+  const spentRows = await prisma.purchase.findMany({ where: { contactId, inviteLink: { not: null } }, select: { inviteLink: true } });
+  const spent = new Set((spentRows ?? []).map((r) => r.inviteLink));
+  const links = (await manualLinks(contactId, since)).filter((l) => !spent.has(l.url));
+  for (const l of links) {
+    const candidates = open.filter((p) => !settled.includes(p.id) && at(p.createdAt) <= at(l.at));
     candidates.sort((x, y) => at(y.createdAt) - at(x.createdAt));
-    if (candidates[0]) settled.push(candidates[0].id);
+    if (candidates[0]) {
+      settled.push(candidates[0].id);
+      urlFor.set(candidates[0].id, l.url);
+      spent.add(l.url);
+    }
   }
   if (settled.length === 0) return false;
   // accessIssuedAt: метка "выдано вручную" - планировщик не считает курс недоставленным
-  await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false, accessIssuedAt: new Date() } });
+  for (const id of settled) {
+    const url = urlFor.get(id);
+    await prisma.purchase.update({
+      where: { id },
+      data: { deliveryAwaitingChoice: false, accessIssuedAt: new Date(), ...(url ? { inviteLink: url } : {}) },
+    });
+  }
   // Ссылка Ширин не привязана к курсу (и может вести в бесплатную группу): после
   // снятия вопроса владельцу уходит напоминание проверить, что ссылка нужная.
   if (waiting.some((p) => settled.includes(p.id) && !p.inviteLink)) await tellOwnerChoiceSettled(contactId);
