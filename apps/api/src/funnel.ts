@@ -1,8 +1,9 @@
-import { prisma, logError, recordOutgoingMessage } from "./db.js";
+import { prisma, logError, recordOutgoingMessage, getSetting } from "./db.js";
 import { sendPrivateReply, replyToComment, deleteComment, metaChannelOf, mediaPermalink, type QuickButton, type Channel, type MetaChannel } from "./instagram.js";
 import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
 import { humanizeForContact } from "./messaging/humanize.js";
-import { isBotFrozen, withMessagingPermission, withContactMessaging } from "./messaging/automation.js";
+import { isBotFrozen, withMessagingPermission, withContactMessaging, contactAutomationBlocked } from "./messaging/automation.js";
+import { silenceIfFollowedByBusiness } from "./profiles.js";
 import { instagramShortcode } from "./ownMedia.js";
 import { aiReplyToComment } from "./ai.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -214,12 +215,58 @@ export async function startFunnel(
   }
 
   await addTag(contact, funnel.startTag);
+  let firstStepSent = false;
   try {
     await sendStep(delivery, funnel, firstStep, opts.commentId);
+    firstStepSent = true;
   } catch (err) {
     await retryOrGiveUp(delivery, contact, err);
   }
+  // Публичный ответ — только когда первый шаг РЕАЛЬНО ушёл в директ: иначе
+  // «написали вам в директ» под постом было бы неправдой.
+  if (firstStepSent && opts.commentId) await replyPubliclyUnderComment(contact, opts.commentId);
   return true;
+}
+
+/**
+ * ПУБЛИЧНЫЙ ОТВЕТ ПОД КОММЕНТАРИЕМ (владелец 08.11.2026, как было в ManyChat).
+ *
+ * Когда COMMENT-воронка отправила человеку первый шаг в директ, под самим
+ * комментарием появляется короткое «написали вам в директ». Зачем: человек
+ * понимает, куда смотреть (запрос в директ от незнакомого аккаунта часто
+ * падает в «Запросы»), а остальные под рекламой видят, что школа отвечает.
+ *
+ * Фразы разные и выбираются случайно: одинаковый текст под каждым
+ * комментарием Meta может принять за спам. Только «шумо», без «лутфан»
+ * (см. разговорник). Названия курсов и цены сюда не пишем — всё в директе.
+ *
+ * РУБИЛЬНИК `commentPublicReplyEnabled` — по умолчанию ВКЛЮЧЁН; "false"
+ * выключает только публичный ответ, воронка в директ работает как раньше.
+ * Ошибка Meta здесь воронку не ломает: директ уже ушёл, пишем только в журнал.
+ */
+export const COMMENT_PUBLIC_REPLY_SETTING = "commentPublicReplyEnabled";
+export const COMMENT_PUBLIC_REPLIES = [
+  "Ба директ навиштем 💌",
+  "Ҷавобро ба директатон фиристодем ✨",
+  "Ба шумо дар директ навиштем 🤍",
+  "Паёми моро дар директ бинед 🌸",
+  "Маълумотро ба директ фиристодем 💌",
+];
+
+async function commentPublicReplyEnabled(): Promise<boolean> {
+  return (await getSetting(COMMENT_PUBLIC_REPLY_SETTING)) !== "false";
+}
+
+async function replyPubliclyUnderComment(contact: Contact, commentId: string): Promise<void> {
+  try {
+    if (!(await commentPublicReplyEnabled())) return;
+    const text = COMMENT_PUBLIC_REPLIES[Math.floor(Math.random() * COMMENT_PUBLIC_REPLIES.length)];
+    await withContactMessaging(contact.id, "reply", () =>
+      withMessagingPermission("funnel", () => replyToComment(commentId, text, metaChannelOf(contact)))
+    );
+  } catch (err) {
+    logError("funnel:publicReply", err);
+  }
 }
 
 /** Нажатие кнопки: payload вида step:<funnelId>:<order>. Возвращает true, если кнопка наша. */
@@ -377,6 +424,7 @@ async function processComment(input: CommentInput): Promise<void> {
     if (!matches) continue;
 
     const contact = await upsertContact(input.igUserId, input.username, channel);
+    if (await silentForComment(contact)) return;
     await startFunnel(funnel, contact, { commentId: input.commentId, commentText: input.text });
     return; // одна воронка на комментарий, как в ManyChat
   }
@@ -384,7 +432,21 @@ async function processComment(input: CommentInput): Promise<void> {
   // Ни одна воронка не подошла (ролик не в списке продающих) — не молчим:
   // обычный тёплый ответ ИИ личным сообщением, без кнопок и без нажима на продажу.
   const contact = await upsertContact(input.igUserId, input.username, channel);
+  if (await silentForComment(contact)) return;
   await aiReplyToComment(contact, input.commentId, input.text);
+}
+
+/**
+ * Кому под комментарием не отвечаем вовсе — ни воронкой, ни ИИ, ни публично.
+ * Личные контакты, заблокированные, переписка у живого человека — то же
+ * правило, что в директе (contactAutomationBlocked). И знакомые: на кого
+ * подписана Ширин (profiles.ts, владелец 08.11.2026). Раньше комментарий
+ * знакомой запускал воронку: первый шаг уходил, а на её ответ в директе бот
+ * уже молчал — обрыв на полуслове хуже, чем отсутствие воронки.
+ */
+async function silentForComment(contact: Contact): Promise<boolean> {
+  if (contactAutomationBlocked(contact)) return true;
+  return silenceIfFollowedByBusiness(contact, { hasImage: false });
 }
 
 /**
