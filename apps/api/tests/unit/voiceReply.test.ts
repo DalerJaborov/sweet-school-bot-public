@@ -26,7 +26,9 @@ describe("chooseVoiceOrText", () => {
   });
   it("не больше одного голосового подряд и только WhatsApp", () => {
     expect(chooseVoiceOrText("Здравствуйте!", { ...ctx, lastReplyWasVoice: true })).toBe("text");
-    expect(chooseVoiceOrText("Здравствуйте!", { ...ctx, channel: "INSTAGRAM" })).toBe("text");
+    expect(chooseVoiceOrText("Здравствуйте!", { ...ctx, channel: "WEB" })).toBe("text");
+    expect(chooseVoiceOrText("Здравствуйте!", { ...ctx, channel: "INSTAGRAM" })).toBe("voice");
+    expect(chooseVoiceOrText("Здравствуйте!", { ...ctx, channel: "MESSENGER" })).toBe("voice");
   });
 });
 

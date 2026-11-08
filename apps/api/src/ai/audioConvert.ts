@@ -10,7 +10,14 @@ import { spawn } from "node:child_process";
 /** Только темп 1.30 (1.2 из ElevenLabs x 1.0833) и выравнивание громкости. Никаких шумов и фильтров (решение владельца). */
 export const VOICE_FILTER = "atempo=1.0833,loudnorm=I=-16:TP=-1.5:LRA=9";
 
-export function toOpusOgg(input: Buffer, timeoutMs = 30_000): Promise<Buffer | null> {
+export type VoiceFormat = "ogg" | "aac";
+/** WhatsApp - ogg/opus (настоящее голосовое); Instagram и Messenger принимают aac/m4a/wav/mp4, но не ogg. */
+const CODEC_ARGS: Record<VoiceFormat, string[]> = {
+  ogg: ["-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg"],
+  aac: ["-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "1", "-f", "adts"],
+};
+
+export function toOpusOgg(input: Buffer, timeoutMs = 30_000, format: VoiceFormat = "ogg"): Promise<Buffer | null> {
   return new Promise((resolve) => {
     let done = false;
     const finish = (value: Buffer | null) => {
@@ -19,7 +26,7 @@ export function toOpusOgg(input: Buffer, timeoutMs = 30_000): Promise<Buffer | n
       resolve(value);
     };
     try {
-      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-af", VOICE_FILTER, "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1"], {
+      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-af", VOICE_FILTER, ...CODEC_ARGS[format], "pipe:1"], {
         stdio: ["pipe", "pipe", "ignore"],
       });
       const chunks: Buffer[] = [];

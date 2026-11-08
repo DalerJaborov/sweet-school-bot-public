@@ -18,6 +18,8 @@ import { decorateForV3, splitForVoice, synthesizeToFile, voiceEnabled } from "./
  *  - Только WhatsApp (мост шлёт настоящее голосовое). Остальные каналы — текстом.
  *  - Любая ошибка озвучки (потолок трат, сеть) — молча отвечаем текстом.
  */
+/** Каналы, где голос разрешён, и формат файла: WhatsApp - ogg/opus, Instagram и Messenger - aac. Сайт (WEB) - только текст. */
+const VOICE_FORMAT_BY_CHANNEL: Record<string, "ogg" | "aac" | undefined> = { WHATSAPP: "ogg", INSTAGRAM: "aac", MESSENGER: "aac" };
 export const VOICE_MARK = "🎤 ";
 const MAX_WARM = 160;
 const MAX_AFTER_CLIENT_VOICE = 240;
@@ -33,7 +35,7 @@ export function chooseVoiceOrText(
   text: string,
   ctx: { channel: string; clientSentVoice: boolean; lastReplyWasVoice: boolean },
 ): "voice" | "text" {
-  if (ctx.channel !== "WHATSAPP" || ctx.lastReplyWasVoice) return "text";
+  if (!VOICE_FORMAT_BY_CHANNEL[ctx.channel] || ctx.lastReplyWasVoice) return "text";
   const t = text.trim();
   if (!t || t.includes("\n")) return "text";
   if (HAS_LINK.test(t) || HAS_DIGIT.test(t) || HAS_MONEY_WORDS.test(t)) return "text";
@@ -63,7 +65,7 @@ export async function trySendVoiceReply(
     const chunks = splitForVoice(text);
     if (!chunks) return false;
     // Куски озвучиваются параллельно (у каждого свой кеш), но уходят строго по очереди.
-    urls = (await Promise.all(chunks.map((chunk, i) => synthesizeToFile(decorateForV3(chunk, i, chunks.length))))).map((r) => r.url);
+    urls = (await Promise.all(chunks.map((chunk, i) => synthesizeToFile(decorateForV3(chunk, i, chunks.length), VOICE_FORMAT_BY_CHANNEL[contact.channel] ?? "ogg")))).map((r) => r.url);
   } catch (err) {
     // До отправки ничего не ушло - безопасно ответить текстом.
     logError("voiceReply", err);

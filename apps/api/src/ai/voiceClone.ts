@@ -4,7 +4,7 @@ import path from "node:path";
 import { env } from "../env.js";
 import { getSetting, setSetting, logInfo } from "../db.js";
 import { notifyOwnerDirect } from "../systemAlerts.js";
-import { toOpusOgg } from "./audioConvert.js";
+import { toOpusOgg, type VoiceFormat } from "./audioConvert.js";
 
 /**
  * ОЗВУЧКА ГОЛОСОМ ШИРИН (ElevenLabs). Владелица голоса дала согласие 08.11.2026
@@ -164,7 +164,7 @@ export type SynthResult = { url: string; cached: boolean };
  * Озвучка с кешем на диске: если такой текст этим голосом уже озвучивали, отдаём
  * готовый файл бесплатно. Новая генерация проходит проверку потолка трат.
  */
-export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
+export async function synthesizeToFile(rawText: string, format: VoiceFormat = "ogg"): Promise<SynthResult> {
   const text = rawText.trim();
   if (!text) throw new VoiceCloneError("Пустой текст");
   if (text.length > MAX_VOICE_TEXT) throw new VoiceCloneError(`Слишком длинно: максимум ${MAX_VOICE_TEXT} знаков`);
@@ -175,19 +175,17 @@ export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
   if (!env.publicBaseUrl) throw new VoiceCloneError("Не задан PUBLIC_BASE_URL", 500);
 
   const key = voiceCacheKey(text);
-  for (const ext of ["ogg", "mp3"]) {
-    if (fs.existsSync(path.join(MEDIA_DIR, `tts-${key}.${ext}`)))
-      return { url: `${env.publicBaseUrl}/media/tts-${key}.${ext}`, cached: true };
-  }
+  if (fs.existsSync(path.join(MEDIA_DIR, `tts-${key}.${format}`)))
+    return { url: `${env.publicBaseUrl}/media/tts-${key}.${format}`, cached: true };
 
   await chargeOrRefuse(text.length);
   const mp3 = await synthesizeSpeech(text);
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
   // Только перекодирование в ogg/opus, без шума и фильтров (решение владельца 08.11.2026: чистый голос).
   // mp3 как голосовое НЕ отдаём и не кешируем: на iPhone он не играет, лучше ошибка и ответ текстом.
-  const opus = await toOpusOgg(mp3, 30_000);
+  const opus = await toOpusOgg(mp3, 30_000, format);
   if (!opus) throw new VoiceCloneError("Не удалось подготовить голосовое (ffmpeg)", 503);
-  const name = `tts-${key}.ogg`;
+  const name = `tts-${key}.${format}`;
   // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».
   const target = path.join(MEDIA_DIR, name);
   fs.writeFileSync(`${target}.tmp`, opus);
