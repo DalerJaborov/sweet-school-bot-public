@@ -33,17 +33,42 @@ const TINY_PART = 24;
 
 type Piece = { text: string; detail: boolean };
 
+/**
+ * Предложения. Режем только там, где после точки идёт заглавная буква, кавычка или цифра-начало,
+ * и слово перед точкой не короткое сокращение или номер («450 с.», «г.», «ул.», «2.»):
+ * иначе цена и адрес разваливаются между сообщениями.
+ */
 function sentences(paragraph: string): string[] {
-  return paragraph
-    .split(/(?<=[.!?…])\s+/u)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const out: string[] = [];
+  let start = 0;
+  const re = /[.!?…]+\s+/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(paragraph))) {
+    const end = m.index + m[0].length;
+    const before = paragraph.slice(start, m.index);
+    const lastWord = before.split(/\s+/u).pop() ?? "";
+    const next = paragraph.slice(end, end + 1);
+    const abbreviation = m[0].startsWith(".") && /^[\p{L}\p{N}]{1,3}$/u.test(lastWord);
+    const startsSentence = /[\p{Lu}"«(\p{N}]/u.test(next);
+    if (!abbreviation && startsSentence) {
+      out.push(paragraph.slice(start, m.index + m[0].trimEnd().length).trim());
+      start = end;
+    }
+  }
+  const tail = paragraph.slice(start).trim();
+  if (tail) out.push(tail);
+  return out.filter(Boolean);
+}
+
+/** Нумерованный или маркированный список режется только целиком — иначе «2.» уедет от своего пункта. */
+function isList(paragraph: string): boolean {
+  return (paragraph.match(/^\s*(\d+[.)]|[-•*])\s/gmu) ?? []).length >= 2;
 }
 
 function chunkProse(paragraph: string): string[] {
   const clean = paragraph.trim();
   if (!clean) return [];
-  if (clean.length <= LONG_PART) return [clean];
+  if (clean.length <= LONG_PART || isList(clean)) return [clean];
   const out: string[] = [];
   let current = "";
   for (const sentence of sentences(clean)) {
@@ -82,7 +107,12 @@ function capParts(pieces: Piece[], maxParts: number): Piece[] {
         break;
       }
     }
-    if (at < 0) at = out.length - 2;
+    if (at < 0) {
+      // Остались только реквизиты и текст вперемешку: реквизит клеим к ПРЕДЫДУЩЕМУ тексту
+      // (подпись «Номер для оплаты:» не отрывается от номера), а не к следующему.
+      const firstDetail = out.findIndex((p, i) => p.detail && i > 0);
+      at = firstDetail > 0 ? firstDetail - 1 : out.length - 2;
+    }
     const both = out[at].detail && out[at + 1].detail;
     out[at] = {
       text: out[at].text + (out[at].detail || out[at + 1].detail ? "\n" : " ") + out[at + 1].text,

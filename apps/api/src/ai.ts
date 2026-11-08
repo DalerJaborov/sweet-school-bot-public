@@ -471,7 +471,9 @@ export async function aiReply(
       }
       if (replyText) replyText = cleanAutomatedReply(replyText);
       // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
-      if (replyText && !replyText.includes("---")) replyText = maybeWarmEmoji(replyText);
+      if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
+        replyText = maybeWarmEmoji(replyText);
+      }
     }
     if (replyText) {
       try {
