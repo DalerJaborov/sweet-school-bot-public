@@ -7,6 +7,7 @@ vi.mock("../../src/db.js", () => ({
   logError: vi.fn(),
 }));
 vi.mock("../../src/env.js", () => ({ env: { publicBaseUrl: "https://shirinsweets.online" } }));
+vi.mock("../../src/services/priceService.js", () => ({ getPrices: vi.fn(async () => ({ price: { COURSE70: 70, COURSE50: 50 } })) }));
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: vi.fn(), sendImageToContact: vi.fn() }));
 
 import { detectMenuQuestion } from "../../src/ai/offTopicGuard.js";

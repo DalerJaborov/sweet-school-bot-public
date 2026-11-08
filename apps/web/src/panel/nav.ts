@@ -17,6 +17,7 @@ export type Tab =
   | "summary"
   | "money"
   | "texts"
+  | "offer"
   | "courses"
   | "funnels"
   | "journal"
@@ -83,7 +84,7 @@ export function bottomNavFor(simple: boolean): { id: Tab; label: string }[] {
 /** Разделы, которые подсвечивают одну кнопку внизу. */
 export function navOwner(tab: Tab): Tab {
   if (tab === "questions" || tab === "attention") return "receipts";
-  if (tab === "texts" || tab === "recipes") return "courses";
+  if (tab === "texts" || tab === "offer" || tab === "recipes") return "courses";
   if (MORE_SECTIONS.some((s) => s.id === tab)) return "more";
   return tab;
 }

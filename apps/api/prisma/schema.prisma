@@ -47,6 +47,23 @@ model Setting {
   value String
 }
 
+/// Журнал правок «Цены и даты» (services/offerService.ts — единственный
+/// писатель): кто, когда, какое поле, было → стало. Цена и дата набора — то,
+/// что бот и сайт называют клиентам; без журнала спор «кто поставил 50 вместо
+/// 70» решался по памяти.
+model OfferChange {
+  id        String   @id @default(uuid())
+  /// Имя поля из Offer: prices.course50, offline.startDate, …
+  field     String
+  before    String
+  after     String
+  /// Кто сохранил: почта входа, «Telegram 123», «пароль панели».
+  actor     String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 /// Человек из Instagram или Messenger.
 ///
 /// ID выдаёт сам канал и в разных каналах они из разных пространств — один и тот

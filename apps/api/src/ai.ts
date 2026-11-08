@@ -1,5 +1,5 @@
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
-import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError } from "./ai/replyPolicy.js";
+import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError, CONTEXT_ONLY_AMOUNT, COURSE_DATE_FACT } from "./ai/replyPolicy.js";
 import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
@@ -21,7 +21,8 @@ import { queueUncheckedReceipt } from "./receiptRetry.js";
 import { queuePendingAiReply } from "./aiReplyRetry.js";
 import { logAiCall } from "./ai/aiLog.js";
 import { registerOfflineSignup } from "./ai/offlineSignup.js";
-import { maybeSendOfflineCard } from "./ai/offlineCourse.js";
+import { maybeSendOfflineCard, offlineFactsForModel } from "./ai/offlineCourse.js";
+import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { buildStyleBlock } from "./ai/styleLearning.js";
@@ -799,6 +800,10 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   }
 
   const date = await courseDateLabel();
+  // Факты очного курса — из раздела «Цены и даты», та же строка, что видит
+  // владелец в предпросмотре. Без неё модель на «во сколько?» после карточки
+  // отвечала по памяти промта.
+  const facts = await offlineFactsForModel();
 
   const registered = await registerOfflineSignup(contact, text);
   if (registered) {
@@ -811,8 +816,8 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   // просто не читают.
   const cardSent = await maybeSendOfflineCard(contact, text);
   return cardSent
-    ? `\n\nВАЖНО СЕЙЧАС: человеку УЖЕ отправлено отдельное сообщение со всеми условиями офлайн-курса — цена, даты, адрес. Не повторяй их. Одной короткой фразой попроси имя и номер телефона для записи.`
-    : `\n\nВАЖНО СЕЙЧАС: человек хочет на ОФЛАЙН-курс (${date}). Попроси у него имя и номер телефона одним коротким сообщением. Предоплаты нет — про оплату не заговаривай.`;
+    ? `\n\nВАЖНО СЕЙЧАС: человеку УЖЕ отправлено отдельное сообщение со всеми условиями офлайн-курса — цена, даты, адрес. Не повторяй их. Одной короткой фразой попроси имя и номер телефона для записи.\n${facts}`
+    : `\n\nВАЖНО СЕЙЧАС: человек хочет на ОФЛАЙН-курс (${date}). Попроси у него имя и номер телефона одним коротким сообщением. Предоплаты нет — про оплату не заговаривай.\n${facts}`;
 }
 
 /**
@@ -933,7 +938,15 @@ import { confirmRequisitesToCustomer, handleReceiptVerdict } from "./ai/receiptV
 export { handleReceiptVerdict };
 
 
-async function trustedSalesFacts(): Promise<string> {
-  const [texts, offline] = await Promise.all([getSalesTexts(), getOfflineFacts()]);
-  return `${texts.priceLineRu}. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони`;
+/** Факты, по которым replyPolicy проверяет ответ перед отправкой: суммы,
+ *  телефон и дата набора. Сумма двух курсов по отдельности разрешена ТОЛЬКО
+ *  рядом с «вместо»/«по отдельности» («100 вместо 120» — правда, «за оба 120»
+ *  — нет, решение владельца 05.09.2026). Дата набора — та, что в «Цены и
+ *  даты», или никакая: другая дата в ответе про курс задерживает его. */
+export async function trustedSalesFacts(): Promise<string> {
+  const [texts, offline, prices, date] = await Promise.all([getSalesTexts(), getOfflineFacts(), getPrices(), courseDateLabel("ru")]);
+  return (
+    `${texts.priceLineRu}. ${CONTEXT_ONLY_AMOUNT} ${prices.bundleFull} сомони. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони. ` +
+    `${COURSE_DATE_FACT} ${date}.`
+  );
 }

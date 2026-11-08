@@ -102,8 +102,9 @@ export async function sendReceiptForReview(
   const inline_keyboard = input.needsCourseChoice
     ? [
         [
-          { text: "Арт-десерты · 50", callback_data: `c50:${input.receiptId}` },
-          { text: "21 рецепт · 70", callback_data: `c70:${input.receiptId}` },
+          // Без цены в подписи: цена живёт в «Цены и даты», а кнопка — про курс.
+          { text: "Арт-десерты", callback_data: `c50:${input.receiptId}` },
+          { text: "21 рецепт", callback_data: `c70:${input.receiptId}` },
         ],
         [
           { text: "Оба курса", callback_data: `cboth:${input.receiptId}` },

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — генератор на чистом ESM без типов; в тесте важен результат, не сигнатуры.
-import { loadContent, renderSite, localHref, md } from "../../scripts/build-site-pages.mjs";
+import { loadContent, renderSite, localHref, md, resolveSsiFallback, usesOfferFacts } from "../../scripts/build-site-pages.mjs";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Сгенерированные страницы — то, что видит поисковик. Проверяем каркас
@@ -10,7 +12,9 @@ import { loadContent, renderSite, localHref, md } from "../../scripts/build-site
  */
 const content = loadContent();
 const files: Map<string, string> = renderSite(content, new Date("2026-09-03T00:00:00Z"));
-const html = [...files.entries()].filter(([f]) => f.endsWith(".html") && f !== "404.html");
+const raw = [...files.entries()].filter(([f]) => f.endsWith(".html") && f !== "404.html");
+// Факты очного курса приходят через Nginx SSI; без него человек видит запасные значения.
+const html = raw.map(([f, b]) => [f, resolveSsiFallback(b)] as [string, string]);
 
 describe("Статичные страницы сайта", () => {
   it("9 страниц × 2 языка + 404, sitemap, robots", () => {
@@ -50,7 +54,7 @@ describe("Статичные страницы сайта", () => {
   });
 
   it("главная: WebSite + FAQPage, островки курсов и формы, оба CTA", () => {
-    const body = files.get("site.html")!;
+    const body = resolveSsiFallback(files.get("site.html")!);
     expect(body).toContain('id="courses-island"');
     expect(body).toContain('id="offline-form-island" data-price="700"');
     expect(body).toContain('href="/course"');
@@ -145,7 +149,8 @@ describe("Статичные страницы сайта", () => {
     expect(art).not.toMatch(/макарон|Три шоколада|Бот проверяет чек|чек в чат на сайте/i);
     expect(files.get("tg/art-desserty.html")).toContain("10 дарс");
     for (const [, body] of html) {
-      expect(body).not.toMatch(/14:00|17:00|Рудаки|Пример отзыва|Мадина|Нигора|Фарзона/);
+      // Адрес сменился 08.11.2026: «Рудаки 156а» и «дом Додо Пицца» больше нигде не звучат.
+      expect(body).not.toMatch(/14:00|17:00|156а|Додо|Dodo|Водонасос|Пример отзыва|Мадина|Нигора|Фарзона/);
     }
     expect(files.get("kursy-konditera-dushanbe.html")).toContain("13:40–16:30");
     expect(files.get("ru/index.html")).toContain("Клубника в шоколаде");
@@ -159,5 +164,47 @@ describe("Статичные страницы сайта", () => {
       '&lt;b&gt;a&lt;/b&gt; <strong>b</strong> <a href="/tg/faq">c</a>',
     );
     expect(md("[buy](chat:)", "ru", ctx)).toContain('data-chat="x"');
+  });
+});
+
+describe("Факты очного курса — из панели через SSI (08.11.2026)", () => {
+  const nginx = fs.readFileSync(path.resolve(__dirname, "../../nginx.conf"), "utf8");
+  const ssiRoute = new RegExp(nginx.match(/location ~ (\^\/\(site\\\.html[^ ]+\$) \{\n\s+ssi on;/)![1]);
+  const route = (file: string) => (file.endsWith("index.html") || file === "site.html" ? `/${file}` : `/${file.replace(/\.html$/, "")}`);
+
+  it("каждая страница с {{offline.*}} отдаётся Nginx с ssi on", () => {
+    const pages = raw.filter(([, b]) => usesOfferFacts(b)).map(([f]) => f);
+    expect(pages.length).toBeGreaterThanOrEqual(4);
+    for (const file of pages) expect(ssiRoute.test(route(file)), file).toBe(true);
+  });
+
+  it("ни одной сырой подстановки {{…}} в готовом HTML", () => {
+    for (const [file, body] of raw) expect(body, file).not.toMatch(/\{\{\s*offline/);
+  });
+
+  it("цена, часы и 21 десерт — в title, тексте и карточке очного курса", () => {
+    const body = files.get("kursy-konditera-dushanbe.html")!;
+    expect(body).toMatch(/<title>[\s\S]*?offer-fact\?key=offline\.price[\s\S]*?<\/title>/);
+    const plain = resolveSsiFallback(body);
+    expect(plain).toMatch(/<title>[^<]*700 сомони/);
+    expect(plain).toContain("с 13:40 до 16:30");
+    expect(plain).toContain("Программа: 21 десерт за 8 дней");
+    expect(resolveSsiFallback(files.get("tg/kursy-konditera-dushanbe.html")!)).toMatch(/name="description" content="[^"]*700 сомонӣ/);
+  });
+});
+
+describe("Адрес очного курса — одно поле панели (08.11.2026)", () => {
+  it("подвал, ссылка на карту и JSON-LD каждой страницы — из /_site/offer-fact, с запасным «Воданасос, Рудаки 177»", () => {
+    for (const [file, body] of raw) {
+      const lang = file === "site.html" || file.startsWith("tg/") ? "tg" : "ru";
+      expect(body, file).toContain(`offer-fact?key=contact.address&lang=${lang}`);
+      expect(body, file).toContain(`offer-fact?key=contact.street&lang=${lang}`);
+      expect(body, file).toContain("offer-fact?key=contact.mapsQuery");
+      const plain = resolveSsiFallback(body);
+      expect(plain, file).toContain(lang === "tg" ? "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177" : "Душанбе, ориентир Воданасос, Рудаки 177");
+      expect(plain, file).toContain(`https://maps.google.com/?q=${encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177")}`);
+      const ld = plain.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1];
+      expect(JSON.stringify(JSON.parse(ld))).toMatch(/"streetAddress":"(ориентир Воданасос, Рудаки 177|назди Воданасос, кӯчаи Рӯдакӣ 177)"/);
+    }
   });
 });

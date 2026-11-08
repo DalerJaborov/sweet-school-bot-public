@@ -44,7 +44,7 @@ vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => und
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));
 vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false) }));
 vi.mock("../../src/ai/offlineCourse.js", async (original) => ({ ...(await original<typeof import("../../src/ai/offlineCourse.js")>()), maybeSendOfflineCard: vi.fn(async () => false) }));
-vi.mock("../../src/ai/courseDate.js", () => ({ courseDateLabel: vi.fn(async () => "") }));
+vi.mock("../../src/ai/courseDate.js", async (original) => ({ ...(await original<typeof import("../../src/ai/courseDate.js")>()), courseDateLabel: vi.fn(async () => ""), upcomingOfflineStartDate: vi.fn(async () => null) }));
 vi.mock("../../src/ai/dailyBudget.js", () => ({
   isBudgetExceeded: vi.fn(async () => false),
   recordAiCall: vi.fn(async () => undefined),
@@ -189,7 +189,8 @@ describe("Контекст офлайн-курса держится по обе�
       "Агар вактатон кам бошад, онлайнаш хеле кулай аст.",
       "офлайн курс хеле хуб аст — хамаашро аз наздик мепазед",
     ]);
-    generateWithFallback.mockResolvedValue(said("Курси офлайн 3 октябр сар мешавад."));
+    // Ответ без даты: выдуманную дату набора теперь задерживает replyPolicy (wrong_course_date).
+    generateWithFallback.mockResolvedValue(said("Курси офлайн ба наздикӣ сар мешавад."));
 
     await aiReply(web, "Кай мешавад?", [], []);
 

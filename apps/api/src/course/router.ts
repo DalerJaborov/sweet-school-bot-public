@@ -17,11 +17,10 @@ import {
 } from "./access.js";
 import { masterManifest, variantManifest, offlineSegmentList } from "./manifest.js";
 import { OFFLINE_RENDITION } from "../storage/videoPipeline.js";
-import { presignGet, storageConfig } from "../storage/s3.js";
-import { parseStringArray, parseCourseTools } from "../json.js";
-import { parseRecipeCard } from "./cardOcr.js";
 import { chatHistory, receiveQuestion } from "./chat.js";
-import { translateMany, isCourseLanguage, type CourseLanguage } from "./i18n.js";
+import { isCourseLanguage, type CourseLanguage } from "./i18n.js";
+import { buildCourseViews, COURSE_TREE_INCLUDE } from "./view.js";
+import { coursePreviewRouter } from "./preview.js";
 import {
   courseCompleted,
   renderCertificate,
@@ -52,9 +51,12 @@ courseRouter.use(API_BASE, (_req, res, next) => {
   next();
 });
 
-/** Ссылка на фото рецепта. Шесть часов: человек читает рецепт на кухне долго,
- *  а перезагружать страницу посреди готовки не должен. */
-const PHOTO_TTL_SEC = 6 * 3600;
+/**
+ * «Посмотреть как ученица» (course/preview.ts) — только чтение, своя кука,
+ * свой путь /api/course/preview/*. Подключён после заголовка no-store выше,
+ * поэтому личные манифесты и ключи предпросмотра тоже не кешируются.
+ */
+courseRouter.use(coursePreviewRouter);
 
 function apiBase(): string {
   // Абсолютный адрес нужен внутри манифеста: плеер тянет ключ и дорожки по
@@ -214,9 +216,7 @@ courseRouter.get(`${API_BASE}/me`, async (req: Request, res: Response) => {
       ? await prisma.course.findMany({
           where: { id: { in: courseIds } },
           orderBy: { order: "asc" },
-          // Корзина: удалённый урок ученице не отдаём никогда, даже в
-          // отсчёт на возврат.
-          include: { modules: { orderBy: { order: "asc" }, include: { lessons: { where: { deletedAt: null }, orderBy: { order: "asc" } } } } },
+          include: COURSE_TREE_INCLUDE,
         })
       : [];
 
@@ -260,101 +260,16 @@ courseRouter.get(`${API_BASE}/me`, async (req: Request, res: Response) => {
   }
 
   const progress = await prisma.progress.findMany({ where: { purchaseId: { in: purchases.map((p) => p.id) } } });
-  const byLesson = new Map(progress.map((p) => [p.lessonId, p]));
-  const cfg = await storageConfig();
   const certificates = await prisma.certificate.findMany({ where: { contactId: contact.id } });
-  const certByCourse = new Map(certificates.map((c) => [c.courseId, c]));
 
-  // ОДНА пачка перевода на весь экран, по всем курсам разом: перевод стоит
-  // времени, и десятки последовательных запросов к Gemini превратили бы
-  // открытие списка уроков в долгое ожидание.
-  const source: string[] = [];
-  for (const course of courses) {
-    const lessonsFlat = course.modules.flatMap((m) => m.lessons);
-    source.push(course.title, course.description ?? "");
-    source.push(...course.modules.map((m) => m.title));
-    source.push(...lessonsFlat.map((l) => l.title));
-    source.push(...lessonsFlat.map((l) => l.recipeText ?? ""));
-  }
-  const t = await translateMany(source, lang);
-  let cursor = 0;
-  const next = () => t[cursor++];
-
-  const out = courses.map((course) => {
-    const purchase = purchaseFor(purchases, course.id);
-    const lessonsFlat = course.modules.flatMap((m) => m.lessons);
-    // Сертификат: положен, когда досмотрены ВСЕ готовые уроки курса. Считаем
-    // здесь же, из уже загруженного прогресса — лишний запрос не нужен.
-    const readyLessons = lessonsFlat.filter((l) => l.status === "READY");
-    const doneCount = readyLessons.filter((l) => byLesson.get(l.id)?.completedAt).length;
-    const cert = certByCourse.get(course.id);
-    const title = next();
-    const description = next() || null;
-    const moduleTitles = course.modules.map(() => next());
-    const lessonTitles = lessonsFlat.map(() => next());
-    const lessonRecipes = lessonsFlat.map(() => next());
-    const titleOf = new Map(lessonsFlat.map((l, i) => [l.id, lessonTitles[i]]));
-    const recipeOf = new Map(lessonsFlat.map((l, i) => [l.id, lessonRecipes[i] || null]));
-
-    return {
-      id: course.id,
-      code: course.code,
-      title,
-      description,
-      // Курс куплен, но материалы ещё не завезли (например, «Арт-десерты» до
-      // импорта): честно говорим об этом, а не показываем пустой список уроков
-      // без единого объяснения (найдено ревизией 04.09.2026).
-      comingSoon: lessonsFlat.length === 0,
-      purchaseId: purchase?.id ?? null,
-      // Набор инструментов курса (визуальная система 04.09.2026, §5) — не
-      // переводим: названия инструментов и ссылка «где купить» владелец пишет
-      // сам, на языке, на котором и должны остаться (как рецепты — правило
-      // i18n.ts).
-      toolsData: parseCourseTools(course.toolsData),
-      certificate: {
-        eligible: readyLessons.length > 0 && doneCount === readyLessons.length,
-        done: doneCount,
-        total: readyLessons.length,
-        fullName: cert?.fullName ?? null,
-        lang: cert?.lang ?? null,
-        issuedAt: cert?.issuedAt ?? null,
-        number: cert?.number ?? null,
-      },
-      modules: course.modules.map((m, mi) => ({
-        id: m.id,
-        title: moduleTitles[mi],
-        lessons: m.lessons.map((l) => {
-          const pr = byLesson.get(l.id);
-          return {
-            id: l.id,
-            title: titleOf.get(l.id) ?? l.title,
-            durationSec: l.durationSec,
-            ready: l.status === "READY",
-            recipeText: recipeOf.get(l.id) ?? l.recipeText,
-            // Структурированный рецепт (карточка v2, §2) — как записан
-            // распознаванием, БЕЗ перевода: названия ингредиентов остаются на
-            // языке карточки, переводит их только markdown-версия выше.
-            recipeData: l.recipeData ? parseRecipeCard(l.recipeData) : null,
-            // Подписанными ссылками, а не публичными: бакет закрыт целиком.
-            // Публичная раздача открыла бы вместе с фото и сегменты видео —
-            // пути к ним видны прямо в манифесте, угадывать нечего.
-            recipePhotos: cfg
-              ? parseStringArray(l.recipePhotos).map((path) => presignGet(cfg, path, PHOTO_TTL_SEC))
-              : [],
-            posterUrl: cfg && l.posterPath ? presignGet(cfg, l.posterPath, PHOTO_TTL_SEC) : null,
-            // Тизер — тот же срок подписи, что у обложки: это анонс, не урок.
-            teaserUrl: cfg && l.teaserMp4Path ? presignGet(cfg, l.teaserMp4Path, PHOTO_TTL_SEC) : null,
-            // Обложки 16:9/9:16, сгенерированные из кадра тизера/постера (storage/coverArt.ts).
-            // null у старых уроков до scripts/backfill-covers.ts — тогда в UI используется posterUrl.
-            coverUrl: cfg && l.coverPath ? presignGet(cfg, l.coverPath, PHOTO_TTL_SEC) : null,
-            storyUrl: cfg && l.storyPath ? presignGet(cfg, l.storyPath, PHOTO_TTL_SEC) : null,
-            positionSec: pr?.positionSec ?? 0,
-            percent: pr?.percent ?? 0,
-            completed: Boolean(pr?.completedAt),
-          };
-        }),
-      })),
-    };
+  // Сборка экрана — общая с предпросмотром владельца (course/view.ts): что
+  // проверила Ширин, то и видит ученица.
+  const out = await buildCourseViews({
+    courses,
+    lang,
+    progress: new Map(progress.map((p) => [p.lessonId, p])),
+    certificates: new Map(certificates.map((c) => [c.courseId, c])),
+    purchaseIdFor: (courseId) => purchaseFor(purchases, courseId)?.id ?? null,
   });
 
   res.json({

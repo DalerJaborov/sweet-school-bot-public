@@ -1,6 +1,8 @@
 import { prisma, recordOutgoingMessage } from "../db.js";
 import { env } from "../env.js";
 import { sendToContact, sendImageToContact } from "../messaging/send.js";
+import { getPrices } from "../services/priceService.js";
+import type { PriceTable } from "../prices.js";
 import { detectClientLanguage } from "./clientLanguage.js";
 import type { Contact } from "@prisma/client";
 
@@ -33,16 +35,24 @@ const CAPTION: Record<CourseKey, Record<"ru" | "tg", string>> = {
   offline: { ru: "Вот как проходит офлайн-курс в Душанбе", tg: "Курси офлайн дар Душанбе ингуна мегузарад" },
 };
 
-/** Признаки, по которым понятно, про какой курс речь. */
+/** Признаки, по которым понятно, про какой курс речь. Цена курса («70 сомони») берётся
+ *  из ТЕКУЩЕЙ таблицы «Цены и даты», а не вписана сюда. */
 const MENTIONS_OFFLINE = /офлайн|оффлайн|offline|душанбе|очно|на\s+месте/iu;
-const MENTIONS_70 = /70\s*сомон|21\s*(намуд|рецепт|видео|дарс|десерт|ширин)/iu;
-const MENTIONS_50 = /50\s*сомон|арт[\s-]?десерт|9\s*намуд|10\s*(дарс|урок)/iu;
+function priceMentions(prices?: PriceTable): { online70: RegExp; online50: RegExp } {
+  const p70 = prices?.price.COURSE70 ?? 70;
+  const p50 = prices?.price.COURSE50 ?? 50;
+  return {
+    online70: new RegExp(String.raw`(?<!\d)${p70}\s*сомон|21\s*(намуд|рецепт|видео|дарс|десерт|ширин)`, "iu"),
+    online50: new RegExp(String.raw`(?<!\d)${p50}\s*сомон|арт[\s-]?десерт|9\s*намуд|10\s*(дарс|урок)`, "iu"),
+  };
+}
 
-function mentioned(blob: string): CourseKey[] {
+function mentioned(blob: string, prices?: PriceTable): CourseKey[] {
+  const re = priceMentions(prices);
   const found: CourseKey[] = [];
   if (MENTIONS_OFFLINE.test(blob)) found.push("offline");
-  if (MENTIONS_70.test(blob)) found.push("online70");
-  if (MENTIONS_50.test(blob)) found.push("online50");
+  if (re.online70.test(blob)) found.push("online70");
+  if (re.online50.test(blob)) found.push("online50");
   return found;
 }
 
@@ -52,10 +62,10 @@ function mentioned(blob: string): CourseKey[] {
  * оба онлайн-меню: дороже смолчать про курс, чем прислать лишнюю картинку. Офлайн без
  * упоминания не шлём: тому, кто про него не спрашивал, это лишнее.
  */
-export function inferCourses(currentText: string, recentTexts: string[]): CourseKey[] {
-  const now = mentioned(currentText);
+export function inferCourses(currentText: string, recentTexts: string[], prices?: PriceTable): CourseKey[] {
+  const now = mentioned(currentText, prices);
   if (now.length) return now;
-  const before = mentioned(recentTexts.join("\n"));
+  const before = mentioned(recentTexts.join("\n"), prices);
   if (before.length === 1) return before;
   if (before.length > 1) {
     const online = before.filter((c) => c !== "offline");
@@ -73,7 +83,7 @@ export async function sendMenuImages(contact: Contact, text: string): Promise<vo
     take: 8,
     select: { text: true },
   });
-  const courses = inferCourses(text, recent.map((m) => m.text ?? ""));
+  const courses = inferCourses(text, recent.map((m) => m.text ?? ""), await getPrices());
   const lang = detectClientLanguage(text) === "tg" ? "tg" : "ru";
   for (const course of courses) {
     const caption = CAPTION[course][lang];

@@ -2,7 +2,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { formatCourseDate, offlineStartDate, upcomingOfflineStartDate, type CalendarDay } from "./courseDate.js";
 import { sendToContact } from "../messaging/send.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
-import { DEFAULT_OFFLINE_FACTS, type OfflineFacts } from "./offlineFacts.js";
+import { DEFAULT_OFFLINE_FACTS, formatHours, offlineAddress, pluralRu, type OfflineFacts } from "./offlineFacts.js";
 import { getOfflineFacts } from "../services/salesTextsService.js";
 import type { Contact } from "@prisma/client";
 
@@ -44,17 +44,6 @@ export const OFFLINE_DATE_TBD: Record<"ru" | "tg", string> = {
   tg: "📅 Санаи қабули оянда аниқ мешавад — нависед, аввал ба шумо мегӯем",
 };
 
-/** «14:00 до 17:00» → «14:00 то 17:00»: по-таджикски предлог другой, а часы те же. */
-function hoursTg(hours: string): string {
-  return hours.replace(/\s+до\s+/u, " то ");
-}
-
-/** Адрес по умолчанию по-таджикски; свой адрес владелец пишет один раз, и он
- *  уходит в обе версии как есть — улицы Душанбе понятны на обоих языках. */
-function addressTg(address: string): string {
-  return address === DEFAULT_OFFLINE_FACTS.address ? "Душанбе, кӯчаи Рӯдакӣ, 156а" : address;
-}
-
 function daysRu(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -69,11 +58,16 @@ function daysRu(n: number): string {
 export function offlineCardDefault(
   language: "ru" | "tg",
   start: CalendarDay | null,
-  facts: OfflineFacts = DEFAULT_OFFLINE_FACTS
+  facts: OfflineFacts = DEFAULT_OFFLINE_FACTS,
 ): string {
   const dateLine = start
     ? `📅 ${language === "tg" ? "Оғоз" : "Начало"}: ${formatCourseDate(start, language)}`
     : OFFLINE_DATE_TBD[language];
+  // Мест — только если владелец задал число: «мест немного» без числа бот
+  // говорить не должен, придуманная цифра хуже молчания.
+  const seatsLine = facts.seats
+    ? [language === "tg" ? `👥 Дар гурӯҳ ҳамагӣ ${facts.seats} ҷой` : `👥 В группе всего ${facts.seats} мест`]
+    : [];
   const lines =
     language === "tg"
       ? [
@@ -81,7 +75,8 @@ export function offlineCardDefault(
           "",
           dateLine,
           `📆 Давомнокӣ: ${facts.days} рӯз`,
-          `⏰ Ҳар рӯз аз ${hoursTg(facts.hours)}`,
+          `⏰ Ҳар рӯз ${formatHours(facts.hours, "tg")}`,
+          ...seatsLine,
           "",
           `💰 Нарх: ${facts.price} сомонӣ`,
           "🛒 Маҳсулот аз мо — чизе овардан лозим нест",
@@ -90,7 +85,7 @@ export function offlineCardDefault(
           "🎁 Он чӣ пухтед — бо худ мебаред",
           "📜 Дар охир сертификат мегиред",
           "",
-          `📍 ${addressTg(facts.address)}`,
+          `📍 ${offlineAddress(facts, "tg")}`,
           "",
           "✍️ Барои сабти ном ном ва рақами телефонатонро нависед",
         ]
@@ -99,20 +94,44 @@ export function offlineCardDefault(
           "",
           dateLine,
           `📆 Длительность: ${facts.days} ${daysRu(facts.days)}`,
-          `⏰ Каждый день с ${facts.hours}`,
+          `⏰ Каждый день ${formatHours(facts.hours, "ru")}`,
+          ...seatsLine,
           "",
           `💰 Стоимость: ${facts.price} сомони`,
           "🛒 Продукты наши — приносить ничего не нужно",
           "",
-          `🧁 Готовим ${facts.desserts} видов десертов`,
+          `🧁 Готовим ${facts.desserts} ${pluralRu(facts.desserts, "вид", "вида", "видов")} десертов`,
           "🎁 Всё, что испекли, забираете с собой",
           "📜 В конце — сертификат",
           "",
-          `📍 ${facts.address}`,
+          `📍 ${offlineAddress(facts, "ru")}`,
           "",
           "✍️ Для записи напишите имя и номер телефона",
         ];
   return lines.join("\n");
+}
+
+/**
+ * ФАКТЫ ОФЛАЙН-КУРСА ДЛЯ МОДЕЛИ — одной строкой, из тех же настроек, что
+ * карточка. Раньше в промт уходила только дата («(3 октября)»), а прошедшая
+ * дата шла туда как есть (courseDateLabel не проверял, впереди ли она) —
+ * модель звала на уже прошедший набор. Теперь: только будущая дата, иначе
+ * прямой запрет её называть.
+ */
+export function offlineFactsLine(start: CalendarDay | null, facts: OfflineFacts): string {
+  const date = start
+    ? `начало ${formatCourseDate(start, "ru")}`
+    : "дата следующего набора уточняется — дату НЕ называй, предложи записаться, сообщим первой";
+  return (
+    `Офлайн-курс: ${date}; ${facts.days} ${daysRu(facts.days)}, каждый день ${formatHours(facts.hours, "ru")}; ` +
+    `${facts.price} сомони, продукты включены, предоплаты нет; адрес: ${facts.address}` +
+    (facts.seats ? `; в группе ${facts.seats} мест` : "")
+  );
+}
+
+/** То же для живого хода бота — из настроек. */
+export async function offlineFactsForModel(): Promise<string> {
+  return offlineFactsLine(await upcomingOfflineStartDate(), await getOfflineFacts());
 }
 
 /** Текст карточки на нужном языке: из настроек дословно, иначе заготовка с
