@@ -43,10 +43,14 @@ afterEach(() => {
 });
 
 describe("пункт 2: так обращаются к самой Ширин, это не родня", () => {
-  it.each(["Хоҳарҷон, салом, нарх чанд?", "Хохарчон салом", "Модарҷон, салом", "Модарчон, курс кай?", "Тётя, сколько стоит?", "Тетя, добрый день"])(
-    "%s: клиентка",
-    (t) => expect(startsWithFamilyAddress(t)).toBe(false),
-  );
+  it.each([
+    "Хоҳарҷон, салом, нарх чанд?",
+    "Хохарчон салом",
+    "Модарҷон, салом",
+    "Модарчон, курс кай?",
+    "Тётя, сколько стоит?",
+    "Тетя, добрый день",
+  ])("%s: клиентка", (t) => expect(startsWithFamilyAddress(t)).toBe(false));
   it.each(["Мама, ты дома?", "Доченька, как ты?", "Сынок, позвони", "Бабушка, привет"])("%s: родня", (t) =>
     expect(startsWithFamilyAddress(t)).toBe(true),
   );
@@ -57,10 +61,15 @@ describe("пункт 3: ответы на истории — корпус", () =
     "молчим на «%s»",
     (t) => expect(storyReplyWorthAnswer({ replyText: t })).toBe(false),
   );
-  it.each(["Подробнее", "Хочу научиться", "Где вы находитесь?", "Можно информацию?", "Маълумот диҳед", "Цена?", "сколько стоит курс"])(
-    "отдаём модели «%s»",
-    (t) => expect(storyReplyWorthAnswer({ replyText: t })).toBe(true),
-  );
+  it.each([
+    "Подробнее",
+    "Хочу научиться",
+    "Где вы находитесь?",
+    "Можно информацию?",
+    "Маълумот диҳед",
+    "Цена?",
+    "сколько стоит курс",
+  ])("отдаём модели «%s»", (t) => expect(storyReplyWorthAnswer({ replyText: t })).toBe(true));
   it("голосовое и вложения не теряем", () => {
     expect(storyReplyWorthAnswer({ replyText: null, hasMedia: true })).toBe(true);
     expect(isStoryChatter(null)).toBe(true);
@@ -108,7 +117,9 @@ describe("пункт 6: сторож не гоняется с очередью �
   const inAt = new Date(Date.now() + 60_000);
   const now = new Date(Date.now() + 10 * 60_000);
   function setup(anchorMinBeforeIn: number) {
-    db.model("message").findMany.mockResolvedValue([{ contactId: "contact-1", createdAt: inAt, text: "Сколько стоит курс?" }]);
+    db.model("message").findMany.mockResolvedValue([
+      { contactId: "contact-1", createdAt: inAt, text: "Сколько стоит курс?" },
+    ]);
     db.model("message").count.mockResolvedValue(0);
     db.model("message").findUnique.mockResolvedValue({ text: "Приходите, расскажу" });
     db.model("contact").findUnique.mockResolvedValue(
@@ -156,13 +167,41 @@ describe("корпус сценариев умного перехвата", () =
   const t0 = new Date("2026-11-08T10:00:00Z");
   const min = (m: number) => new Date(t0.getTime() + m * 60_000);
   const scenarios: [string, Parameters<typeof decideTakeover>[0], unknown][] = [
-    ["Ширин ответила 1 мин назад, клиентка пишет сразу", { config, anchor: t0, incomingAt: min(1), safeIntent: false, now: min(1) }, { action: "hold", until: min(13) }],
-    ["терпение 12 мин вышло, Ширин молчит", { config, anchor: t0, incomingAt: min(1), safeIntent: false, now: min(14) }, { action: "answer", why: "idle" }],
-    ["клиентка пишет через час после ручной реплики", { config, anchor: t0, incomingAt: min(60), safeIntent: false, now: min(60) }, { action: "answer", why: "cold" }],
-    ["Ширин ответила уже после сообщения", { config, anchor: min(5), incomingAt: min(2), safeIntent: false, now: min(20) }, { action: "hold", until: null }],
-    ["сутки без реплик", { config, anchor: t0, incomingAt: min(24 * 60 + 1), safeIntent: false, now: min(24 * 60 + 1) }, { action: "answer", why: "expired" }],
-    ["безопасный запрос в разгар разговора", { config, anchor: t0, incomingAt: min(2), safeIntent: true, now: min(2) }, { action: "answer", why: "safe_intent" }],
-    ["рубильник выключен", { config: { ...config, enabled: false }, anchor: t0, incomingAt: min(900), safeIntent: false, now: min(900) }, { action: "hold", until: null }],
+    [
+      "Ширин ответила 1 мин назад, клиентка пишет сразу",
+      { config, anchor: t0, incomingAt: min(1), safeIntent: false, now: min(1) },
+      { action: "hold", until: min(13) },
+    ],
+    [
+      "терпение 12 мин вышло, Ширин молчит",
+      { config, anchor: t0, incomingAt: min(1), safeIntent: false, now: min(14) },
+      { action: "answer", why: "idle" },
+    ],
+    [
+      "клиентка пишет через час после ручной реплики",
+      { config, anchor: t0, incomingAt: min(60), safeIntent: false, now: min(60) },
+      { action: "answer", why: "cold" },
+    ],
+    [
+      "Ширин ответила уже после сообщения",
+      { config, anchor: min(5), incomingAt: min(2), safeIntent: false, now: min(20) },
+      { action: "hold", until: null },
+    ],
+    [
+      "сутки без реплик",
+      { config, anchor: t0, incomingAt: min(24 * 60 + 1), safeIntent: false, now: min(24 * 60 + 1) },
+      { action: "answer", why: "expired" },
+    ],
+    [
+      "безопасный запрос в разгар разговора",
+      { config, anchor: t0, incomingAt: min(2), safeIntent: true, now: min(2) },
+      { action: "answer", why: "safe_intent" },
+    ],
+    [
+      "рубильник выключен",
+      { config: { ...config, enabled: false }, anchor: t0, incomingAt: min(900), safeIntent: false, now: min(900) },
+      { action: "hold", until: null },
+    ],
   ];
   it.each(scenarios)("%s", (_name, input, expected) => expect(decideTakeover(input)).toEqual(expected));
   it.each([

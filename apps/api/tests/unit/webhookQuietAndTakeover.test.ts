@@ -126,7 +126,9 @@ describe("умный перехват хозяйки в вебхуке", () => {
   it("фото без подписи в живом разговоре хозяйки: ответ откладывается, а не теряется", async () => {
     contactRef.current.humanTakenOverAt = ago(2);
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(2), text: "x" });
-    await handleMessage(text("", { text: undefined, attachments: [{ type: "image", payload: { url: "https://cdn.example/p.jpg" } }] }));
+    await handleMessage(
+      text("", { text: undefined, attachments: [{ type: "image", payload: { url: "https://cdn.example/p.jpg" } }] }),
+    );
     expect(debounceMessage).not.toHaveBeenCalled();
     expect(db.model("pendingAiReply").create).toHaveBeenCalledWith({
       data: expect.objectContaining({ text: expect.stringContaining("фото") }),

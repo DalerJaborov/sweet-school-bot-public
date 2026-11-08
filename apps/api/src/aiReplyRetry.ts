@@ -191,7 +191,9 @@ async function runQueue(): Promise<void> {
     // а не провал: без «не получается подготовить ответ» и без ложной тревоги владельцу.
     const silence =
       deliberateSilenceSince(row.contactId, attemptStartedAt) ??
-      ((await prisma.replyGate.findFirst({ where: { contactId: row.contactId, action: { not: "reply" }, createdAt: { gte: attemptStartedAt } } }))
+      ((await prisma.replyGate.findFirst({
+        where: { contactId: row.contactId, action: { not: "reply" }, createdAt: { gte: attemptStartedAt } },
+      }))
         ? "шлюз «не по делу»"
         : null);
     if (silence) {
