@@ -8,6 +8,7 @@ import { sendToContact } from "./messaging/send.js";
 import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, withContactMessaging } from "./messaging/automation.js";
 import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
+import { maybeSendVideos } from "./ai/videoLibrary.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
 import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
@@ -287,6 +288,13 @@ export async function aiReply(
     // сюда не доходит вовсе — то же рассуждение, что у guardOffTopic выше.
     if (detectMenuQuestion(text)) {
       await sendMenuImages(contact, text);
+      notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+      return;
+    }
+
+    // Библиотека видео (ai/videoLibrary.ts): ролик названного десерта, подборка или «как смотреть
+    // онлайн-урок». Рубильник videoLibraryEnabled; не больше одного показа каждого вида за разговор.
+    if (await maybeSendVideos(contact, text)) {
       notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       return;
     }
