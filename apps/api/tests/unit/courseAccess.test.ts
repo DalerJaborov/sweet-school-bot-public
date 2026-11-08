@@ -14,6 +14,7 @@ import {
   statusFor,
   ownerOfExpiredLink,
   deviceFingerprint,
+  androidModel,
   SAME_PHONE_WINDOW_MS,
   phoneLabel,
   devicePhoneMessage,
@@ -498,6 +499,26 @@ describe("registerDevice: запасной путь по модели — тол
     expect(windowMin).toBeGreaterThan(29);
     expect(windowMin).toBeLessThanOrEqual(30.1);
     expect(SAME_PHONE_WINDOW_MS).toBe(30 * 60_000);
+  });
+
+  it("ГЛАВНОЕ: мобильный интернет -> Wi-Fi за 10 минут (Instagram -> Safari): своя ученица не блокируется", async () => {
+    const { token } = issueMagicLink("contact-1");
+    arrange(db, { limit: 2 });
+    db.model("device").count.mockResolvedValue(1);
+    const fp = deviceFingerprint(fakeReq({ "user-agent": "iPhone" }), HINT);
+    devicesInDb([{ id: "device-1", fingerprint: fp, lastSeenAt: new Date(Date.now() - 10 * 60_000), secret: "s1", lastIp: "99.1.1.1" }]);
+
+    const result = await openByLink(fakeReq({ "user-agent": "iPhone" }), fakeRes() as never, token, HINT);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.device.id).toBe("device-1");
+    expect(db.model("device").create).not.toHaveBeenCalled();
+  });
+
+  it("Samsung Internet («SAMSUNG SM-A536B») и браузер Instagram («SM-A536B») — одна модель", () => {
+    expect(androidModel("Mozilla/5.0 (Linux; Android 14; SAMSUNG SM-A536B) AppleWebKit/537.36")).toBe(
+      androidModel("Mozilla/5.0 (Linux; Android 14; SM-A536B) AppleWebKit/537.36"),
+    );
   });
 
   it("через час в другой сети окно не работает: тот же отпечаток — не то же устройство, лимит «один телефон»", async () => {

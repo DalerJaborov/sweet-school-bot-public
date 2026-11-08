@@ -606,12 +606,10 @@ export async function registerDevice(
       where: { contactId: contact.id, fingerprint, lastSeenAt: { gte: new Date(Date.now() - SAME_PHONE_WINDOW_MS) } },
       orderBy: { lastSeenAt: "desc" },
     });
-    const verdict = candidate ? samePhoneVerdict(candidate, req, ip) : "different";
-    if (candidate && verdict !== "different") {
-      known = candidate;
-      // Сомнение = пускаем, но владелец узнаёт сводкой (как в ветке лимита ниже).
-      if (verdict === "unsure") await alertUnsurePhone(contact, candidate);
-    }
+    // В окне отказываем только при ЯВНОМ противоречии (другая ОС или обе модели
+    // известны и разные): сеть тут не довод, ученица легко уходит с мобильного
+    // интернета на Wi-Fi между Instagram и Safari. Сомнение = пускаем.
+    if (candidate && !explicitlyDifferentPhone(candidate, req)) known = candidate;
   }
 
   if (known) {
@@ -719,7 +717,8 @@ function osFamily(ua: string | null | undefined): string {
 /** Модель Android из User-Agent; «K», пустое и общие слова — неизвестна. */
 export function androidModel(ua: string | null | undefined): string | null {
   const m = /Android[^;)]*;\s*([^;)]+?)\s*(?:Build\/|[;)])/i.exec(ua ?? "");
-  const model = m?.[1]?.trim();
+  // Samsung Internet пишет «SAMSUNG SM-A536B», браузер Instagram — «SM-A536B».
+  const model = m?.[1]?.trim().replace(/^samsung\s+/i, "");
   if (!model || model.length < 3 || /^(k|mobile|wv|linux)$/i.test(model)) return null;
   return model.toLowerCase();
 }
@@ -729,6 +728,15 @@ function subnetOf(ip: string | null | undefined): string | null {
   if (ip.includes(":")) return ip.split(":").slice(0, 4).join(":");
   const parts = ip.split(".");
   return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
+}
+
+/** Явное противоречие: другая ОС или модели Android известны у обоих и разные. */
+export function explicitlyDifferentPhone(known: Pick<Device, "userAgent">, req: Request): boolean {
+  const ua = req.header("user-agent");
+  if (osFamily(known.userAgent) !== osFamily(ua)) return true;
+  const a = androidModel(known.userAgent);
+  const b = androidModel(ua);
+  return Boolean(a && b && a !== b);
 }
 
 export function samePhoneVerdict(
@@ -766,9 +774,10 @@ async function alertUnsurePhone(contact: Contact, device: Device): Promise<void>
   await sendTelegramMessage(
     botToken,
     chatId,
-    `Возможно, второй телефон у ${who}: вход не по метке и не по отпечатку, но похож на то же устройство ` +
+    `Возможно, второй телефон у ${who}: вход без метки устройства, но похож на то же ` +
       `(${describeDevice(device.userAgent)}, ${device.lastCity ?? "страна неизвестна"}). Пустили без блокировки. ` +
-      `Если это не она, заблокируйте устройство в панели.`
+      `Если это не она, блокировка закроет и её собственный телефон (запись устройства общая): ` +
+      `лучше напишите ей и при необходимости отзовите ссылку.`
   ).catch((err) => logError("course:unsurePhoneAlert", err));
 }
 
