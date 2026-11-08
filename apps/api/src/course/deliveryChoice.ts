@@ -4,7 +4,7 @@ import { detectClientLanguage } from "../ai/clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
-import type { Allocation, Course } from "../courses.js";
+import { splitAmount, type Allocation, type Course } from "../courses.js";
 import { settleChoiceIfHandedOut } from "./handedOut.js";
 
 export type CourseDeliveryChoice = "telegram" | "web";
@@ -43,12 +43,13 @@ export async function deferGrantForChoice(
   }
   if (fresh.accessRevokedAt || fresh.spamBlockedAt) return true;
   if (!opts.byHuman && await isBotFrozen()) return true;
+  let createdNew = false;
   await prisma.$transaction(async (tx) => {
     // Сумма делится только между НОВЫМИ покупками (ревью PR 72): курс, выданный
     // раньше, не должен уменьшать долю нового (35 вместо 70).
     const priors = await tx.purchase.findMany({ where: { contactId: contact.id, course: { in: plan.grant } }, select: { course: true } });
     const newCourses = plan.grant.filter((c) => !(priors ?? []).some((p) => p.course === c));
-    let newIndex = 0;
+    const shares = splitAmount(amount, newCourses.length);
     for (let i = 0; i < plan.grant.length; i++) {
       const course = plan.grant[i];
       const prior = await tx.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
@@ -56,22 +57,83 @@ export async function deferGrantForChoice(
       if (prior) {
         await tx.purchase.update({ where: { id: prior.id }, data: { deliveryAwaitingChoice: true } });
       } else {
-        const newCount = Math.max(1, newCourses.length);
-        const share = Math.floor(amount / newCount);
-        const before = newIndex;
-        const isLastNew = before === newCount - 1;
-        newIndex += 1;
+        createdNew = true;
+        const myShare = shares[Math.max(0, newCourses.indexOf(course))] ?? Math.round(amount);
         const catalog = await tx.course.findUnique({ where: { code: course } });
         await tx.purchase.create({ data: {
           contactId: contact.id, course, courseId: catalog?.id ?? null,
-          amount: isLastNew ? amount - share * before : share,
+          amount: myShare,
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", deliveryAwaitingChoice: true,
         } });
       }
     }
     await tx.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
   });
-  if (await awaitingDeliveryChoice(contact.id)) await askDeliveryChoice(fresh, opts);
+  // Напоминание - только когда появился НОВЫЙ платёж; повтор той же выдачи (ретрай)
+  // вопрос не дублирует.
+  if (await awaitingDeliveryChoice(contact.id)) {
+    if (createdNew) await askOrRemindDeliveryChoice(fresh, opts);
+    else await askDeliveryChoice(fresh, opts);
+  }
+  return true;
+}
+
+/** Служебные ответы бота про чек: они не должны отменять короткое "да" на вопрос. */
+const SERVICE_REPLY =
+  /передаю Ширин|Чекро гирифтам|Чек получила|Got your receipt|уже приняли|аллакай қабул|already accepted|Пришлите, пожалуйста, ещё один|Лутфан сурати дигар|could you send another one|Telegram доред|have Telegram/iu;
+
+/**
+ * Короткое "да" засчитывается, если сообщение с вопросом (по его номеру) - последнее
+ * сообщение бота ИЛИ после него были только служебные ответы про чек (ревью PR 72).
+ */
+export async function lastBotMessageIsQuestionOrService(contactId: string, promptMid: string | null): Promise<boolean> {
+  if (!promptMid) return false;
+  const question = await prisma.message.findFirst({ where: { contactId, direction: "OUT", mid: promptMid } });
+  if (!question) return false;
+  const after = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", createdAt: { gt: question.createdAt } },
+    orderBy: { createdAt: "asc" },
+    select: { text: true, byHuman: true },
+  });
+  return (after ?? []).every((m) => !m.byHuman && SERVICE_REPLY.test(m.text ?? ""));
+}
+
+const CHOICE_REMINDER_TEXT: Record<"ru" | "tg" | "en", string> = {
+  ru: "Чек получила. Ответьте, пожалуйста, есть ли у вас Telegram - сразу пришлю ссылки.",
+  tg: "Чекро гирифтам. Лутфан ҷавоб диҳед, Telegram доред? - ҳамон замон линкҳоро мефиристам.",
+  en: "Got your receipt. Please tell me whether you have Telegram - I will send the links right away.",
+};
+
+/**
+ * Вопрос про Telegram уже задан, а пришёл ещё один платёж: напоминание. Номер
+ * напоминания становится номером вопроса, чтобы короткое "да" засчиталось.
+ * Назначение отправки - как у самого вопроса (работает и когда Ширин перехватила чат).
+ */
+export async function remindDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<void> {
+  if (!opts.byHuman && (await isBotFrozen())) return;
+  // Прошлый вопрос мог дойти, но подтверждения нет (UNKNOWN): повторно не пишем.
+  const state = await prisma.contact.findUnique({ where: { id: contact.id }, select: { deliveryChoicePromptState: true } });
+  if (state?.deliveryChoicePromptState === "UNKNOWN") return;
+  const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN", text: { not: null } }, orderBy: { createdAt: "desc" } });
+  const text = CHOICE_REMINDER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  try {
+    const mid = await sendToContact(contact, text, [], { purpose: "verified_receipt_access", ...opts });
+    if (!mid) return;
+    await recordOutgoingMessage(contact.id, text, mid);
+    await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptMid: mid, deliveryChoicePromptState: "WAITING" } });
+  } catch (err) {
+    logError("deliveryChoice:reminder", err);
+  }
+}
+
+/** ОДНА функция "спросить или напомнить": вопроса ещё не было - задаём, был - напоминаем. */
+export async function askOrRemindDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<boolean> {
+  if (!(await awaitingDeliveryChoice(contact.id))) return false;
+  const before = await prisma.contact.findUnique({ where: { id: contact.id }, select: { deliveryChoicePromptState: true } });
+  const askedEarlier = Boolean(before?.deliveryChoicePromptState);
+  if (await askDeliveryChoice(contact, opts)) return true;
+  // Вопроса раньше не было и он сейчас не ушёл - это сбой, не повод для напоминания.
+  if (askedEarlier) await remindDeliveryChoice(contact, opts);
   return true;
 }
 
@@ -138,8 +200,7 @@ async function handleChoice(contact: Contact, text: string, verifiedReceipt: boo
   const answer = parseDeliveryAnswer(text);
   if (!answer) return false;
   if (!answer.explicit) {
-    const latest = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "OUT" }, orderBy: { createdAt: "desc" } });
-    const isQuestion = latest?.mid === fresh.deliveryChoicePromptMid && Boolean(fresh.deliveryChoicePromptMid);
+    const isQuestion = await lastBotMessageIsQuestionOrService(contact.id, fresh.deliveryChoicePromptMid);
     // UNKNOWN may have reached the user even though its acknowledgement was lost.
     // Bare yes/no is unsafe then: only an explicit Telegram/site answer is accepted.
     if (!isQuestion) return false;

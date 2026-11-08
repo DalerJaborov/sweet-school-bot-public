@@ -33,8 +33,8 @@ import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 import { settleChoiceIfHandedOut } from "../../src/course/handedOut.js";
 import { closeSettledReceiptAlerts, resetSweepClock } from "../../src/receiptAlerts.js";
 import { decideReceipt } from "../../src/receiptDecision.js";
-import { deferGrantForChoice } from "../../src/course/deliveryChoice.js";
-import { planForAmount } from "../../src/courses.js";
+import { deferGrantForChoice, lastBotMessageIsQuestionOrService } from "../../src/course/deliveryChoice.js";
+import { planForAmount, splitAmount } from "../../src/courses.js";
 import { resetPriceCache } from "../../src/services/priceService.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -443,5 +443,48 @@ describe("настоящая база: ревью PR 72", () => {
     const r = await db.receiptCheck.create({ data: { contactId: c.id, kind: "suspicious", confidence: 80, reason: "r", imageHash: "f6", amount: 70, ownerDecision: "PENDING" } });
     const res = await decideReceipt(r.id, "approve");
     expect(String((res as { message: string }).message)).toMatch(/отозван/);
+  });
+});
+
+describe("настоящая база: ревью PR 72 (2)", () => {
+  it("вопрос уже задавали, платёж подтверждён владельцем: клиентке уходит напоминание, не тишина", async () => {
+    const c = await db.contact.create({ data: { id: "g1", igUserId: "ig-g1", username: "g1", deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: "old-q" } });
+    await deferGrantForChoice(c, { grant: ["COURSE70"], note: "n" }, 70, { amount: 70, currency: "TJS" }, {});
+    expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
+    const fresh = await db.contact.findUnique({ where: { id: c.id } });
+    expect(fresh?.deliveryChoicePromptMid).not.toBe("old-q");
+  });
+
+  it("после служебных сообщений бота короткое 'да' засчитывается; после обычной реплики или Ширин - нет", async () => {
+    const c = await newContact("g2");
+    const t0 = Date.now() - 60_000;
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "q1", text: "Шумо Telegram доред?", createdAt: new Date(t0) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "s1", text: "Чекро гирифтам, ба Ширин барои тафтиш медиҳам.", createdAt: new Date(t0 + 1000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "s2", text: "Этот перевод мы уже приняли — ссылка на уроки выше в этом чате.", createdAt: new Date(t0 + 2000) } });
+    expect(await lastBotMessageIsQuestionOrService(c.id, "q1")).toBe(true);
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "x1", text: "Курс стоит 70 сомони", createdAt: new Date(t0 + 3000) } });
+    expect(await lastBotMessageIsQuestionOrService(c.id, "q1")).toBe(false);
+    expect(await lastBotMessageIsQuestionOrService(c.id, null)).toBe(false);
+  });
+
+  it("выдан вручную курс 50, потом пришёл чек 70: ожидание по 50 снимается, по 70 остаётся", async () => {
+    const c = await newContact("g3");
+    const t0 = Date.now() - 20 * 60_000;
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(t0) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(t0 + 60_000) } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(t0 + 10 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    const p50 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE50" } } });
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p50?.deliveryAwaitingChoice).toBe(false);
+    expect(p70?.deliveryAwaitingChoice).toBe(true);
+  });
+
+  it("деление суммы одно: 121 на двоих = 60 + 61 и в выдаче, и в ожидании выбора", async () => {
+    expect(splitAmount(121, 2)).toEqual([60, 61]);
+    const c = await newContact("g4");
+    await deferGrantForChoice(c, { grant: ["COURSE50", "COURSE70"], note: "n" }, 121, { amount: 121, currency: "TJS" }, {});
+    const rows = await db.purchase.findMany({ where: { contactId: c.id } });
+    expect(rows.map((r) => r.amount).sort()).toEqual([60, 61]);
   });
 });

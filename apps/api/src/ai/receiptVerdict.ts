@@ -1,4 +1,4 @@
-import { awaitingDeliveryChoice, askDeliveryChoice } from "../course/deliveryChoice.js";
+import { awaitingDeliveryChoice, askDeliveryChoice, remindDeliveryChoice } from "../course/deliveryChoice.js";
 import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
@@ -161,32 +161,6 @@ async function notifyHashTaken(contact: Contact, otherContactId: string, amount:
   } catch (err) {
     logError("receiptVerdict:hashTaken", err);
   }
-}
-
-const CHOICE_REMINDER_TEXT: Record<ClientLanguage, string> = {
-  ru: "Чек получила. Ответьте, пожалуйста, есть ли у вас Telegram - сразу пришлю ссылки.",
-  tg: "Чекро гирифтам. Лутфан ҷавоб диҳед, Telegram доред? - ҳамон замон линкҳоро мефиристам.",
-  en: "Got your receipt. Please tell me whether you have Telegram - I will send the links right away.",
-};
-
-/** Вопрос про Telegram уже задан, а клиентка прислала ещё один чек: молчать нельзя. */
-async function remindDeliveryChoice(contact: Contact): Promise<void> {
-  const lastIn = await prisma.message.findFirst({
-    where: { contactId: contact.id, direction: "IN", text: { not: null } },
-    orderBy: { createdAt: "desc" },
-    select: { text: true },
-  });
-  const text = CHOICE_REMINDER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
-  if (await isBotFrozen()) return;
-  // Напоминание становится ПОСЛЕДНИМ сообщением бота, поэтому его номер пишем как номер
-  // вопроса: иначе короткое "да" после напоминания не засчитывается (ревью PR 72).
-  await sendToContact(contact, text)
-    .then(async (mid) => {
-      if (!mid) return;
-      await recordOutgoingMessage(contact.id, text, mid);
-      await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptMid: mid, deliveryChoicePromptState: "WAITING" } });
-    })
-    .catch((err) => logError("receiptVerdict:choiceReminder", err));
 }
 
 async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<boolean> {

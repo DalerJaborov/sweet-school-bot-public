@@ -76,7 +76,10 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
   // Ссылка Ширин не привязана к курсу: по одному её сообщению снимаем ожидание,
   // только если ждёт ровно одна покупка (комплект из двух не трогаем).
   for (const p of waiting) {
-    if (p.inviteLink || (waiting.length === 1 && (await manualLinkSince(contactId, p.createdAt)))) settled.push(p.id);
+    // Покупки, созданные одной выдачей (комплект), делят одну ссылку Ширин: по её
+    // сообщению их не снимаем - только по настоящей выданной ссылке покупки.
+    const bundleMate = waiting.some((o) => o.id !== p.id && Math.abs(o.createdAt.getTime() - p.createdAt.getTime()) < 120_000);
+    if (p.inviteLink || (!bundleMate && (await manualLinkSince(contactId, p.createdAt)))) settled.push(p.id);
   }
   if (settled.length === 0) return false;
   // accessIssuedAt: метка "выдано вручную" - планировщик не считает курс недоставленным

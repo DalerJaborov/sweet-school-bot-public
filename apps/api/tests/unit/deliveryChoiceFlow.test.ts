@@ -54,6 +54,10 @@ beforeEach(() => {
     const found = purchases.filter((p) => matches(p, arg.where)); found.forEach((p) => Object.assign(p, arg.data)); return { count: found.length };
   });
   db.model("message").create.mockImplementation(async (arg: any) => { messages.push({ ...arg.data }); return arg.data; });
+  db.model("message").findMany.mockImplementation(async () => {
+    const q = messages.findIndex((m) => m.mid === contact.deliveryChoicePromptMid);
+    return q < 0 ? [] : messages.slice(q + 1).filter((m) => m.direction === "OUT");
+  });
   db.model("message").findFirst.mockImplementation(async (arg: any) => messages.filter((m) => matches(m, arg.where)).at(-1) ?? null);
 });
 afterEach(restorePrisma);

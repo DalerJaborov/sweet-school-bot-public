@@ -4,7 +4,7 @@ import { handleWhatsappSignupCommand } from "./course/manualOfflineSignup.js";
 import { z } from "zod";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { sendToContact } from "./messaging/send.js";
-import { answerCallback, editCaption, editMessageText, trustedChatIds } from "./telegram.js";
+import { answerCallback, editCaption, editKeyboard, editMessageText, trustedChatIds } from "./telegram.js";
 import { handleChatMember } from "./groupAccess.js";
 import { getQuickReplies } from "./quickReplies.js";
 import { handleQaGroupMessage, type TgGroupMessage } from "./qaGroup.js";
@@ -225,6 +225,19 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
     // карточка оставалась с живыми кнопками, и они «не работали» (08.11.2026) —
     // теперь переписываем её без кнопок. Остальные отказы («нет группы»,
     // «выберите курс») карточку не меняют: нажать можно ещё раз.
+    if (result.reason === "needs_course" && query.message?.chat?.id && query.message?.message_id) {
+      // Старая карточка с "Подтвердить": дорисовываем выбор курса.
+      await editKeyboard(botToken, query.message.chat.id, query.message.message_id, [
+        [
+          { text: "Арт-десерты", callback_data: `c50:${receiptId}` },
+          { text: "21 рецепт", callback_data: `c70:${receiptId}` },
+        ],
+        [
+          { text: "Оба курса", callback_data: `cboth:${receiptId}` },
+          { text: "❌ Отклонить", callback_data: `no:${receiptId}` },
+        ],
+      ]);
+    }
     if (result.reason === "already_decided") {
       await finishCard(botToken, query, `ℹ️ ${who}: уже обработано — ${describeDecision(receipt)}`);
     }

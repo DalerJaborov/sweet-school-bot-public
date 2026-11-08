@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { chooseOption } from "../components/ChoiceSheet";
 import { toast } from "../components/Toast";
 import { useUndoable } from "./useUndoable";
@@ -45,8 +45,18 @@ export function useReceiptDecision(opts: { onSettled?: () => void } = {}) {
 
   const send = useCallback(
     async (id: string, body: { action: "approve" | "reject"; course?: CourseChoice; reason?: string }) => {
-      const r = await api<{ message: string }>(`/admin/receipts/${id}/decide`, { method: "POST", body });
-      toast(r.message);
+      try {
+        const r = await api<{ message: string }>(`/admin/receipts/${id}/decide`, { method: "POST", body });
+        toast(r.message);
+      } catch (err) {
+        // Сервер сказал "нужен выбор курса" (сумма не подходит ни к одному): спрашиваем и повторяем.
+        const needs = err instanceof ApiError && err.status === 422 && (err.data as { needsCourse?: boolean } | undefined)?.needsCourse;
+        if (!needs || body.action !== "approve" || body.course) throw err;
+        const picked = await chooseOption({ title: "Сумма не подходит ни к одному курсу — какой курс открыть?", options: COURSE_OPTIONS });
+        if (!picked) return;
+        const r = await api<{ message: string }>(`/admin/receipts/${id}/decide`, { method: "POST", body: { ...body, course: picked as CourseChoice } });
+        toast(r.message);
+      }
     },
     []
   );

@@ -154,3 +154,14 @@ export async function planForAmount(
   const grant = wanted.filter((c) => !revoked.includes(c) && !owned.includes(c));
   return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0 && revoked.length === 0, revoked, retry, amount };
 }
+
+/**
+ * ОДНО ДЕЛЕНИЕ СУММЫ между покупками (ревью PR 72): доли целые, остаток уходит
+ * последней, сумма долей всегда равна сумме чека (121 на двоих = 60 + 61).
+ */
+export function splitAmount(amount: number, parts: number): number[] {
+  const n = Math.max(1, parts);
+  const total = Math.round(amount);
+  const share = Math.floor(total / n);
+  return Array.from({ length: n }, (_, i) => (i === n - 1 ? total - share * (n - 1) : share));
+}

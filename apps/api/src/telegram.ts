@@ -399,3 +399,23 @@ export async function trustedChatIds(): Promise<string[]> {
   ];
   return [...new Set(ids.filter((id): id is string => Boolean(id)))];
 }
+
+/** Заменить кнопки под сообщением (старая карточка с "Подтвердить" -> выбор курса). */
+export async function editKeyboard(
+  botToken: string,
+  chatId: number | string,
+  messageId: number,
+  inline_keyboard: { text: string; callback_data: string }[][]
+): Promise<void> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/editMessageReplyMarkup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard } }),
+    });
+    const data = (await res.json()) as { ok?: boolean; description?: string };
+    if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+  } catch (err) {
+    logError("telegram:editKeyboard", err);
+  }
+}

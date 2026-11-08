@@ -4,7 +4,7 @@ import { detectClientLanguage } from "./clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { createOneTimeInviteLink } from "../telegram.js";
 import { rememberInviteLink } from "../groupAccess.js";
-import { chatIdFor, COURSE_TITLE, type Allocation, type Course } from "../courses.js";
+import { chatIdFor, COURSE_TITLE, splitAmount, type Allocation, type Course } from "../courses.js";
 import {
   deliveryModeFor,
   issueCourseLink,
@@ -85,7 +85,8 @@ export async function grantCourses(
   // Сумма делится только между НОВЫМИ курсами: повтор доставки уже созданной
   // покупки не должен уменьшать долю (35 вместо 70).
   const already = await prisma.purchase.findMany({ where: { contactId: contact.id, course: { in: plan.grant } }, select: { course: true } });
-  const newCount = Math.max(1, plan.grant.length - (already ?? []).length);
+  const newList = plan.grant.filter((c) => !(already ?? []).some((a) => a.course === c));
+  const shares = splitAmount(amount, newList.length);
   for (const course of plan.grant) {
     if (await stopIfFrozen()) return done;
     let purchaseId: string | null = null;
@@ -98,7 +99,7 @@ export async function grantCourses(
     } else {
       try {
         const purchase = await prisma.purchase.create({ data: {
-          contactId: contact.id, course, amount: Math.round(amount / newCount),
+          contactId: contact.id, course, amount: shares[Math.max(0, newList.indexOf(course))] ?? Math.round(amount),
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS",
         } });
         purchaseId = purchase.id;

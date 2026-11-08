@@ -8,6 +8,7 @@ import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../help
  * карточку («уже обработано»), а тревога по уже выданному доступу закрывается сама.
  */
 const editCaption = vi.fn(async (..._a: unknown[]) => undefined);
+const editKeyboard = vi.fn(async (..._a: unknown[]) => undefined);
 const answerCallback = vi.fn(async (..._a: unknown[]) => undefined);
 vi.mock("../../src/telegram.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/telegram.js")>("../../src/telegram.js");
@@ -15,6 +16,7 @@ vi.mock("../../src/telegram.js", async () => {
     ...actual,
     editCaption: (...a: unknown[]) => editCaption(...a),
     answerCallback: (...a: unknown[]) => answerCallback(...a),
+    editKeyboard: (...a: unknown[]) => editKeyboard(...a),
     trustedChatIds: vi.fn(async () => ["1"]),
   };
 });
@@ -108,6 +110,17 @@ describe("нажатие устаревшей кнопки", () => {
     await press("ok:ghost");
     expect(answerCallback).toHaveBeenCalled();
     expect(editCaption).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("старая карточка с 'Подтвердить' и недоплатой", () => {
+  it("нажатие 'Подтвердить': дорисовываются кнопки выбора курса", async () => {
+    db.model("receiptCheck").findUnique.mockResolvedValue(row({ amount: 40 }));
+    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
+    await press("ok:r1");
+    expect(editKeyboard).toHaveBeenCalledTimes(1);
+    const kb = editKeyboard.mock.calls[0][3] as { text: string }[][];
+    expect(kb.flat().map((b) => b.text).join(" ")).toMatch(/Арт-десерты/);
   });
 });
 
