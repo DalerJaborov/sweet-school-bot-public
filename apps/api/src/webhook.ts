@@ -17,6 +17,7 @@ import { findOwnMedia, viewableUrl } from "./ownMedia.js";
 import { fetchAttachment, type Attachment } from "./ai/media.js";
 import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
+import { wasOurRecentReaction } from "./ai/reactions.js";
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
  *  Instagram, а не наш код: написала текстом, ответила голосом или просто
@@ -369,6 +370,8 @@ async function handleReaction(event: MessagingEvent, selfId?: string, channel: M
   // Реакция ОТ нас: отправитель — наш аккаунт, а собеседник лежит в recipient.
   if (!senderId || senderId !== selfId || !recipientId) return;
   if (event.reaction?.action === "unreact") return; // сняла реакцию — не вмешательство
+  // Реакцию поставил сам бот (ai/reactions.ts) — это не хозяйка, молчать после неё не нужно.
+  if (wasOurRecentReaction(recipientId)) return;
 
   const contact = await upsertContact(recipientId, null, channel);
   await prisma.contact.update({
