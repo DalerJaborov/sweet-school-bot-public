@@ -164,6 +164,13 @@ describe("какие токены открывают панель", () => {
     const res = await login(initData(OWNER));
     expect(isAdminToken(((await res.json()) as { token: string }).token)).toBe(true);
   });
+  it("отдельный список telegramAdminIds пускает своих, чужих не пускает", async () => {
+    settings.telegramAdminIds = "5001, 5002";
+    try {
+      expect((await login(initData("5002"))).status).toBe(200);
+      expect((await login(initData("5003"))).status).toBe(403);
+    } finally { delete settings.telegramAdminIds; }
+  });
   it("полученный раньше пустой белый список не пускает никого", async () => {
     settings.telegramOwnerChatId = ""; settings.telegramReportChatId = "";
     try { expect((await login(initData(""))).status).toBe(403); }

@@ -55,11 +55,14 @@ function checkSignature(initData: string, botToken: string): Record<string, stri
   return Object.fromEntries(params.entries());
 }
 
-/** Кому вообще можно в панель: владелец и сестра. */
+/** Кому вообще можно в панель: владелец и сестра + отдельный список админов
+ * (настройка telegramAdminIds, номера через запятую), не связанный с чатами сводок. */
 async function isAllowed(userId: string): Promise<boolean> {
+  const extra = ((await getSetting("telegramAdminIds")) ?? "").split(/[\s,;]+/).map((s) => s.trim());
   const allowed = [
     (await getSetting("telegramOwnerChatId"))?.trim(),
     (await getSetting("telegramReportChatId"))?.trim(),
+    ...extra,
   ].filter(Boolean);
   return allowed.includes(userId);
 }
