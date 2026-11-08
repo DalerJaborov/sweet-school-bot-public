@@ -10,6 +10,7 @@ import { createRateLimiter } from "../services/rateLimit.js";
 import { parseRecipeCard } from "../course/cardOcr.js";
 import { parseStringArray } from "../json.js";
 import { clientIp } from "../course/access.js";
+import { siteLinkIdFromRequest } from "../links/siteLinks.js";
 
 export const FREE_BASE = "/api/v1/free-lesson";
 const COOKIE = "ssb_free_lesson";
@@ -96,8 +97,10 @@ freeLessonRouter.post(`${FREE_BASE}/signup`, async (req, res) => {
     res.json({ ok: true });
     return;
   }
+  // С какой рекламной ссылки пришла заявка (links/siteLinks.ts); без неё поле не пишем.
+  const siteLinkId = await siteLinkIdFromRequest(req);
   const lead = await prisma.freeLessonLead.create({
-    data: { name: parsed.data.name, phone, lang: parsed.data.lang, lessonId: lesson.id },
+    data: { name: parsed.data.name, phone, lang: parsed.data.lang, lessonId: lesson.id, ...(siteLinkId ? { siteLinkId } : {}) },
   });
   const token = jwt.sign({ kind: "free-lesson", lessonId: lesson.id }, env.jwtSecret, {
     algorithm: "HS256",

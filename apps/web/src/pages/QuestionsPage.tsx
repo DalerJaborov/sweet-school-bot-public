@@ -127,7 +127,7 @@ function QuestionReply({ row, onSent }: { row: ChatRow; onSent: () => void }) {
       </div>
       <div className="queue-question">{row.text}</div>
       <div className="reply-box">
-        {source && <span className="draft-note">Черновик ИИ {source} — проверьте перед отправкой</span>}
+        {source && <span className="draft-note">Черновик помощника {source} — проверьте перед отправкой</span>}
         <textarea
           className="reply-input"
           rows={3}
@@ -144,7 +144,7 @@ function QuestionReply({ row, onSent }: { row: ChatRow; onSent: () => void }) {
             {busy ? "Отправляю…" : "Отправить"}
           </button>
           <button type="button" className="btn ghost" disabled={drafting || busy} onClick={() => void askDraft()}>
-            {drafting ? "Думаю…" : "Черновик от ИИ"}
+            {drafting ? "Думаю…" : "Черновик от помощника"}
           </button>
         </div>
       </div>

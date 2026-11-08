@@ -16,6 +16,7 @@ import { courseAdminRouter } from "./course/adminRoutes.js";
 import { manualEnrollmentRouter } from "./course/manualEnrollment.js";
 import { importRouter } from "./course/importRoutes.js";
 import { textsRouter } from "./textsRoutes.js";
+import { waitingRouter } from "./waiting.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
 import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
@@ -28,6 +29,7 @@ import { geminiGenerateUrl, geminiProxyHeaders } from "./gemini.js";
 import { revokeAccess, restoreAccess } from "./groupAccess.js";
 import { offsetMs, localDayStart } from "./dailyReport.js";
 import { countNotOpened } from "./notOpened.js";
+import { linksAdminRouter } from "./links/routes.js";
 
 export const adminRouter = Router();
 
@@ -1004,7 +1006,7 @@ adminRouter.post("/admin/contacts/:id/revoke", async (req, res) => {
     res.status(400).json({ error: result.details });
     return;
   }
-  res.json({ ok: true, details: result.details });
+  res.json({ ok: true, details: result.details, ...(result.warning ? { warning: result.warning } : {}) });
 });
 
 /**
@@ -1328,6 +1330,7 @@ adminRouter.use(importRouter);
 adminRouter.use(textsRouter);
 // Главный экран «Сегодня» — очередь дел и утренние числа (today.ts).
 adminRouter.use(todayRouter);
+adminRouter.use(waitingRouter);
 // Воронка, выручка по каналам, карточка ученицы (metrics.ts). Внутри
 // adminRouter, а не в index.ts, — иначе /admin/metrics/* обошёл бы проверку
 // пароля выше.
@@ -1336,6 +1339,9 @@ adminRouter.use(searchRouter);
 // «Спросить помощницу» — ИИ-диспетчер над закрытым набором read-only
 // инструментов (assistantPanel.ts); ничего не отправляет, SQL не пишет.
 adminRouter.use(assistantRouter);
+// «Ссылки» — ссылки на сайт для рекламы и приглашения в Telegram-группы
+// (links/routes.ts). Внутри adminRouter: только после проверки входа.
+adminRouter.use(linksAdminRouter);
 
 // ---------- отзывы (реальные скриншоты, см. ai/testimonials.ts) ----------
 //

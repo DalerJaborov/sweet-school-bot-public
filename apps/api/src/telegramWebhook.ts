@@ -10,6 +10,7 @@ import { getQuickReplies } from "./quickReplies.js";
 import { handleQaGroupMessage, type TgGroupMessage } from "./qaGroup.js";
 import { answerFromOwner } from "./course/chat.js";
 import { decideReceipt } from "./receiptDecision.js";
+import { handleMenuCommand, handleMenuCallback } from "./telegramMenu.js";
 
 export const telegramRouter = Router();
 
@@ -119,6 +120,15 @@ export async function handleTelegramUpdate(rawBody: unknown, secretHeader: strin
       const replyTo = message.reply_to_message?.message_id;
       const text = (message.text ?? message.caption ?? "").trim();
 
+      // Кнопки быстрых действий (сводка, кто ждёт, приглашение) — личный чат
+      // владельца и сестры, раньше всего остального.
+      if (await handleMenuCommand(message).catch((err) => {
+        logError("telegram:menu", err);
+        return false;
+      })) {
+        return;
+      }
+
       // Команда владельца «выдай ссылку руками» — раньше всего остального:
       // это её собственный чат, и вести её слова как вопрос ученицы незачем.
       if (await handleManualLinkCommand(message).catch((err) => {
@@ -176,6 +186,10 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
   // Кнопка быстрого ответа под уведомлением «серой зоны» (не про курс, не про
   // рецепт) — отдельный формат callback_data, разбираем раньше ok/no. Не трогает
   // раскладку курсов/оплату ниже.
+  if (query.data?.startsWith("mn:")) {
+    await handleMenuCallback(botToken, query);
+    return;
+  }
   if (query.data?.startsWith("qr:")) {
     await handleQuickReply(botToken, query);
     return;

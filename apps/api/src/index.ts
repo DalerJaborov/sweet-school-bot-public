@@ -19,6 +19,7 @@ import { miniAppRouter } from "./miniApp.js";
 import { courseRouter } from "./course/router.js";
 import { siteRouter } from "./site/router.js";
 import { freeLessonRouter } from "./site/freeLesson.js";
+import { goRouter } from "./links/siteLinks.js";
 import { maybeSendDailyReport } from "./dailyReport.js";
 import { retryUncheckedReceipts } from "./receiptRetry.js";
 import { retryPendingAiReplies } from "./aiReplyRetry.js";
@@ -56,6 +57,7 @@ autoCatch(miniAppRouter);
 autoCatch(courseRouter);
 autoCatch(siteRouter);
 autoCatch(freeLessonRouter);
+autoCatch(goRouter);
 autoCatch(adminRouter);
 autoCatch(adminLoginRouter);
 
@@ -97,6 +99,7 @@ app.use(telegramRouter);
 app.use(courseRouter); // платформа курсов: своя сессия по куке, не админский JWT
 app.use(siteRouter); // публичное API сайта: кука посетителя, без токена
 app.use(freeLessonRouter);
+app.use(goRouter); // короткие рекламные ссылки /go/<код>: только перенаправление на свой сайт
 app.use(miniAppRouter); // до adminRouter: вход из Telegram идёт без токена
 app.use(adminLoginRouter); // пароль: до adminRouter, под защитой от перебора
 app.use(adminRouter);
