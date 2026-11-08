@@ -135,9 +135,11 @@ describe("случай 2: отложенная автоматика после �
       { id: "p1", createdAt: new Date(Date.now() - 600_000), inviteLink: null },
       { id: "p2", createdAt: new Date(Date.now() - 600_000), inviteLink: null },
     ]);
-    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+abcDEF123" }]);
-    expect(await awaitingDeliveryChoice(contact.id)).toBe(true);
-    expect(db.model("purchase").updateMany).not.toHaveBeenCalled();
+    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+abcDEF123", createdAt: new Date(Date.now() - 60_000) }]);
+    expect(await awaitingDeliveryChoice(contact.id)).toBe(true); // вторая покупка ещё ждёт
+    // одна ссылка закрывает не больше одной покупки
+    const closedIds = db.model("purchase").updateMany.mock.calls.map((c) => ((c[0] as { where: { id?: { in?: string[] } } }).where.id?.in ?? [])).flat();
+    expect(closedIds.length).toBeLessThanOrEqual(1);
   });
 
   it("ссылка на рилс, сайт или ник не считается выдачей", async () => {

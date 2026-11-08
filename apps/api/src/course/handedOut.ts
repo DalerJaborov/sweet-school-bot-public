@@ -21,6 +21,17 @@ import type { Course } from "../courses.js";
  */
 const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
 
+/** Моменты, когда Ширин вручную присылала настоящую ссылку (по возрастанию). */
+export async function manualLinkTimes(contactId: string, since: Date): Promise<Date[]> {
+  const rows = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
+    orderBy: { createdAt: "asc" },
+    take: 30,
+    select: { text: true, createdAt: true },
+  });
+  return (rows ?? []).filter((m) => m.text && MANUAL_LINK.test(m.text)).map((m) => m.createdAt);
+}
+
 export async function manualLinkSince(contactId: string, since: Date): Promise<boolean> {
   const rows = await prisma.message.findMany({
     where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
@@ -73,13 +84,17 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
   });
   if (!waiting || waiting.length === 0) return false;
   const settled: string[] = [];
-  // Ссылка Ширин не привязана к курсу: по одному её сообщению снимаем ожидание,
-  // только если ждёт ровно одна покупка (комплект из двух не трогаем).
-  for (const p of waiting) {
-    // Покупки, созданные одной выдачей (комплект), делят одну ссылку Ширин: по её
-    // сообщению их не снимаем - только по настоящей выданной ссылке покупки.
-    const bundleMate = waiting.some((o) => o.id !== p.id && Math.abs(o.createdAt.getTime() - p.createdAt.getTime()) < 120_000);
-    if (p.inviteLink || (!bundleMate && (await manualLinkSince(contactId, p.createdAt)))) settled.push(p.id);
+  const open = waiting.filter((p) => !p.inviteLink);
+  for (const p of waiting) if (p.inviteLink) settled.push(p.id);
+  // Одна ручная ссылка Ширин закрывает НЕ БОЛЬШЕ ОДНОЙ покупки - последней, созданной
+  // до этой ссылки (ревью PR 72): две оплаты и одна ссылка - вторая покупка ждёт.
+  const at = (d: Date | undefined | null): number => (d instanceof Date ? d.getTime() : 0);
+  const since = new Date(Math.min(...waiting.map((p) => at(p.createdAt))));
+  const links = await manualLinkTimes(contactId, since);
+  for (const t of links) {
+    const candidates = open.filter((p) => !settled.includes(p.id) && at(p.createdAt) <= at(t));
+    candidates.sort((x, y) => at(y.createdAt) - at(x.createdAt));
+    if (candidates[0]) settled.push(candidates[0].id);
   }
   if (settled.length === 0) return false;
   // accessIssuedAt: метка "выдано вручную" - планировщик не считает курс недоставленным

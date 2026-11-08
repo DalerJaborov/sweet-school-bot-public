@@ -61,7 +61,7 @@ export async function decideReceipt(
     // (владельцу и сестре) теряют кнопки.
     const row = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, select: { ownerAlerts: true } }).catch(() => null);
     if (row?.ownerAlerts) {
-      const text = result.status === "rejected" ? "отклонено" : result.status === "approved" ? "подтверждено, ссылка отправлена" : "закрыто, ссылка не отправлялась";
+      const text = result.status === "rejected" ? "отклонено" : result.status === "approved" ? "подтверждено, ссылка отправлена" : result.message;
       await closeCards(row, `Чек обработан: ${text}`).catch((err) => logError("receiptDecision:closeCards", err));
     }
   }

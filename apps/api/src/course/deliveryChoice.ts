@@ -4,7 +4,7 @@ import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
 import { detectClientLanguage } from "../ai/clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
-import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
+import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked, currentReceiptEvidence } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
 import { splitAmount, type Allocation, type Course } from "../courses.js";
 import { settleChoiceIfHandedOut } from "./handedOut.js";
@@ -117,20 +117,26 @@ const CHOICE_REMINDER_TEXT: Record<"ru" | "tg" | "en", string> = {
  * напоминания становится номером вопроса, чтобы короткое "да" засчиталось.
  * Назначение отправки - как у самого вопроса (работает и когда Ширин перехватила чат).
  */
-export async function remindDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<void> {
-  if (!opts.byHuman && (await isBotFrozen())) return;
+export async function remindDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<boolean> {
+  if (!opts.byHuman && (await isBotFrozen())) return false;
   // Прошлый вопрос мог дойти, но подтверждения нет (UNKNOWN): повторно не пишем.
   const state = await prisma.contact.findUnique({ where: { id: contact.id }, select: { deliveryChoicePromptState: true } });
-  if (state?.deliveryChoicePromptState === "UNKNOWN") return;
+  if (state?.deliveryChoicePromptState === "UNKNOWN") return false;
   const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN", text: { not: null } }, orderBy: { createdAt: "desc" } });
   const text = CHOICE_REMINDER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
   try {
-    const mid = await sendToContact(contact, text, [], { purpose: "verified_receipt_access", ...opts });
-    if (!mid) return;
+    // Назначение "чек проверен" разрешено только внутри проверки принятого чека
+    // (withVerifiedReceiptDelivery); вне её - обычный ответ (ревью PR 72).
+    const inScope = currentReceiptEvidence()?.contactId === contact.id;
+    const { purpose: _ignored, ...rest } = opts;
+    const mid = await sendToContact(contact, text, [], inScope ? { ...rest, purpose: "verified_receipt_access" } : rest);
+    if (!mid) return false;
     await recordOutgoingMessage(contact.id, text, mid);
     await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptMid: mid, deliveryChoicePromptState: "WAITING" } });
+    return true;
   } catch (err) {
     logError("deliveryChoice:reminder", err);
+    return false;
   }
 }
 
@@ -141,8 +147,7 @@ export async function askOrRemindDeliveryChoice(contact: Contact, opts: { byHuma
   const askedEarlier = Boolean(before?.deliveryChoicePromptState);
   if (await askDeliveryChoice(contact, opts)) return true;
   // Вопроса раньше не было и он сейчас не ушёл - это сбой, не повод для напоминания.
-  if (askedEarlier) await remindDeliveryChoice(contact, opts);
-  return true;
+  return askedEarlier ? remindDeliveryChoice(contact, opts) : false;
 }
 
 export async function awaitingDeliveryChoice(contactId: string): Promise<boolean> {

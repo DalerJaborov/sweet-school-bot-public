@@ -367,7 +367,11 @@ describe("настоящая база: ревью 5", () => {
   it("второй платёж, пока вопрос про Telegram ждёт ответа: клиентке уходит напоминание", async () => {
     const c = await db.contact.create({ data: { id: "e3", igUserId: "ig-e3", username: "e3", deliveryChoicePromptState: "WAITING" } });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
-    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    // выдача идёт через настоящий deferGrantForChoice (как в боевом grantCourses) внутри области принятого чека
+    grantCourses.mockImplementationOnce(async (cc: unknown, plan: unknown, amt: unknown, v: unknown) => {
+      await deferGrantForChoice(cc as never, plan as never, amt as number, v as never, { purpose: "verified_receipt_access" });
+      return [];
+    });
     await handleReceiptVerdict(c, verdict("p50", { amount: 50 }));
     expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
   });
@@ -394,7 +398,11 @@ describe("настоящая база: ревью PR 72", () => {
   it("после напоминания номер вопроса обновлён: короткое 'да' будет засчитано", async () => {
     const c = await db.contact.create({ data: { id: "f1", igUserId: "ig-f1", username: "f1", deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: "mid-old" } });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
-    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    // выдача идёт через настоящий deferGrantForChoice (как в боевом grantCourses) внутри области принятого чека
+    grantCourses.mockImplementationOnce(async (cc: unknown, plan: unknown, amt: unknown, v: unknown) => {
+      await deferGrantForChoice(cc as never, plan as never, amt as number, v as never, { purpose: "verified_receipt_access" });
+      return [];
+    });
     await handleReceiptVerdict(c, verdict("f1-50", { amount: 50 }));
     const fresh = await db.contact.findUnique({ where: { id: c.id } });
     const lastOut = await db.message.findFirst({ where: { contactId: c.id, direction: "OUT" }, orderBy: { createdAt: "desc" } });
@@ -433,7 +441,11 @@ describe("настоящая база: ревью PR 72", () => {
   it("первый вопрос про Telegram не дошёл (FAILED): второй чек не тонет в тишине", async () => {
     const c = await db.contact.create({ data: { id: "f5", igUserId: "ig-f5", username: "f5", deliveryChoicePromptState: "FAILED" } });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
-    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    // выдача идёт через настоящий deferGrantForChoice (как в боевом grantCourses) внутри области принятого чека
+    grantCourses.mockImplementationOnce(async (cc: unknown, plan: unknown, amt: unknown, v: unknown) => {
+      await deferGrantForChoice(cc as never, plan as never, amt as number, v as never, { purpose: "verified_receipt_access" });
+      return [];
+    });
     await handleReceiptVerdict(c, verdict("f5-50", { amount: 50 }));
     expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
   });
