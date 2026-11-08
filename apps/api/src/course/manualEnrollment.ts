@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { issueMagicLink, looksLikeShortCode, LINK_TTL_DAYS } from "./access.js";
+import { issueMagicLink, looksLikeShortCode, linkExpired } from "./access.js";
 import { getPrices } from "../services/priceService.js";
 
 const CODES = ["COURSE50", "COURSE70"] as const;
@@ -99,9 +99,7 @@ manualEnrollmentRouter.post("/admin/manual-enrollments", async (req, res, next) 
         );
       if (
         existing?.accessTokenId &&
-        (!looksLikeShortCode(existing.accessTokenId) ||
-          !existing.accessIssuedAt ||
-          Date.now() - existing.accessIssuedAt.getTime() > LINK_TTL_DAYS * 86_400_000)
+        (!looksLikeShortCode(existing.accessTokenId) || linkExpired(existing.accessIssuedAt))
       ) {
         throw new EnrollmentConflict(
           "Существующая ссылка устарела. Откройте карточку ученицы и перевыдайте ссылку явно.",
