@@ -21,6 +21,7 @@ const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)
 const DEFAULT_PACING = {
   minGapMs: 4000, maxGapMs: 9000,
   typingMinMs: 1500, typingMaxMs: 8000, typingMsPerChar: 40,
+  recordMinMs: 3000, recordMaxMs: 9000,
   perChatWindowMs: 10 * 60 * 1000, perChatMax: 8, hourMax: 40, dayMax: 200,
 };
 const REACTION_EMOJI = new Set(['❤️', '🌸', '💚', '🤍', '🥰', '😊', '✨', '🌷']);
@@ -28,7 +29,9 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 class Bridge {
-  constructor({ stateDir, createClient, makeQr, mediaFromUrl, now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+  constructor({ stateDir, createClient, makeQr, mediaFromUrl, testNumbers = [], now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+    // Номера владельца для проверки бота: даже если они сохранены в телефоне Ширин, бот им отвечает (SCHOOL_WHATSAPP_TEST_NUMBERS).
+    this.testNumbers = new Set(testNumbers.map(n => String(n).replace(/\D/g, '')).filter(Boolean));
     this.pacing = pacing ? { ...DEFAULT_PACING, ...pacing } : null;
     this.sleep = sleep;
     this.random = random;
@@ -171,12 +174,17 @@ class Bridge {
         const aliases = await this.aliasesFor(id, contact);
         if (this.accountId !== accountId) throw failure('Account changed during contact synchronization');
         this.rememberAliases(aliases);
+        if (this.isTestNumber(aliases)) { for (const alias of aliases) if (this.account().blocked[alias] === 'saved_contact') delete this.account().blocked[alias]; continue; }
         for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
       }
       this.save(); this.contactsReady = true;
     } catch (error) {
       this.contactsReady = false; this.report(error); throw error;
     }
+  }
+
+  isTestNumber(aliases) {
+    return aliases.some(id => this.testNumbers.has(String(id).replace(/@.*$/, '')));
   }
 
   async contactStatus(chatId) {
@@ -191,11 +199,13 @@ class Bridge {
       const identityResolved = aliases.some(id => /^\d{7,15}@c\.us$/.test(id));
       if (!identityResolved) return { ...denied, aliases };
       this.rememberAliases(aliases);
-      if (contact.isMyContact) for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
-      const blocked = contact.isMyContact || aliases.some(id => !!this.account().blocked[id]);
+      const testNumber = this.isTestNumber(aliases);
+      if (testNumber) { for (const alias of aliases) if (this.account().blocked[alias] === 'saved_contact') delete this.account().blocked[alias]; }
+      else if (contact.isMyContact) for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
+      const blocked = (!testNumber && contact.isMyContact) || aliases.some(id => !!this.account().blocked[id]);
       const takenOver = aliases.some(id => !!this.account().takeovers[id]);
       this.save();
-      return { blocked, isMyContact: contact.isMyContact, aliases, takenOver, identityResolved };
+      return { blocked, isMyContact: testNumber ? false : contact.isMyContact, aliases, takenOver, identityResolved };
     } catch (error) { this.report(error); return denied; }
   }
 
@@ -329,6 +339,7 @@ class Bridge {
     if (typeof operationId !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(operationId)
       || !directId(chatId) || typeof replyToId !== 'string' || !['reply', 'verified_receipt_access'].includes(purpose)
       || (typeof text !== 'string' && typeof mediaUrl !== 'string') || (text && text.length > 12000)) throw failure('Invalid send request', 400);
+    if (mediaUrl && mediaType === 'audio' && text) throw failure('A voice note cannot carry text; send the text separately', 400);
     const accountId = this.accountId;
     const account = this.account();
     const payloadHash = digest({ chatId, replyToId, purpose, text, mediaUrl, mediaType });
@@ -349,8 +360,8 @@ class Bridge {
         || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
       await this.assertSendAllowed(chatId, purpose);
       this.assertWithinLimits(chatId);
-      // «Прочитано» только для обычного ответа (не для выдачи доступа по чеку) и если рубильник не выключен.
-      await this.pace(chatId, (text || '').length, purpose === 'reply' && markSeen !== false);
+      // «Прочитано» только для обычного ответа (не для выдачи доступа по чеку) и если рубильник не выключен
+      await this.pace(chatId, (text || '').length, purpose === 'reply' && markSeen !== false, mediaType === 'audio' && Boolean(mediaUrl));
       const content = mediaUrl ? await this.mediaFromUrl(mediaUrl, mediaType) : text;
       // Network/media work may take time. Recheck immediately before dispatch.
       await this.assertSendAllowed(chatId, purpose);
@@ -361,7 +372,9 @@ class Bridge {
       const ownSend = new Promise(resolve => { settle = resolve; });
       this.sending.set(chatId, ownSend);
       try {
-        const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text ? { caption: text } : {}), sendSeen: false });
+        // Audio goes out as a real voice note (ptt, waveform bubble), never as a file; voice notes carry no caption.
+        const isVoice = Boolean(mediaUrl) && mediaType === 'audio';
+        const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text && !isVoice ? { caption: text } : {}), ...(isVoice ? { sendAudioAsVoice: true } : {}), sendSeen: false });
         const messageId = idOf(sent?.id);
         if (!messageId) throw failure('Transport returned no message ID');
         op.status = 'sent'; op.messageId = messageId;
@@ -422,18 +435,21 @@ class Bridge {
   }
 
   /** Serialises all sends: random gap since the previous send, then a typing indicator sized to the text. */
-  pace(chatId, textLength, seen = true) {
+  pace(chatId, textLength, seen = true, voice = false) {
     const p = this.pacing; if (!p) return Promise.resolve();
     const run = this.paceChain.catch(() => {}).then(async () => {
       const gap = p.minGapMs + this.random() * (p.maxGapMs - p.minGapMs);
       const wait = this.lastSendAt + gap - this.now();
       if (wait > 0) await this.sleep(wait);
-      const typingMs = Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
+      // A voice note shows "recording audio…" for a few seconds, like a person talking into the phone.
+      const typingMs = voice
+        ? p.recordMinMs + this.random() * (p.recordMaxMs - p.recordMinMs)
+        : Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
       try {
         const chat = await this.client.getChatById?.(chatId);
-        // Прочитала → набирает: так делает человек (owner 08.11.2026). Только когда мы отвечаем.
+        // Прочитала → набирает (или записывает голосовое): так делает человек (owner 08.11.2026). Только когда мы отвечаем.
         if (seen) { try { await chat?.sendSeen?.(); } catch { /* отметка прочтения не должна ломать «печатает» */ } }
-        await chat?.sendStateTyping?.();
+        await (voice ? chat?.sendStateRecording?.() : chat?.sendStateTyping?.());
         await this.sleep(typingMs);
         await chat?.clearState?.();
       } catch { /* typing is cosmetic; never block or fail a send because of it */ }
