@@ -28,6 +28,7 @@ import { resetTodayCache } from "../today.js";
 import { softDeleteLesson, restoreLesson, listTrash, vacateTrashedOrder } from "./lessonTrash.js";
 import { createVideoChunkRouter } from "./videoChunks.js";
 import { issuePreviewTicket } from "./preview.js";
+import { recordAccessEvent, releaseDevice } from "./access.js";
 
 /**
  * АДМИНКА ПЛАТФОРМЫ — курсы, уроки, видео, рецепты, устройства и вопросы.
@@ -719,17 +720,36 @@ courseAdminRouter.post("/admin/course-devices/:id", async (req, res) => {
     return;
   }
   try {
-    await prisma.device.update({
+    const device = await prisma.device.update({
       where: { id: req.params.id },
       data: parsed.data.blocked
         ? { blockedAt: new Date(), blockedReason: parsed.data.reason ?? "Заблокировано владельцем" }
         : { blockedAt: null, blockedReason: null },
     });
+    await recordAccessEvent(device, parsed.data.blocked ? "blocked" : "unblocked", "owner");
     res.json({ ok: true });
   } catch (err) {
     logError("courseAdmin:device", err);
     res.status(404).json({ error: "Устройство не найдено" });
   }
+});
+
+/**
+ * «ОСВОБОДИТЬ МЕСТО» (08.11.2026). До этого у владельца были только
+ * «Заблокировать» и «Разблокировать» — а заблокированное устройство место
+ * ЗАНИМАЕТ, и ученице с новым телефоном, исчерпавшей свои две замены в месяц,
+ * помочь из панели было нечем. Удаляет одно устройство через ту же дверь, что
+ * и замена самой ученицей (access.ts releaseDevice), с записью в журнал.
+ * Права — как у всей панели: маршрут под requireAuth админки.
+ */
+courseAdminRouter.post("/admin/course-devices/:id/release", async (req, res) => {
+  const device = await prisma.device.findUnique({ where: { id: req.params.id } });
+  if (!device) {
+    res.status(404).json({ error: "Устройство не найдено — возможно, место уже освобождено" });
+    return;
+  }
+  await releaseDevice(device, "owner");
+  res.json({ ok: true });
 });
 
 /** Вопросы с платформы, на которые ещё не ответили. */

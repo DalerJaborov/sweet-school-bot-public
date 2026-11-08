@@ -13,8 +13,10 @@ import {
   pairDevice,
   issuePairToken,
   MAX_DEVICE_SWAPS_PER_MONTH,
+  ownerOfExpiredLink,
   type AccessResult,
 } from "./access.js";
+import { restoreAccessFromSite } from "./recovery.js";
 import { masterManifest, variantManifest, offlineSegmentList } from "./manifest.js";
 import { OFFLINE_RENDITION } from "../storage/videoPipeline.js";
 import { chatHistory, receiveQuestion } from "./chat.js";
@@ -147,6 +149,34 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
     return deny(res, result);
   }
   res.json({ ok: true, contactId: result.contact.id });
+});
+
+/**
+ * «ПОЛУЧИТЬ НОВУЮ ССЫЛКУ» с экрана просроченной ссылки (08.11.2026).
+ *
+ * Принимает тот же код из адреса. Ссылку в ответе НЕ отдаёт никогда — она
+ * уходит в переписку человека (course/recovery.ts → restoreAccessFromSite).
+ * Ответ — только исход, по нему экран выбирает текст:
+ *   sent        — новая ссылка уже в переписке;
+ *   write_first — напишите нам «Нужна новая ссылка», бот ответит сам;
+ *   escalated   — передали Ширин;
+ *   revoked     — доступ закрыт;
+ *   unknown     — ссылка не наша или уже заменена новой.
+ * Повторное нажатие безопасно: после выдачи старый код никого не находит.
+ */
+courseRouter.post(`${API_BASE}/relink`, async (req: Request, res: Response) => {
+  const parsed = z.object({ token: z.string().min(6).max(64) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Нужен token" });
+    return;
+  }
+  const contact = await ownerOfExpiredLink(parsed.data.token);
+  if (!contact) {
+    res.json({ outcome: "unknown", channel: null });
+    return;
+  }
+  const outcome = await restoreAccessFromSite(contact);
+  res.json({ outcome, channel: contact.channel });
 });
 
 /** Установленное приложение обменивает pair-токен на сессию (см. access.ts). */

@@ -1,11 +1,11 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
-import { deviceLimitFor, deviceCountFor } from "./access.js";
+import { deviceLimitFor, deviceCountFor, releaseDevice } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
-import type { Contact } from "@prisma/client";
+import type { Contact, Purchase } from "@prisma/client";
 import { isBotFrozen } from "../messaging/automation.js";
 
 /**
@@ -316,7 +316,7 @@ async function releaseOldestDevice(contactId: string): Promise<void> {
     );
     return;
   }
-  await prisma.device.delete({ where: { id: oldest.id } }).catch((err) => logError("recovery:releaseDevice", err));
+  await releaseDevice(oldest, "bot").catch((err) => logError("recovery:releaseDevice", err));
 }
 
 async function reply(contact: Contact, text: string): Promise<boolean> {
