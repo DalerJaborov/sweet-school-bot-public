@@ -79,7 +79,7 @@ describe("Статичные страницы сайта", () => {
         .replace(/\.html$/, "")
         .replace(/^(site|index)$/, "home");
       expect(page).toContain(
-        `<meta property="og:image" content="https://shirinsweets.online/img/covers/og-${key}-${tg ? "tg" : "ru"}.jpg?v=20261108-brand" />`,
+        `<meta property="og:image" content="https://shirinsweets.online/img/covers/og-${key}-${tg ? "tg" : "ru"}.jpg?v=20261109-logo" />`,
       );
       expect(page).toContain('<meta name="twitter:card" content="summary_large_image" />');
     }

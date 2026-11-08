@@ -220,7 +220,7 @@ function mediaImg(entry, alt, opts = {}) {
 /** Абсолютный URL картинки превью ссылки: своя на страницу+язык, иначе общая. */
 function ogImage(site, page, lang, media) {
   const own = media?.ogPages?.[page.slug]?.[lang];
-  return { url: site.origin + (own ?? site.ogImage) + "?v=20261108-brand", custom: Boolean(own) };
+  return { url: site.origin + (own ?? site.ogImage) + "?v=20261109-logo", custom: Boolean(own) };
 }
 
 // ---------- шапка / подвал ----------
@@ -248,8 +248,7 @@ function renderHeader(site, page, lang, ctx) {
 <header class="site-header">
   <div class="wrap">
     <a class="logo" href="${home}" aria-label="${esc(site.brand)} — ${esc(ui.home)}">
-      <span class="logo-mark" aria-hidden="true">S</span>
-      <span>${esc(site.brand)}<small>${esc(ui.tagline)}</small></span>
+      <span class="logo-word" aria-hidden="true"></span>
     </a>
     <nav class="site-nav" aria-label="${esc(ui.menu)}">${navLinks()}</nav>
     <div class="header-tools">
@@ -282,6 +281,7 @@ function renderFooter(site, lang, ctx) {
 <footer class="site-footer">
   <div class="wrap">
     <div>
+      <img class="footer-logo" src="/img/brand/shirin-logo.svg?v=20261109-logo" width="112" height="112" alt="Shirin — сладкий мир" loading="lazy" decoding="async" />
       <p><strong>${esc(site.brand)}</strong> · ${esc(ui.tagline)}</p>
       <p style="margin-top:8px;max-width:60ch">${esc(ui.footerAbout)}</p>
       <p class="footer-phone"><a href="tel:${esc(site.contacts.phone)}">${esc(site.contacts.phoneDisplay)}</a></p>
@@ -868,10 +868,10 @@ function renderHead(site, page, lang, ctx) {
     <meta name="twitter:title" content="${esc(title)}" />
     <meta name="twitter:description" content="${esc(desc)}" />
     <meta name="twitter:image:alt" content="${esc(L(page.h1, lang))}" />
-    <link rel="icon" href="/favicon.ico?v=20261108-brand" sizes="16x16 32x32 48x48" />
-    <link rel="icon" href="/favicon.svg?v=20261108-brand" type="image/svg+xml" sizes="any" />
-    <link rel="icon" href="/icons/favicon-32.png?v=20261108-brand" type="image/png" sizes="32x32" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png?v=20261108-brand" />
+    <link rel="icon" href="/favicon.ico?v=20261109-logo" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.svg?v=20261109-logo" type="image/svg+xml" sizes="any" />
+    <link rel="icon" href="/icons/favicon-32.png?v=20261109-logo" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png?v=20261109-logo" />
     <!-- Inter не блокирует отрисовку: подключаем как print, после загрузки
          переключаем на all. Системный шрифт виден сразу (display=swap). -->
     <script>try{if(localStorage.getItem('ssb_theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>

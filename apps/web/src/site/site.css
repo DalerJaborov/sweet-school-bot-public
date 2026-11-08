@@ -2011,3 +2011,18 @@ section[id] { scroll-margin-top: 96px; }
 @media (min-width: 900px) { .lesson-samples { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
 
 .about-figure::before { display: none; }
+
+/* Brand logo (traced from the owner's original): flat-colored lettering via mask, cream on dark theme. */
+.logo-word {
+  display: block;
+  height: 50px;
+  aspect-ratio: 276 / 111;
+  background: #9c0004;
+  -webkit-mask: url("/img/brand/shirin-wordmark.svg") center / contain no-repeat;
+  mask: url("/img/brand/shirin-wordmark.svg") center / contain no-repeat;
+}
+:root[data-theme="dark"] .logo-word { background: #f4debf; }
+.footer-logo { display: block; width: 112px; height: 112px; border-radius: 20px; margin-bottom: 12px; }
+@media (max-width: 420px) {
+  .logo-word { height: 38px; }
+}
