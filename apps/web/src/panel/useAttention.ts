@@ -100,7 +100,8 @@ export function activeCards(a: Attention, simple: boolean, showWaiting = true): 
   if (a.receipts > 0) out.push("receipts");
   if (showWaiting && a.waiting.length > 0) out.push("waiting");
   if (a.questions > 0) out.push("questions");
-  if (a.notOpened > 0) out.push("notOpened");
+  // «Оплатили, но не открыли уроки» с «Сегодня» убрано (владелец 08.11.2026: эта
+  // подсказка не нужна — ссылка у человека уже есть). Данные остаются в панели клиентов.
   if (!simple) {
     if (a.queue.some((q) => q.kind === "recipesToReview")) out.push("recipes");
     if (a.problems.length > 0) out.push("problems");

@@ -52,6 +52,8 @@ services:
       SCHOOL_WHATSAPP_MEDIA_HOSTS: ${SCHOOL_WHATSAPP_MEDIA_HOSTS:-shirinsweets.online}
       # Номера владельца для проверки бота: бот отвечает им, даже если они сохранены в телефоне Ширин (через запятую, цифры).
       SCHOOL_WHATSAPP_TEST_NUMBERS: ${SCHOOL_WHATSAPP_TEST_NUMBERS:-}
+      # Только на время привязки без QR: номер аккаунта цифрами; после привязки убрать.
+      SCHOOL_WHATSAPP_PAIR_PHONE: ${SCHOOL_WHATSAPP_PAIR_PHONE:-}
     volumes:
       - whatsapp-data:/data
     expose:
