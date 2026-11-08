@@ -7,6 +7,7 @@ import { ACCEPTED_WHERE } from "../receiptAccepted.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact, Purchase } from "@prisma/client";
+import { parseRecoveryCode, findContactByRecoveryCode } from "./linkCode.js";
 import { isBotFrozen, contactAutomationBlocked } from "../messaging/automation.js";
 
 /**
@@ -58,8 +59,11 @@ const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|б�
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
 const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ/iu;
 
-const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string }> = {
+const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string; foreign: string }> = {
   ru: {
+    foreign:
+      "Поняла вас. Это другой чат, поэтому ссылку здесь сама выдать не могу. Передала Ширин: " +
+      "она проверит покупку и откроет доступ.",
     sent: "Вот новая ссылка на ваши уроки. Откройте её на том телефоне, где будете смотреть:\n",
     pending:
       "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
@@ -67,6 +71,9 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
     revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Ширин посмотрит и напишет вам сама.",
   },
   tg: {
+    foreign:
+      "Фаҳмидам. Ин чати дигар аст, барои ҳамин линкро худам дода наметавонам. Ба Ширин расондам: " +
+      "ӯ харидро месанҷад ва дастрасиро мекушояд.",
     sent: "Мана линки нави дарсҳоятон. Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
     pending:
       "Хариди шуморо дидам. Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
@@ -74,6 +81,8 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
     revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида. Ширин месанҷад ва худаш менависад.",
   },
   en: {
+    foreign:
+      "This is a different chat, so I cannot issue the link here. I passed this to Shirin, she will check the purchase and open access.",
     sent: "Here is a fresh link to your lessons. Open it on the phone you will watch on:\n",
     pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
     revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
@@ -87,6 +96,8 @@ export function looksLikeAccessRequest(text: string): boolean {
   const trimmed = text?.trim();
   if (!trimmed || trimmed.length > 400) return false;
   return (
+    // Код покупательницы из готового сообщения страницы курса — сам по себе просьба.
+    parseRecoveryCode(trimmed) !== null ||
     DEVICE_LIMIT_HINT.test(trimmed) ||
     NEW_DEVICE.test(trimmed) ||
     (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed))
@@ -101,6 +112,17 @@ export function looksLikeAccessRequest(text: string): boolean {
 export async function maybeRestoreAccess(contact: Contact, text: string): Promise<RecoveryResult> {
   if (await isBotFrozen()) return { handled: false };
   if (!looksLikeAccessRequest(text)) return { handled: false };
+
+  // Код из ссылки: покупка могла быть сделана в другом чате. Бот выдаёт ссылку
+  // САМ только когда код указывает на ЭТОТ ЖЕ контакт; на чужой — только владельцу.
+  const code = parseRecoveryCode(text);
+  if (code) {
+    const owner = await findContactByRecoveryCode(code).catch((err) => {
+      logError("recovery:codeLookup", err);
+      return null;
+    });
+    if (owner && owner.id !== contact.id) return handleForeignCode(contact, owner, text);
+  }
 
   const verdict = await eligibility(contact);
   // Ничего не покупал — это не наш случай, пусть отвечает консультант: человек
@@ -417,4 +439,46 @@ async function tellOwner(
     chatId,
     `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
   ).catch((err) => logError("recovery:tellOwner", err));
+}
+
+/** Сводка владельцу с собственным ключом глушения (не чаще раза в сутки). */
+async function sendOwnerAlert(gateKey: string, text: string): Promise<void> {
+  const botToken = (await getSetting("telegramBotToken"))?.trim();
+  const chatId = (await techChatIds())[0];
+  if (!botToken || !chatId) return;
+  if (!(await shouldSendAlert(gateKey, { cooldownMs: 24 * 3_600_000 }))) return;
+  await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("recovery:tellOwner", err));
+}
+
+/**
+ * Код указывает на другого покупателя: человек пишет с другого номера/канала.
+ * Ссылку не выдаём НИКОГДА (кто угодно мог увидеть код в чужой переписке) —
+ * только передаём владельцу, кто покупатель, и он подтверждает одним действием.
+ */
+async function handleForeignCode(contact: Contact, owner: Contact, text: string): Promise<RecoveryResult> {
+  const language = detectClientLanguage(text);
+  const purchases = await prisma.purchase.findMany({ where: { contactId: owner.id }, orderBy: { createdAt: "desc" } });
+  const active = purchases.filter((p) => !p.revokedAt);
+  await reply(contact, TEXTS[language].foreign);
+
+  const courses = purchases
+    .map((p) => `${p.course}, куплено ${p.createdAt.toISOString().slice(0, 10)}${p.revokedAt ? " (ДОСТУП ОТОЗВАН)" : ""}`)
+    .join("; ");
+  const buyer = [owner.name, owner.username ? `@${owner.username}` : null, `${owner.channel} ${owner.igUserId}`]
+    .filter(Boolean)
+    .join(", ");
+  const writer = `${contact.channel} ${contact.username ? `@${contact.username}` : contact.igUserId}`;
+  const verdict =
+    purchases.length === 0
+      ? "покупок по коду нет"
+      : active.length === 0
+        ? "покупка ОТОЗВАНА — не открывайте без причины"
+        : "покупка действует; если это она, выдайте доступ командой /ссылка на ник покупателя";
+  await sendOwnerAlert(
+    `recovery-code:${owner.id}:${contact.id}`,
+    `Просят ссылку по коду из ссылки, но пишут с ДРУГОГО чата.\nПокупатель: ${buyer}\nКурсы: ${courses || "нет"}\n` +
+      `Пишет: ${writer}\n${verdict}\nБот ссылку сам НЕ выдавал.`,
+  );
+  logInfo("course:recovery", `код другого контакта: пишет ${contact.id}, покупатель ${owner.id}`);
+  return { handled: true, outcome: "escalated" };
 }

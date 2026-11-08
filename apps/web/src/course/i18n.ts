@@ -50,6 +50,7 @@ const RU = {
   buyCourseUrl: "https://shirinsweets.online/online-kurs",
   /** Предзаполненный текст в WhatsApp, когда ссылка на уроки не открылась. */
   linkBrokenWa: "Здравствуйте! Моя ссылка на уроки не открывается",
+  linkBrokenCode: "Мой код",
 
   // Просроченная ссылка (аудит 08.11.2026): не тупик, а новая ссылка в переписку.
   linkExpiredTitle: "Ссылка устарела",
@@ -279,6 +280,7 @@ const TG: typeof RU = {
   } as Record<string, string>,
   buyCourse: "Курсро харидан",
   buyCourseUrl: "https://shirinsweets.online/tg/online-kurs",
+  linkBrokenCode: "Рамзи ман",
   linkBrokenWa: "Ассалому алейкум! Ссылкаи дарсҳои ман кушода намешавад",
 
   linkExpiredTitle: "Мӯҳлати ссылка гузашт",

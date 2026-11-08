@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { loadSchoolContacts, type SchoolContacts } from "../api";
+import { loadSchoolContacts, storedRecoveryCode, type SchoolContacts } from "../api";
 import { ContactsBlock } from "../components/ContactsBlock";
 import { Illustration } from "../components/Illustration";
 import type { CourseErrorState } from "../hooks/useCourse";
@@ -45,7 +45,7 @@ export function ErrorScreen({
     };
   }, [school]);
 
-  const contacts = withPrefilledWhatsapp(school ?? fetched, error.reason === "not_found" ? t.linkBrokenWa : null);
+  const contacts = withPrefilledWhatsapp(school ?? fetched, error.reason === "not_found" ? brokenLinkMessage(t) : null);
 
   return (
     <div className="center" role="alert">
@@ -69,4 +69,14 @@ function withPrefilledWhatsapp(school: SchoolContacts | null, text: string | nul
   if (!text || !school.whatsapp) return school;
   const joiner = school.whatsapp.includes("?") ? "&" : "?";
   return { ...school, whatsapp: `${school.whatsapp}${joiner}text=${encodeURIComponent(text)}` };
+}
+
+/**
+ * Готовая фраза для WhatsApp. Если известен публичный код (его выводит сервер
+ * из ссылки, сама ссылка в текст НЕ попадает) — добавляем: так бот узнаёт
+ * покупательницу, даже когда она пишет с другого номера.
+ */
+export function brokenLinkMessage(t: Dict): string {
+  const code = storedRecoveryCode();
+  return code ? `${t.linkBrokenWa}. ${t.linkBrokenCode}: ${code}` : t.linkBrokenWa;
 }
