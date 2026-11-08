@@ -295,6 +295,30 @@ export async function createOneTimeInviteLink(
   }
 }
 
+/** Сообщение с произвольной клавиатурой (постоянное меню внизу или кнопки под
+ *  текстом) — для меню быстрых действий владельца и сестры (telegramMenu.ts). */
+export async function sendWithMarkup(
+  botToken: string,
+  chatId: string,
+  text: string,
+  replyMarkup: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = (await res.json()) as { ok?: boolean; description?: string };
+    if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+    return true;
+  } catch (err) {
+    logError("telegram:markup", err);
+    return false;
+  }
+}
+
 function parseChatIds(raw: string | null | undefined): string[] {
   return (raw ?? "")
     .split(/[\s,;]+/)
