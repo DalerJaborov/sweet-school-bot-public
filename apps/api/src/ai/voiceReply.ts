@@ -1,4 +1,5 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
+import { MetaDeliveryError } from "../messaging/metaErrors.js";
 import { sendAttachmentToContact } from "../messaging/send.js";
 import { decorateForV3, splitForVoice, synthesizeToFile, voiceEnabled } from "./voiceClone.js";
 
@@ -82,6 +83,11 @@ export async function trySendVoiceReply(
       sent += 1;
     }
   } catch (err) {
+    // Meta чётко отказала в аудио ещё до первой отправки (например формат не принят): ничего не ушло, отвечаем текстом.
+    if (sent === 0 && err instanceof MetaDeliveryError && err.kind !== "AMBIGUOUS" && err.status === 400) {
+      logError("voiceReply:metaRejected", err);
+      return false;
+    }
     // Часть голосовых уже у клиента: запоминаем, что ушло, чтобы история и панель не считали, что бот молчал.
     if (sent > 0) {
       await recordOutgoingMessage(contact.id, `${VOICE_MARK}(ушло ${sent} из ${urls.length}) ${text.trim()}`, mid).catch((e) => logError("voiceReply:record", e));
