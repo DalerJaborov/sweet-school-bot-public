@@ -78,20 +78,30 @@ export async function recordOutgoingMessage(contactId: string, text: string, mid
     const existing = await prisma.message.findUnique({ where: { mid } });
     if (existing?.byHuman && existing.contactId === contactId) {
       await prisma.message.update({ where: { mid }, data: { byHuman: false, text } });
-      const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-      // Never clear a real takeover because a different outgoing echo raced us.
-      if (contact?.humanTakeoverMid === mid && contact.humanTakenOverAt) {
-        const laterHuman = await prisma.message.findFirst({
-          where: { contactId, direction: "OUT", byHuman: true, mid: { not: mid }, createdAt: { gte: contact.humanTakenOverAt } },
-          orderBy: { createdAt: "desc" },
-        });
-        await prisma.contact.updateMany({
-          where: { id: contactId, humanTakeoverMid: mid },
-          data: { humanTakenOverAt: laterHuman?.createdAt ?? null, humanTakeoverMid: laterHuman?.mid ?? null },
-        });
-      }
+      await releaseTakeoverCausedBy(contactId, mid);
     }
   }
+}
+
+/**
+ * Снять «передано человеку», если оно поставлено ИМЕННО сообщением `mid`, которое
+ * на деле написали мы сами. Реальное вмешательство хозяйки (другой mid) не трогаем;
+ * если после ложного эха была настоящая её реплика — пауза переезжает на неё.
+ * Вызывают recordOutgoingMessage (гонка с эхо) и самолечение (takeoverHeal.ts).
+ */
+export async function releaseTakeoverCausedBy(contactId: string, mid: string): Promise<boolean> {
+  const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+  // Never clear a real takeover because a different outgoing echo raced us.
+  if (!contact || contact.humanTakeoverMid !== mid || !contact.humanTakenOverAt) return false;
+  const laterHuman = await prisma.message.findFirst({
+    where: { contactId, direction: "OUT", byHuman: true, mid: { not: mid }, createdAt: { gte: contact.humanTakenOverAt } },
+    orderBy: { createdAt: "desc" },
+  });
+  const res = await prisma.contact.updateMany({
+    where: { id: contactId, humanTakeoverMid: mid },
+    data: { humanTakenOverAt: laterHuman?.createdAt ?? null, humanTakeoverMid: laterHuman?.mid ?? null },
+  });
+  return (res?.count ?? 0) > 0;
 }
 
 export async function getSetting(key: string): Promise<string | null> {

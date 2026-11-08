@@ -4,6 +4,7 @@ import { getSetting, prisma, logWarn } from "./db.js";
 import { stripRepeatGreeting } from "./greeting.js";
 import { toOwnerVoice } from "./voice.js";
 import { assertMessagingAllowed } from "./messaging/automation.js";
+import { trackOwnSend } from "./ai/ownSendLedger.js";
 
 const GRAPH_VERSION = "v23.0";
 const TIMEOUT_MS = 15_000;
@@ -199,9 +200,9 @@ export async function sendText(
   await sleep(typingDelayMs(clean));
 
   const payload = { recipient: { id: igUserId }, message: buildMessage(clean, buttons) };
-  const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel);
-  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
-  return res.message_id;
+  const mid = await trackOwnSend(igUserId, clean, () => callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel));
+  if (!mid) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return mid;
 }
 
 /** Ищет контакт по каналу и id, чтобы решить, здоровались ли уже. Контакта нет
@@ -227,13 +228,15 @@ export async function sendPrivateReply(
   channel: MetaChannel = "INSTAGRAM"
 ): Promise<string | null> {
   await assertMessagingAllowed();
-  const res = await callGraph(
-    `/${GRAPH_VERSION}/me/messages`,
-    { recipient: { comment_id: commentId }, message: buildMessage(toOwnerVoice(text), buttons) },
-    channel
+  const mid = await trackOwnSend(null, null, () =>
+    callGraph(
+      `/${GRAPH_VERSION}/me/messages`,
+      { recipient: { comment_id: commentId }, message: buildMessage(toOwnerVoice(text), buttons) },
+      channel
+    )
   );
-  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
-  return res.message_id;
+  if (!mid) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return mid;
 }
 
 /** Удаляет комментарий под нашей публикацией — для спама, флирта и оскорблений:
@@ -331,7 +334,9 @@ export async function sendAttachment(
   await assertMessagingAllowed();
   const payload = { recipient: { id: igUserId }, message: { attachment: { type, payload: { url } } } };
 
-  const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS);
-  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
-  return res.message_id;
+  const mid = await trackOwnSend(igUserId, null, () =>
+    callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS)
+  );
+  if (!mid) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return mid;
 }

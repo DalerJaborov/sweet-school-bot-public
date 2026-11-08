@@ -30,6 +30,7 @@ import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
 import { BUDGET_FALLBACK } from "./ai/prompts.js";
 import { buildSystemPrompt, getSalesTexts, getOfflineFacts } from "./services/salesTextsService.js";
 import { isBudgetExceeded, recordAiCall } from "./ai/dailyBudget.js";
+import { noteDeliberateSilence } from "./ai/deliberateSilence.js";
 import { fetchAttachment, buildMediaPart, type Attachment, type MediaPart } from "./ai/media.js";
 import { checkReceipt, pickReceiptVerdict, type ReceiptVerdict } from "./ai/receiptCheck.js";
 import { queueUncheckedReceipt } from "./receiptRetry.js";
@@ -258,7 +259,10 @@ export async function aiReply(
   if (!(await passesRelevanceGate(contact, text, attachments, images.length > 0, language))) return;
 
   // «Спасибо» без вопроса — живой человек ставит сердечко, а не пишет ещё одно сообщение (ai/reactions.ts).
-  if (attachments.length === 0 && images.length === 0 && (await reactInsteadOfReply(contact, text))) return;
+  if (attachments.length === 0 && images.length === 0 && (await reactInsteadOfReply(contact, text))) {
+    noteDeliberateSilence(contact.id, "реакция вместо ответа");
+    return;
+  }
 
   // «Я отправила чек» — а картинки в сообщении нет и в этот ход ничего не
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
@@ -281,12 +285,19 @@ export async function aiReply(
       // телеграм-группы) и дальше молчим совсем, даже если спросят про другой
       // десерт. Поэтому считаем по всей переписке, а не по последним сообщениям.
       // Молчаливые виды («пустите бесплатно», назойливость) — ни слова в ответ.
-      if (isSilentKind(verdict.kind)) return;
+      if (isSilentKind(verdict.kind)) {
+        noteDeliberateSilence(contact.id, `молчаливый вид «${verdict.kind}»: ${verdict.reason}`);
+        return;
+      }
       const isRecipe = verdict.kind === "recipe_question";
       const limit = isRecipe ? MAX_RECIPE_REPLIES : MAX_GUARD_REPLIES;
       const recent = await recentOutgoingTexts(contact.id, isRecipe ? 50 : MAX_GUARD_REPLIES);
       const said = recent.filter((t) => isGuardReply(t, isRecipe ? "recipe_question" : undefined)).length;
-      if (said >= limit) return; // уже сказали — дальше отвечает сама Ширин, бот молчит
+      if (said >= limit) {
+        // уже сказали — дальше отвечает сама Ширин, бот молчит
+        noteDeliberateSilence(contact.id, `лимит ответов «${verdict.kind}» исчерпан`);
+        return;
+      }
       // Звать в закрытый телеграм-чат можно только тем, кто оплатил курс:
       // группа закрытая, и приглашать туда всех подряд нельзя (см. guardReply).
       const isStudent =
@@ -467,6 +478,7 @@ export async function aiReply(
       : null;
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
+      noteDeliberateSilence(contact.id, "модель вернула явную метку NO_REPLY");
       replyText = null;
     }
     if (replyText) {

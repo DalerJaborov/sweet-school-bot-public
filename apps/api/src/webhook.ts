@@ -18,6 +18,7 @@ import { fetchAttachment, type Attachment } from "./ai/media.js";
 import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
+import { classifyUnknownEcho } from "./ai/ownSendLedger.js";
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
  *  Instagram, а не наш код: написала текстом, ответила голосом или просто
@@ -242,6 +243,24 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 
   const known = await prisma.message.findUnique({ where: { mid: msg.mid } });
   if (known) return; // наша же отправка, эхо от Meta — не человек
+
+  // ЖУРНАЛ СВОИХ ОТПРАВОК (ai/ownSendLedger.ts): эхо могло обогнать запись mid
+  // (гонка) или относиться к отправке, на которую Graph не вернул mid. Это НАШИ
+  // сообщения — хозяйка тут ни при чём, и бота молчать заставлять нельзя.
+  const echoPlain = msg.text?.trim() || null;
+  const own = await classifyUnknownEcho(recipientId, msg.mid, echoPlain, (msg.attachments ?? []).length > 0);
+  if (own !== "unknown") {
+    if (own === "ambiguous") {
+      // mid мы так и не узнали — записываем сами, иначе история потеряет сообщение.
+      const ownContact = await upsertContact(recipientId, null, channel);
+      await prisma.message
+        .create({ data: { contactId: ownContact.id, direction: "OUT", mid: msg.mid, text: echoPlain, byHuman: false } })
+        .catch((err) => {
+          if ((err as { code?: string })?.code !== "P2002") logError("webhook:handleEcho:ownRecord", err);
+        });
+    }
+    return;
+  }
 
   const contact = await upsertContact(recipientId, null, channel);
 

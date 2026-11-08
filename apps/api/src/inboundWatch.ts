@@ -1,5 +1,11 @@
-import { prisma, getSetting } from "./db.js";
+import { prisma, getSetting, logError } from "./db.js";
 import { offsetMs } from "./dailyReport.js";
+import { notifyOwnerDirect } from "./systemAlerts.js";
+import { shouldSendAlert } from "./alertGate.js";
+import { deliberateSilenceSince } from "./ai/deliberateSilence.js";
+import { isPureThanks } from "./ai/reactions.js";
+import { resolveGeminiKeys } from "./ai/geminiKeys.js";
+import { healFalseTakeovers } from "./ai/takeoverHeal.js";
 
 /**
  * СТОРОЖ ВХОДЯЩИХ: «БОТ ЗАМОЛЧАЛ» — САМЫЙ ТИХИЙ ИЗ ОТКАЗОВ.
@@ -75,4 +81,119 @@ export async function checkInboundSilence(now = new Date()): Promise<void> {
 /** Только для тестов. */
 export function resetInboundWatch(): void {
   state = { silentHours: 0, alerting: false };
+}
+
+/**
+ * СТОРОЖ НЕОТВЕЧЕННЫХ (08.11.2026, владелец: «бот никогда не должен замолкать без причины»).
+ *
+ * Глобальный сторож выше ловит «входящих нет совсем». Этот — обратное: сообщение
+ * клиента пришло, а ответа нет дольше двух минут, хотя бот включён. Не важно, КАКОЙ
+ * из десятка путей молчания сработал (ложная пауза от эха, пустой ключ ИИ, упавшая
+ * очередь) — если никто не ответил и причина не записана как намеренная, владельцу
+ * уходит тревога с именем клиента и вероятной причиной. Одна тревога на одно
+ * сообщение (alertGate, состояние в базе).
+ *
+ * Намеренное молчание, которое НЕ тревожит: личный контакт и спам-блок, просьба
+ * позвать человека (владельцу уже ушло уведомление), живой ответ Ширин, «спасибо»
+ * без вопроса (реакция), чек у владельца на проверке, отказы с записанной причиной
+ * (ai/deliberateSilence.ts, журнал шлюза «не по делу»). Бот выключен или заморожен —
+ * тоже не тревога: так решил владелец.
+ */
+export const UNANSWERED_AFTER_MS = 2 * 60_000;
+const LOOKBACK_MS = 24 * 3_600_000;
+const PROCESS_STARTED_AT = Date.now();
+const MAX_ALERTS_PER_TICK = 5;
+
+const fmt = (d: Date, offset: number): string => {
+  const l = new Date(d.getTime() + offset);
+  return `${String(l.getUTCDate()).padStart(2, "0")}.${String(l.getUTCMonth() + 1).padStart(2, "0")} ${String(l.getUTCHours()).padStart(2, "0")}:${String(l.getUTCMinutes()).padStart(2, "0")}`;
+};
+
+export type UnansweredReason = { skip: true; why: string } | { skip: false; reason: string };
+
+/** Почему на последнее входящее нет ответа: намеренно (skip) или нет (reason). */
+export async function explainUnanswered(
+  contactId: string,
+  lastIn: { createdAt: Date; text: string | null },
+  now: Date
+): Promise<UnansweredReason> {
+  const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+  if (!contact) return { skip: true, why: "контакта нет" };
+  if (contact.personal) return { skip: true, why: "личный контакт" };
+  if (contact.spamBlockedAt) return { skip: true, why: "спам-блок" };
+  if (contact.whatsappSavedContact) return { skip: true, why: "контакт в телефоне хозяйки" };
+  if (contact.humanRequestedAt && contact.humanRequestedAt.getTime() >= lastIn.createdAt.getTime() - 5 * 60_000) {
+    return { skip: true, why: "просили позвать человека" };
+  }
+  if (lastIn.text && isPureThanks(lastIn.text)) return { skip: true, why: "спасибо без вопроса" };
+  const note = deliberateSilenceSince(contactId, lastIn.createdAt);
+  if (note) return { skip: true, why: note };
+  const gate = await prisma.replyGate.findFirst({ where: { contactId, createdAt: { gte: lastIn.createdAt } } });
+  if (gate) return { skip: true, why: `шлюз «не по делу»: ${gate.reason}` };
+  const receipt = await prisma.receiptCheck.findFirst({
+    where: { contactId, createdAt: { gte: new Date(lastIn.createdAt.getTime() - 60_000) }, ownerDecision: "PENDING" },
+  });
+  if (receipt) return { skip: true, why: "чек ждёт решения владельца" };
+
+  // Дальше — молчание без записанной причины. Подбираем самое вероятное объяснение.
+  if (contact.humanTakenOverAt) {
+    const cause = contact.humanTakeoverMid
+      ? await prisma.message.findUnique({ where: { mid: contact.humanTakeoverMid } })
+      : null;
+    const sample = cause?.text ? ` («${cause.text.slice(0, 60)}»)` : "";
+    return { skip: false, reason: `бот на паузе: передано человеку ${fmt(contact.humanTakenOverAt, await offsetMs())}${sample}, ответа после этого нет` };
+  }
+  if (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > now.getTime()) {
+    return { skip: false, reason: `пауза после действия хозяйки до ${fmt(contact.humanSilencedUntil, await offsetMs())}, ответа нет` };
+  }
+  const retry = await prisma.pendingAiReply.findFirst({ where: { contactId } });
+  if (retry) return { skip: false, reason: `ИИ не ответил, ход ждёт повтора (попыток: ${retry.attempts})` };
+  if ((await resolveGeminiKeys()).length === 0) return { skip: false, reason: "не заданы ключи ИИ" };
+  return { skip: false, reason: "причина не найдена, смотрите журнал ошибок и переписку" };
+}
+
+export async function checkUnansweredInbound(now = new Date()): Promise<number> {
+  if ((await getSetting("unansweredAlertEnabled")) === "false") return 0;
+  // Бот выключен владельцем (пауза, заморозка) — молчание осознанное, тревожить нечем.
+  if ((await getSetting("aiEnabled")) !== "true" || (await getSetting("botFrozen")) === "true") return 0;
+
+  // Самолечение раньше сторожа: ложная пауза от нашего же эха снимается сама.
+  await healFalseTakeovers().catch((err) => logError("takeoverHeal", err));
+
+  const since = new Date(Math.max(now.getTime() - LOOKBACK_MS, PROCESS_STARTED_AT));
+  const cutoff = new Date(now.getTime() - UNANSWERED_AFTER_MS);
+  const recent = await prisma.message.findMany({
+    where: { direction: "IN", createdAt: { gte: since } },
+    orderBy: { createdAt: "desc" },
+    select: { contactId: true, createdAt: true, text: true },
+    take: 500,
+  });
+  const latest = new Map<string, { createdAt: Date; text: string | null }>();
+  for (const m of recent) if (!latest.has(m.contactId)) latest.set(m.contactId, { createdAt: m.createdAt, text: m.text });
+
+  const offset = await offsetMs();
+  let sent = 0;
+  for (const [contactId, lastIn] of latest) {
+    if (sent >= MAX_ALERTS_PER_TICK) break;
+    if (lastIn.createdAt.getTime() > cutoff.getTime()) continue; // ещё в пределах двух минут
+    const answered = await prisma.message.count({ where: { contactId, direction: "OUT", createdAt: { gt: lastIn.createdAt } } });
+    if (answered > 0) continue;
+    const verdict = await explainUnanswered(contactId, lastIn, now);
+    if (verdict.skip) continue;
+    // Одна тревога на одно сообщение; уже отправленные не тратят лимит тика.
+    const key = `unanswered:${contactId}:${lastIn.createdAt.getTime()}`;
+    if (!(await shouldSendAlert(key, { cooldownMs: 24 * 3_600_000 }))) continue;
+    const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { name: true, username: true, igUserId: true, channel: true } });
+    const who = contact?.name || (contact?.username ? `@${contact.username}` : contact?.igUserId) || contactId;
+    const preview = lastIn.text ? `«${lastIn.text.slice(0, 120)}»` : "(вложение без текста)";
+    await notifyOwnerDirect(
+      `Бот не ответил клиенту: ${who} (${contact?.channel ?? "?"})
+` +
+        `Написал(а) в ${fmt(lastIn.createdAt, offset)}: ${preview}
+` +
+        `Причина: ${verdict.reason}`,
+    ).catch((err) => logError("inboundWatch:unanswered", err));
+    sent += 1;
+  }
+  return sent;
 }
