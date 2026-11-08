@@ -57,7 +57,7 @@ const purchase = (over: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   db = mockPrisma();
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null
+    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null,
   );
   db.model("contact").findUnique.mockResolvedValue(baseContact);
   db.model("purchase").findMany.mockResolvedValue([purchase()]);
@@ -128,7 +128,10 @@ describe("Приглашение в группу Telegram", () => {
   });
 
   it("уже вступала раньше, а покупка старее этого входа — не выдаём; новая покупка — выдаём", async () => {
-    db.model("contact").findUnique.mockResolvedValue({ ...baseContact, joinedGroupAt: new Date("2026-10-05T00:00:00Z") });
+    db.model("contact").findUnique.mockResolvedValue({
+      ...baseContact,
+      joinedGroupAt: new Date("2026-10-05T00:00:00Z"),
+    });
     expect(await issueOwnerLink("c1", "telegram")).toEqual({ ok: false, reason: "in-group" });
 
     db.model("purchase").findMany.mockResolvedValue([
@@ -154,11 +157,45 @@ describe("Приглашение в группу Telegram", () => {
   });
 
   it("прежнее неиспользованное приглашение гасим, чтобы его нельзя было переслать", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ ...baseContact, telegramUserId: "777" });
     db.model("purchase").findMany.mockResolvedValue([purchase({ inviteLink: "https://t.me/+OLD" })]);
     await issueOwnerLink("c1", "telegram");
     expect(revokeInviteLink).toHaveBeenCalledWith("бот-токен", "-100500", "https://t.me/+OLD");
     // гасим только после того, как новое готово
-    expect(createOneTimeInviteLink.mock.invocationCallOrder[0]).toBeLessThan(revokeInviteLink.mock.invocationCallOrder[0]);
+    expect(createOneTimeInviteLink.mock.invocationCallOrder[0]).toBeLessThan(
+      revokeInviteLink.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("Telegram человека неизвестен, а приглашение ей уже выдавали — не выдаём второе", async () => {
+    db.model("purchase").findMany.mockResolvedValue([purchase({ inviteLink: "https://t.me/+OLD" })]);
+    expect(await issueOwnerLink("c1", "telegram")).toEqual({ ok: false, reason: "unknown-member" });
+    expect(createOneTimeInviteLink).not.toHaveBeenCalled();
+  });
+
+  it("вышла из группы (Telegram известен) — старые отметки входа не мешают позвать снова", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ ...baseContact, telegramUserId: "777", joinedGroupAt: new Date() });
+    db.model("purchase").findMany.mockResolvedValue([purchase({ joinedAt: new Date() })]);
+    getChatMemberStatus.mockResolvedValue("left");
+    const r = await issueOwnerLink("c1", "telegram");
+    expect(r.ok).toBe(true);
+  });
+
+  it("забанена вручную (kicked) — приглашение не выдаём", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ ...baseContact, telegramUserId: "777" });
+    getChatMemberStatus.mockResolvedValue("kicked");
+    expect(await issueOwnerLink("c1", "telegram")).toEqual({ ok: false, reason: "in-group" });
+  });
+
+  it("две выдачи одному человеку одновременно: вторая ждёт, приглашение одно", async () => {
+    let release!: () => void;
+    createOneTimeInviteLink.mockImplementationOnce(() => new Promise((res) => { release = () => res("https://t.me/+SLOW"); }));
+    const first = issueOwnerLink("c1", "telegram");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await issueOwnerLink("c1", "telegram")).toEqual({ ok: false, reason: "busy" });
+    release();
+    expect((await first).ok).toBe(true);
+    expect(createOneTimeInviteLink).toHaveBeenCalledTimes(1);
   });
 
   it("ссылка-сайт в Purchase.inviteLink не принимается за приглашение и не гасится", async () => {

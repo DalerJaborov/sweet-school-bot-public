@@ -40,6 +40,8 @@ export type FailReason =
   | "no-group"
   | "in-group"
   | "check-failed"
+  | "unknown-member"
+  | "busy"
   | "tg-failed";
 
 export type IssueResult =
@@ -57,11 +59,19 @@ export const REASON_TEXT: Record<FailReason, string> = {
   "no-group": "Группа этого курса не задана в настройках.",
   "in-group":
     "Этот человек уже в группе — новое приглашение не выдаю: его можно было бы переслать другому. Если нужен сайт, выдайте ссылку на сайт.",
-  "check-failed": "Не получилось проверить, в группе ли человек. Попробуйте через минуту — наугад приглашение не выдаю.",
+  "check-failed":
+    "Не получилось проверить, в группе ли человек. Попробуйте через минуту — наугад приглашение не выдаю.",
+  "unknown-member":
+    "Ей уже выдавали приглашение, а её Telegram мы не знаем — проверить, вошла ли она, нельзя. Спросите её или выдайте ссылку на сайт.",
+  busy: "Для этого человека ссылка выдаётся прямо сейчас. Подождите минуту и посмотрите результат.",
   "tg-failed": "Telegram не дал приглашение. Проверьте, что бот — администратор группы с правом приглашать.",
 };
 
-const IN_GROUP = new Set(["member", "administrator", "creator", "restricted"]);
+// kicked — забанена вручную: приглашение ей всё равно можно переслать другому.
+const IN_GROUP = new Set(["member", "administrator", "creator", "restricted", "kicked"]);
+
+/** Один человек — одна выдача за раз (панель и бот одновременно не должны выпустить два приглашения). */
+const issuing = new Set<string>();
 
 export const MIN_QUERY = 2;
 const FIND_LIMIT = 6;
@@ -127,6 +137,16 @@ export async function findPeople(query: string): Promise<Person[]> {
 
 /** Выдать ссылку. Каждый вызов — отдельное решение владельца (одно нажатие = одна выдача). */
 export async function issueOwnerLink(contactId: string, kind: LinkKind): Promise<IssueResult> {
+  if (issuing.has(contactId)) return { ok: false, reason: "busy" };
+  issuing.add(contactId);
+  try {
+    return await issueOwnerLinkLocked(contactId, kind);
+  } finally {
+    issuing.delete(contactId);
+  }
+}
+
+async function issueOwnerLinkLocked(contactId: string, kind: LinkKind): Promise<IssueResult> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { ok: false, reason: "not-found" };
   if (contact.accessRevokedAt || contact.spamBlockedAt) return { ok: false, reason: "blocked" };
@@ -148,10 +168,16 @@ export async function issueOwnerLink(contactId: string, kind: LinkKind): Promise
 
   // Кого вообще можно звать: курс, в который человек ещё не вошёл. Если вход
   // на контакте уже отмечен, зовём только в курсы, купленные ПОСЛЕ него.
-  const candidates = purchases.filter(
-    (p) => !p.joinedAt && (!contact.joinedGroupAt || p.createdAt > contact.joinedGroupAt),
-  );
+  // Известен Telegram человека — решает сам Telegram (вышла из группы — можно позвать снова).
+  // Неизвестен — верим только отметкам входа, а прошлое приглашение без отметки не даёт
+  // понять, вошла ли она: отказываем (его могли использовать по ссылке, созданной вручную).
+  const candidates = contact.telegramUserId
+    ? purchases
+    : purchases.filter((p) => !p.joinedAt && (!contact.joinedGroupAt || p.createdAt > contact.joinedGroupAt));
   if (candidates.length === 0) return { ok: false, reason: "in-group" };
+  if (!contact.telegramUserId && candidates.some((p) => p.inviteLink?.startsWith("https://t.me/"))) {
+    return { ok: false, reason: "unknown-member" };
+  }
 
   // Прицельная проверка у самого Telegram, пока ни одно приглашение не выпущено.
   const targets: { purchase: (typeof candidates)[number]; chatId: string }[] = [];

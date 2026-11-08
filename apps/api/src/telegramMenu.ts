@@ -293,32 +293,31 @@ async function handleGrantStep(botToken: string, queryId: string, chatId: string
   } else if (!result.ok) {
     await sendTelegramMessage(botToken, chatId, REASON_TEXT[result.reason]);
   } else if (result.kind === "web") {
-    await sendWithMarkup(
-      botToken,
-      chatId,
+    const body =
       `🌐 Ссылка на сайт для ${who}
 
 ${result.url}
 
 ` +
-        "Она личная: откроется на первом телефоне, где её нажмут, пересылать дальше нельзя. " +
-        "Прошлая ссылка с этой минуты не работает.",
-      shareButton(result.url),
-    );
+      "Она личная: откроется на первом телефоне, где её нажмут, пересылать дальше нельзя. " +
+      "Прошлая ссылка с этой минуты не работает.";
+    // Прошлая ссылка уже погашена: если сообщение не ушло, повторяем без кнопки, а не теряем ссылку.
+    if (!(await sendWithMarkup(botToken, chatId, body, shareButton(result.url)))) {
+      await sendTelegramMessage(botToken, chatId, body);
+    }
   } else {
     for (const l of result.links) {
-      await sendWithMarkup(
-        botToken,
-        chatId,
+      const body =
         `✈️ Приглашение в группу для ${who}
 ${COURSE_SHORT[l.course] ?? l.course}
 
 ${l.url}
 
 ` +
-          "Одно приглашение — один человек, действует 30 дней. Прежнее приглашение этой ученицы не работает.",
-        shareButton(l.url),
-      );
+        "Одно приглашение — один человек, действует 30 дней. Прежнее неиспользованное приглашение этой ученицы не работает.";
+      if (!(await sendWithMarkup(botToken, chatId, body, shareButton(l.url)))) {
+        await sendTelegramMessage(botToken, chatId, body);
+      }
     }
   }
   return true;

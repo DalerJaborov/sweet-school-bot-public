@@ -27,8 +27,11 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const pending = useRef(false);
+  // Закрыли лист, пока шёл запрос: его ответ уже не нужен (иначе ссылка одного человека всплывёт под другим).
+  const epoch = useRef(0);
 
   function close() {
+    epoch.current += 1;
     setQuery("");
     setPeople(null);
     setPerson(null);
@@ -45,8 +48,9 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
+      const mine = epoch.current;
       const d = await api<{ people: Person[] }>(`/admin/access-link/search?q=${encodeURIComponent(query.trim())}`);
-      setPeople(d.people);
+      if (mine === epoch.current) setPeople(d.people);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не получилось найти");
     } finally {
@@ -61,8 +65,9 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
+      const mine = epoch.current;
       const d = await api<Issued>("/admin/access-link/issue", { method: "POST", body: { contactId: person.id, kind } });
-      setIssued(d);
+      if (mine === epoch.current) setIssued(d);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не получилось выдать ссылку");
     } finally {
@@ -145,13 +150,23 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
             <br />
             Куда выдать личную ссылку?
           </p>
-          <button type="button" className="btn wide today-action" disabled={busy} onClick={() => void issue("telegram")}>
+          <button
+            type="button"
+            className="btn wide today-action"
+            disabled={busy}
+            onClick={() => void issue("telegram")}
+          >
             В Telegram
           </button>
-          <button type="button" className="btn ghost wide today-action" disabled={busy} onClick={() => void issue("web")}>
+          <button
+            type="button"
+            className="btn ghost wide today-action"
+            disabled={busy}
+            onClick={() => void issue("web")}
+          >
             На сайт
           </button>
-          <p className="hint">Прошлая ссылка перестанет работать. Новая откроется на первом телефоне, где её нажмут.</p>
+          <p className="hint">«На сайт» — прошлая ссылка на сайт перестанет работать, новая откроется на первом телефоне, где её нажмут. «В Telegram» сайтовую ссылку не трогает.</p>
           <button type="button" className="btn ghost small" onClick={() => setPerson(null)}>
             Выбрать другого человека
           </button>
@@ -160,6 +175,11 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
 
       {issued && (
         <div className="access-form">
+          {person && (
+            <p className="today-sub">
+              Для: <b>{person.handle}{person.name ? ` · ${person.name}` : ""}</b>
+            </p>
+          )}
           {links.map((l) => (
             <div key={l.url} className="field">
               <span>{l.label}</span>

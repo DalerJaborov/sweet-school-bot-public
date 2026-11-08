@@ -27,7 +27,9 @@ async function pickAnna() {
 
 describe("AccessLinkSheet: выдать ссылку на уроки", () => {
   it("нашли → выбрали «На сайт» → получили ссылку", async () => {
-    const fetchMock = mockApi(() => new Response(JSON.stringify({ ok: true, kind: "web", url: "https://school.test/l/AAA", courses: [] })));
+    const fetchMock = mockApi(
+      () => new Response(JSON.stringify({ ok: true, kind: "web", url: "https://school.test/l/AAA", courses: [] })),
+    );
     render(<AccessLinkSheet open onClose={() => {}} />);
     await pickAnna();
     fireEvent.click(screen.getByRole("button", { name: "На сайт" }));
@@ -38,7 +40,12 @@ describe("AccessLinkSheet: выдать ссылку на уроки", () => {
   });
 
   it("выбрали «В Telegram» — приглашение показано по курсу", async () => {
-    mockApi(() => new Response(JSON.stringify({ ok: true, kind: "telegram", links: [{ course: "COURSE50", url: "https://t.me/+AAA" }] })));
+    mockApi(
+      () =>
+        new Response(
+          JSON.stringify({ ok: true, kind: "telegram", links: [{ course: "COURSE50", url: "https://t.me/+AAA" }] }),
+        ),
+    );
     render(<AccessLinkSheet open onClose={() => {}} />);
     await pickAnna();
     fireEvent.click(screen.getByRole("button", { name: "В Telegram" }));
@@ -47,7 +54,12 @@ describe("AccessLinkSheet: выдать ссылку на уроки", () => {
   });
 
   it("отказ сервера (уже в группе) показан словами, ссылки нет", async () => {
-    mockApi(() => new Response(JSON.stringify({ error: "Этот человек уже в группе — новое приглашение не выдаю." }), { status: 409 }));
+    mockApi(
+      () =>
+        new Response(JSON.stringify({ error: "Этот человек уже в группе — новое приглашение не выдаю." }), {
+          status: 409,
+        }),
+    );
     render(<AccessLinkSheet open onClose={() => {}} />);
     await pickAnna();
     fireEvent.click(screen.getByRole("button", { name: "В Telegram" }));
