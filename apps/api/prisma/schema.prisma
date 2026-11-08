@@ -306,6 +306,10 @@ model Message {
   /// проблемных мест, ради которого не нужно просить её что-то отмечать руками.
   byHuman   Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  /// Последнее сообщение разговора ищут по (contactId, createdAt): экран «Сегодня»
+  /// и сводки. Без индекса это полный проход по таблице.
+  @@index([contactId, createdAt])
 }
 
 /// Воронка. trigger:

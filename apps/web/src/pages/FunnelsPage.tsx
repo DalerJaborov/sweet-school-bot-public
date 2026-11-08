@@ -107,7 +107,7 @@ export function FunnelsPage() {
 
   return (
     <div className="card">
-      <h2>{Icons.funnels} Воронки</h2>
+      <h2>{Icons.funnels} Автосообщения</h2>
       <p className="hint">
         «С комментария» — человек комментирует публикацию, бот пишет ему в директ.
         «Из директа» — человек сам пишет первым.

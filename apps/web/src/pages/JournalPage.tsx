@@ -40,8 +40,8 @@ export function JournalPage() {
 
   return (
     <div className="card">
-      <h2>{Icons.journal} Журнал</h2>
-      <p className="hint">Кто и как проходит воронки.</p>
+      <h2>{Icons.journal} История переписки</h2>
+      <p className="hint">Кто и как проходит автосообщения.</p>
 
       <div className="seg" style={{ marginBottom: 14 }}>
         {FILTERS.map((f) => (
