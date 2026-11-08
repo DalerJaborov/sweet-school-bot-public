@@ -11,11 +11,13 @@ services:
       DATABASE_URL: file:/data/bot.db?connection_limit=1&socket_timeout=15
       PORT: "4100"
       NODE_ENV: production
-      SCHOOL_ACCESS_REQUIRED: "1"
-      SCHOOL_ACCESS_TEAM_DOMAIN: ${SCHOOL_ACCESS_TEAM_DOMAIN:?Set the Cloudflare Access team domain}
-      SCHOOL_ACCESS_AUDIENCE: ${SCHOOL_ACCESS_AUDIENCE:?Set the school Access audience}
-      SCHOOL_ADMIN_EMAIL: ${SCHOOL_ADMIN_EMAIL:?Set the single admin email}
-      SCHOOL_ADMIN_ORIGINS: ${SCHOOL_ADMIN_ORIGINS:?Set allowed admin HTTPS origins}
+      # Вход в панель: 0 = пароль + подпись Telegram (по умолчанию, решение владельца 08.11.2026),
+      # 1 = только Cloudflare Access (тогда нужны четыре переменные ниже).
+      SCHOOL_ACCESS_REQUIRED: ${SCHOOL_ACCESS_REQUIRED:?Set SCHOOL_ACCESS_REQUIRED to 0 or 1}
+      SCHOOL_ACCESS_TEAM_DOMAIN: ${SCHOOL_ACCESS_TEAM_DOMAIN:-}
+      SCHOOL_ACCESS_AUDIENCE: ${SCHOOL_ACCESS_AUDIENCE:-}
+      SCHOOL_ADMIN_EMAIL: ${SCHOOL_ADMIN_EMAIL:-}
+      SCHOOL_ADMIN_ORIGINS: ${SCHOOL_ADMIN_ORIGINS:-}
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       IG_PROXY_BASE: ${IG_PROXY_BASE:-}

@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
 import { Router } from "express";
-import jwt from "jsonwebtoken";
-import { env } from "./env.js";
 import { getSetting, logError } from "./db.js";
+import { createFailureGate, limiterKey, signAdminToken } from "./adminLogin.js";
 
 /**
  * ВХОД В ПАНЕЛЬ ИЗ TELEGRAM — без пароля.
@@ -20,8 +19,13 @@ import { getSetting, logError } from "./db.js";
 
 export const miniAppRouter = Router();
 
+/** Считаем только неудачи (20 с адреса за 15 минут): верная подпись в лимит не упирается,
+ * поток мусора не может закрыть вход владельцу. */
+const gate = createFailureGate(20);
+export const resetMiniAppLimits = () => gate.reset();
+
 /** Подпись живёт недолго: даже перехваченная строка станет бесполезной. */
-const MAX_AGE_SECONDS = 24 * 3600;
+const MAX_AGE_SECONDS = 3600;
 
 /**
  * Проверка подписи по правилам Telegram: пары «ключ=значение» сортируются,
@@ -65,8 +69,14 @@ async function isAllowed(userId: string): Promise<boolean> {
  * работает ровно как сайт — теми же запросами, с тем же токеном.
  */
 miniAppRouter.post("/admin/telegram-login", async (req, res) => {
-  if (process.env.SCHOOL_ACCESS_REQUIRED === "1" || process.env.NODE_ENV === "production") {
-    res.status(403).json({ error: "Вход через Telegram отключён. Откройте панель в браузере." }); return;
+  if (process.env.SCHOOL_ACCESS_REQUIRED === "1") {
+    res.status(403).json({ error: "Вход через Telegram отключён. Откройте панель в браузере." });
+    return;
+  }
+  const key = limiterKey(req);
+  if (gate.blocked(key)) {
+    res.status(429).json({ error: "Слишком много попыток. Подождите немного." });
+    return;
   }
   const initData = typeof req.body?.initData === "string" ? req.body.initData : "";
   if (!initData) {
@@ -82,13 +92,19 @@ miniAppRouter.post("/admin/telegram-login", async (req, res) => {
 
   const data = checkSignature(initData, botToken);
   if (!data) {
+    gate.fail(key);
     logError("miniApp", new Error("неверная подпись initData"));
     res.status(403).json({ error: "Подпись Telegram не сошлась" });
     return;
   }
 
   const authDate = Number(data.auth_date ?? 0);
-  if (!Number.isFinite(authDate) || authDate > Date.now() / 1000 + 30 || Date.now() / 1000 - authDate > MAX_AGE_SECONDS) {
+  if (
+    !Number.isFinite(authDate) ||
+    authDate > Date.now() / 1000 + 30 ||
+    Date.now() / 1000 - authDate > MAX_AGE_SECONDS
+  ) {
+    gate.fail(key);
     res.status(403).json({ error: "Данные Telegram устарели, откройте панель заново" });
     return;
   }
@@ -100,6 +116,7 @@ miniAppRouter.post("/admin/telegram-login", async (req, res) => {
     userId = "";
   }
   if (!userId || !(await isAllowed(userId))) {
+    gate.fail(key);
     res.status(403).json({ error: "Этот аккаунт не имеет доступа к панели" });
     return;
   }
@@ -108,8 +125,6 @@ miniAppRouter.post("/admin/telegram-login", async (req, res) => {
   // Раньше здесь его не было — проверялась одна лишь подпись, и тем же
   // секретом подписывались ссылки учениц. Ширин заходит именно этим путём,
   // так что без role она осталась бы снаружи собственной панели.
-  const token = jwt.sign({ role: "admin", sub: "admin", via: "telegram", tgId: userId }, env.jwtSecret, {
-    expiresIn: "30d",
-  });
+  const token = signAdminToken({ sub: "admin", via: "telegram", tgId: userId });
   res.json({ token });
 });

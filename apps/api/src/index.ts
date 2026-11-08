@@ -12,6 +12,7 @@ import { adminRevocations } from "./adminRevocations.js";
 import { env } from "./env.js";
 import { webhookRouter, runWebhookInbox } from "./webhook.js";
 import { adminRouter } from "./admin.js";
+import { adminLoginRouter } from "./adminLogin.js";
 import { mediaRouter } from "./upload.js";
 import { telegramRouter } from "./telegramWebhook.js";
 import { miniAppRouter } from "./miniApp.js";
@@ -56,6 +57,7 @@ autoCatch(courseRouter);
 autoCatch(siteRouter);
 autoCatch(freeLessonRouter);
 autoCatch(adminRouter);
+autoCatch(adminLoginRouter);
 
 // Второй рубеж: если что-то всё-таки проскочит (сторонний код, таймер вне
 // роутера), процесс не должен падать молча — падение бота хуже, чем шум в логе.
@@ -96,6 +98,7 @@ app.use(courseRouter); // платформа курсов: своя сессия
 app.use(siteRouter); // публичное API сайта: кука посетителя, без токена
 app.use(freeLessonRouter);
 app.use(miniAppRouter); // до adminRouter: вход из Telegram идёт без токена
+app.use(adminLoginRouter); // пароль: до adminRouter, под защитой от перебора
 app.use(adminRouter);
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

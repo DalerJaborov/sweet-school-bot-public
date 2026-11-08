@@ -1,8 +1,8 @@
 import { freeLessonAdminRouter } from "./site/freeLessonAdmin.js";
 import express, { Router, type Request, type Response, type NextFunction } from "express";
 import nodeCrypto from "node:crypto";
-import jwt from "jsonwebtoken";
 import { adminAccessConfig } from "./adminAccess.js";
+import { isAdminToken } from "./adminLogin.js";
 import { z } from "zod";
 import { env } from "./env.js";
 import { prisma, getSetting, logError } from "./db.js";
@@ -33,17 +33,6 @@ export const adminRouter = Router();
 
 // ---------- вход ----------
 
-adminRouter.post("/admin/login", (req, res) => {
-  if (adminAccessConfig()) { res.status(403).json({ error: "Используйте защищённый вход" }); return; }
-  const parsed = z.object({ password: z.string().min(1) }).safeParse(req.body);
-  if (!parsed.success || parsed.data.password !== env.adminPassword) {
-    res.status(401).json({ error: "Неверный пароль" });
-    return;
-  }
-  const token = jwt.sign({ role: "admin" }, env.jwtSecret, { expiresIn: "30d" });
-  res.json({ token });
-});
-
 /**
  * ТОКЕН ДОЛЖЕН БЫТЬ ИМЕННО АДМИНСКИМ, а не просто верно подписанным.
  *
@@ -58,15 +47,6 @@ adminRouter.post("/admin/login", (req, res) => {
  * и вовсе другим секретом (course/tokenSecret.ts) — это второй рубеж на
  * случай, если в новом обработчике однажды забудут проверку роли.
  */
-function isAdminToken(token: string): boolean {
-  try {
-    const claims = jwt.verify(token, env.jwtSecret) as { role?: unknown };
-    return claims?.role === "admin";
-  } catch {
-    return false;
-  }
-}
-
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (adminAccessConfig()) {
     if (res.locals.schoolAccessAuthenticated === true) next();
@@ -101,7 +81,10 @@ adminRouter.use("/admin/v1/knowledge", knowledgeReviewRouter);
  * а не в заголовке (форма не умеет слать заголовки).
  */
 adminRouter.post("/admin-form/setting", express.urlencoded({ extended: false }), (req, res) => {
-  if (adminAccessConfig()) { res.status(403).send("Изменяйте настройки только в панели"); return; }
+  if (adminAccessConfig()) {
+    res.status(403).send("Изменяйте настройки только в панели");
+    return;
+  }
   const parsed = z
     .object({ auth: z.string().min(1), key: z.string().min(1), value: z.string().min(1) })
     .safeParse(req.body);
@@ -120,7 +103,7 @@ adminRouter.post("/admin-form/setting", express.urlencoded({ extended: false }),
   }
   void writeSetting(key, parsed.data.value).then(
     () => res.send("Сохранено. Можно закрыть эту страницу."),
-    () => res.status(500).send("Не удалось сохранить")
+    () => res.status(500).send("Не удалось сохранить"),
   );
 });
 
@@ -235,7 +218,10 @@ adminRouter.get("/admin/funnel-stats", async (req, res) => {
     wrote++;
 
     const clientText = incoming.map((m) => m.text ?? "").join(" ");
-    const ourText = c.messages.filter((m) => m.direction === "OUT").map((m) => m.text ?? "").join(" ");
+    const ourText = c.messages
+      .filter((m) => m.direction === "OUT")
+      .map((m) => m.text ?? "")
+      .join(" ");
 
     const asked = PRICE_ASKED.test(clientText);
     const gotReq = REQUISITES_SENT.test(ourText);
@@ -331,7 +317,13 @@ adminRouter.get("/admin/quality", async (req, res) => {
 
 adminRouter.post("/admin/gemini-test", async (req, res) => {
   const parsed = z
-    .object({ model: z.string().min(3).max(80).regex(/^[a-z0-9][a-z0-9.-]*$/) })
+    .object({
+      model: z
+        .string()
+        .min(3)
+        .max(80)
+        .regex(/^[a-z0-9][a-z0-9.-]*$/),
+    })
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Имя модели — латиница, цифры, точка и дефис (например gemini-3.7-flash)" });
@@ -450,7 +442,11 @@ const buttonSchema = z.object({
 
 const stepSchema = z.object({
   order: z.number().int().min(0),
-  delaySeconds: z.number().int().min(0).max(24 * 3600),
+  delaySeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(24 * 3600),
   // Пустой текст разрешён нарочно: шаг может быть ЧИСТЫМ вложением — фото меню
   // или видео без подписи, ровно как это было в ManyChat. Проверка «шаг не
   // пустой совсем» ниже, в saveFunnel: текст ИЛИ вложение должны быть.
@@ -487,7 +483,7 @@ adminRouter.get("/admin/funnels", async (_req, res) => {
       keywords: parseStringArray(f.keywords),
       mediaIds: parseStringArray(f.mediaIds),
       steps: f.steps.map((s) => ({ ...s, buttons: parseStepButtonsJson(s.buttons) })),
-    }))
+    })),
   );
 });
 
@@ -689,10 +685,16 @@ adminRouter.post("/admin/receipts/:id/decide", async (req, res) => {
     })
     .safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Ожидается { action: 'approve'|'reject', course?: 'COURSE50'|'COURSE70'|'BOTH', reason?: string }" });
+    res
+      .status(400)
+      .json({
+        error: "Ожидается { action: 'approve'|'reject', course?: 'COURSE50'|'COURSE70'|'BOTH', reason?: string }",
+      });
     return;
   }
-  const result = await decideReceipt(req.params.id, parsed.data.action, parsed.data.course, { reason: parsed.data.reason });
+  const result = await decideReceipt(req.params.id, parsed.data.action, parsed.data.course, {
+    reason: parsed.data.reason,
+  });
   // Очередь «Сделать сейчас» обязана забыть этот чек сразу, не через 30 с кэша.
   resetTodayCache();
   if (!result.ok) {
@@ -924,11 +926,7 @@ adminRouter.get("/admin/contacts", async (req, res) => {
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const where = q
     ? {
-        OR: [
-          { username: { contains: q } },
-          { name: { contains: q } },
-          { igUserId: { contains: q } },
-        ],
+        OR: [{ username: { contains: q } }, { name: { contains: q } }, { igUserId: { contains: q } }],
       }
     : {};
 
@@ -978,7 +976,8 @@ adminRouter.get("/admin/contacts", async (req, res) => {
  * отзывает ссылку — иначе искать его в Telegram руками полчаса.
  */
 adminRouter.post("/admin/contacts/:id/revoke", async (req, res) => {
-  const reason = typeof req.body?.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : "фальшивый чек";
+  const reason =
+    typeof req.body?.reason === "string" && req.body.reason.trim() ? req.body.reason.trim() : "фальшивый чек";
 
   // Атомарная заявка на отзыв ПРЯМО В БАЗЕ: если два быстрых тапа пришли почти
   // одновременно, только один из них увидит count:1 и реально выполнит откат
@@ -998,7 +997,10 @@ adminRouter.post("/admin/contacts/:id/revoke", async (req, res) => {
     // revokeAccess не дошёл до реального отзыва (нет токена бота и т.п.) —
     // откатываем заявку, иначе повторная попытка увидит accessRevokedAt уже
     // проставленным и соврёт «уже отозвано», хотя ничего не произошло.
-    await prisma.contact.updateMany({ where: { id: req.params.id, accessRevokedAt: { not: null } }, data: { accessRevokedAt: null } });
+    await prisma.contact.updateMany({
+      where: { id: req.params.id, accessRevokedAt: { not: null } },
+      data: { accessRevokedAt: null },
+    });
     res.status(400).json({ error: result.details });
     return;
   }
@@ -1024,7 +1026,10 @@ adminRouter.post("/admin/contacts/:id/restore", async (req, res) => {
     // restoreAccess не дошёл до реального восстановления (нет токена бота и
     // т.п.) — откатываем снятую заявку, иначе повторная попытка увидит
     // accessRevokedAt уже пустым и соврёт «и так не был отозван».
-    await prisma.contact.updateMany({ where: { id: req.params.id, accessRevokedAt: null }, data: { accessRevokedAt: new Date() } });
+    await prisma.contact.updateMany({
+      where: { id: req.params.id, accessRevokedAt: null },
+      data: { accessRevokedAt: new Date() },
+    });
     res.status(400).json({ error: result.details });
     return;
   }
@@ -1032,8 +1037,18 @@ adminRouter.post("/admin/contacts/:id/restore", async (req, res) => {
 });
 
 const RU_MONTHS = [
-  "января", "февраля", "марта", "апреля", "мая", "июня",
-  "июля", "августа", "сентября", "октября", "ноября", "декабря",
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
 ];
 /** Сколько дней назад можно долистать на Главной — месяц с запасом, дальше
  *  смотреть по дням не нужно, для этого есть «Деньги» с настоящим периодом. */
@@ -1072,7 +1087,10 @@ adminRouter.get("/admin/dashboard", async (req, res) => {
 
   const [todaySales, weekSales, todayPeople, weekPeople, pending, unchecked, notJoined, offline, funnelsOn, aiOn] =
     await Promise.all([
-      prisma.purchase.findMany({ where: { createdAt: { gte: dayStart, lt: dayEnd }, revokedAt: null }, select: { amount: true } }),
+      prisma.purchase.findMany({
+        where: { createdAt: { gte: dayStart, lt: dayEnd }, revokedAt: null },
+        select: { amount: true },
+      }),
       prisma.purchase.findMany({ where: { createdAt: { gte: weekAgo }, revokedAt: null }, select: { amount: true } }),
       prisma.message.findMany({
         where: { direction: "IN", createdAt: { gte: dayStart, lt: dayEnd } },
@@ -1251,7 +1269,7 @@ adminRouter.post("/admin/contacts/:id/personal", async (req, res) => {
       where: { id: req.params.id },
       data: {
         personal: parsed.data.personal,
-        personalReason: parsed.data.personal ? parsed.data.reason ?? "Отмечен вручную" : null,
+        personalReason: parsed.data.personal ? (parsed.data.reason ?? "Отмечен вручную") : null,
       },
     });
     res.json({ ok: true });

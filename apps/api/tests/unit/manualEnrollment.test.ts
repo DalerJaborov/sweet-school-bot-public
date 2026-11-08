@@ -2,13 +2,14 @@ import { beforeAll, afterAll, beforeEach, afterEach, describe, it, expect, vi } 
 import express from "express";
 import type { Server } from "node:http";
 import jwt from "jsonwebtoken";
+import { signAdminToken } from "../../src/adminLogin.js";
 import { adminRouter } from "../../src/admin.js";
 import { env } from "../../src/env.js";
 import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../helpers.js";
 
 let server: Server;
 let base: string;
-const token = jwt.sign({ role: "admin" }, env.jwtSecret);
+const token = signAdminToken();
 const input = {
   name: "Мадина",
   phone: "+992 (90) 535-53-55",

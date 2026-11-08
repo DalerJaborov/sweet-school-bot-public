@@ -1,34 +1,24 @@
-# Production administrator access
+# Administrator access
 
-Production requires Cloudflare Access. There is no password or Telegram fallback;
-old application JWTs cannot authorize requests. Development/test environments retain
-the legacy login for local fixtures only. `NODE_ENV=production` fails closed when
-Access is disabled or incomplete.
+Supersedes the Cloudflare-only description (same file); not linked from code. Owner decision (08.11.2026): «полностью удали Cloudflare и сделай по старинке» — the panel opens the old way, no Cloudflare in front of it.
 
-Configure these server environment variables before deploying:
+## Mode 0 (default, `SCHOOL_ACCESS_REQUIRED=0`)
 
-- `SCHOOL_ACCESS_TEAM_DOMAIN`: the team's `*.cloudflareaccess.com` hostname.
-- `SCHOOL_ACCESS_AUDIENCE`: the unique 64-character school application AUD tag.
-- `SCHOOL_ADMIN_EMAIL`: the single authorized owner address.
-- `SCHOOL_ADMIN_ORIGINS`: comma-separated exact HTTPS origins, without trailing slashes.
+- **Telegram mini-app** (`/panel/` opened from the bot button): `POST /admin/telegram-login`
+  verifies the Telegram `initData` HMAC (key derived from the bot token, constant-time compare,
+  `auth_date` not older than 24 h and not in the future) and lets in only the chat ids stored in the
+  settings `telegramOwnerChatId` and `telegramReportChatId`. It returns a 30-day admin JWT (`role: admin`).
+- **Browser**: password login `POST /admin/login` (`ADMIN_PASSWORD`, constant-time compare).
+- **Brute-force protection** (HTTP 429, in memory): password login 8 attempts per IP and 40 overall
+  per 15 minutes; Telegram login 20 per IP and 100 overall per 15 minutes.
+- `ADMIN_PASSWORD` must be long and random (16+ characters). Student course tokens use a different
+  secret and are never accepted by the panel (role check in `admin.ts`).
+- In production the mode must be explicit: `SCHOOL_ACCESS_REQUIRED` unset fails startup.
 
-The production compose file enforces `SCHOOL_ACCESS_REQUIRED=1`. Protect `/admin*`
-and `/panel*` on every school hostname in the Access application. Keep public site,
-student course, media and webhook routes outside this application. Configure the
-owner-only Allow policy, required MFA, **1 hour** application and MFA sessions,
-HttpOnly, a binding cookie and SameSite=Lax. Do not add bypass/service-auth policies.
-The application assertion must be RS256-signed by the configured team, for this
-application, with the authorized email and at most a one-hour lifetime.
+## Mode 1 (`SCHOOL_ACCESS_REQUIRED=1`, optional)
 
-The server guard runs before every router, JSON body parsing and CORS. It rejects
-legacy login and form-setting endpoints and enforces an exact Origin on all writes.
-The frontend uses the Access HttpOnly cookie, removes its old localStorage token,
-and never receives or persists the assertion. Logout first persists a SHA-256
-fingerprint of the current assertion in `AdminSessionRevocation`, then navigates to
-the Access logout endpoint. Revoked assertions remain rejected after process restart.
-Other devices/sessions are separate; revoke them through the Access dashboard.
-
-Before release: back up the SQLite database, preserve the APK and runtime .env,
-apply the additive migration, run source/cloud checks and verify public/student
-routes, denied anonymous admin calls, valid owner MFA login and logout. Keep the
-Access policies active if reverting code; do not reopen legacy external access.
+Only a Cloudflare Access assertion (RS256, issuer/AUD/email checked) is accepted; password and
+Telegram login return 403; exact `Origin` required on writes; logout revokes the assertion.
+Needs `SCHOOL_ACCESS_TEAM_DOMAIN`, `SCHOOL_ACCESS_AUDIENCE`, `SCHOOL_ADMIN_EMAIL`,
+`SCHOOL_ADMIN_ORIGINS` and an Access application on `/admin*` and `/panel*`.
+In mode 0 that Access application must NOT cover those paths, otherwise Cloudflare blocks the mini-app.
