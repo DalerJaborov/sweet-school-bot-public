@@ -27,6 +27,7 @@ import { writeSettings } from "../services/settingsService.js";
 import { resetTodayCache } from "../today.js";
 import { softDeleteLesson, restoreLesson, listTrash, vacateTrashedOrder } from "./lessonTrash.js";
 import { createVideoChunkRouter } from "./videoChunks.js";
+import { issuePreviewTicket } from "./preview.js";
 
 /**
  * АДМИНКА ПЛАТФОРМЫ — курсы, уроки, видео, рецепты, устройства и вопросы.
@@ -183,6 +184,35 @@ courseAdminRouter.put("/admin/courses/:id", async (req, res) => {
     logError("courseAdmin:updateCourse", err);
     res.status(404).json({ error: "Курс не найден" });
   }
+});
+
+/**
+ * «ПОСМОТРЕТЬ КАК УЧЕНИЦА» — билет на предпросмотр (course/preview.ts).
+ *
+ * Без courseId — все курсы разом, как у ученицы, купившей всё; с courseId —
+ * один. Ничего не создаёт: ни покупки, ни устройства, ни прогресса — только
+ * одноразовый билет на 10 минут, который приложение ученицы обменяет на куку
+ * предпросмотра. Проверка пароля панели стоит выше (admin.ts).
+ */
+courseAdminRouter.post("/admin/course-preview", async (req, res) => {
+  const parsed = z.object({ courseId: z.string().min(1).max(64).nullish() }).safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "Неверный курс" });
+    return;
+  }
+  const courseId = parsed.data.courseId ?? null;
+  const courses = await prisma.course.findMany({
+    where: courseId ? { id: courseId } : {},
+    orderBy: { order: "asc" },
+    select: { id: true },
+    take: 20,
+  });
+  if (courses.length === 0) {
+    res.status(404).json({ error: courseId ? "Курс не найден" : "Курсов пока нет" });
+    return;
+  }
+  const ticket = issuePreviewTicket(courses.map((c) => c.id));
+  res.json({ url: `/course?preview=${encodeURIComponent(ticket)}` });
 });
 
 /** Первичное заполнение каталога из констант — та же операция, что скрипт
