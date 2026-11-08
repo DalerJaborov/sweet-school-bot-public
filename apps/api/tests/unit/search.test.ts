@@ -100,8 +100,8 @@ describe("GET /admin/search", () => {
     expect(arg.where.deletedAt).toBeNull();
   });
 
-  it("«цена» находит раздел «Тексты и цены»", async () => {
+  it("«цена» находит раздел «Цены и тексты»", async () => {
     const r = await search("цена");
-    expect(r.sections).toEqual([{ tab: "texts", title: "Тексты и цены" }]);
+    expect(r.sections).toEqual([{ tab: "texts", title: "Цены и тексты" }]);
   });
 });

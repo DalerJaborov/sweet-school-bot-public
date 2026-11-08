@@ -39,10 +39,10 @@ describe("QuestionsPage — черновик от ИИ", () => {
     render(<QuestionsPage />);
     const area = (await screen.findByLabelText("Ответ для @madina")) as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Черновик от ИИ" }));
+      fireEvent.click(screen.getByRole("button", { name: "Черновик от помощника" }));
     });
     expect(area.value).toBe("Да, 2,5% подойдёт.");
-    expect(screen.getByText(/Черновик ИИ по рецепту урока 7/)).toBeTruthy();
+    expect(screen.getByText(/Черновик помощника по рецепту урока 7/)).toBeTruthy();
     // Черновик ничего не отправил.
     expect(calls.some((c) => c.url.endsWith("/reply"))).toBe(false);
 
@@ -64,7 +64,7 @@ describe("QuestionsPage — черновик от ИИ", () => {
     );
     const area = (await screen.findByLabelText("Ответ для @madina")) as HTMLTextAreaElement;
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Черновик от ИИ" }));
+      fireEvent.click(screen.getByRole("button", { name: "Черновик от помощника" }));
     });
     expect(area.value).toBe("");
     expect(screen.getByText("В рецептах ответа нет — лучше ответить самой")).toBeTruthy();
