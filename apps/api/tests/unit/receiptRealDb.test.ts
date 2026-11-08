@@ -515,11 +515,17 @@ describe("настоящая база: ссылка Ширин тратится 
     const p50 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE50" } } });
     const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
     expect(p70?.deliveryAwaitingChoice).toBe(false);
-    expect(p70?.inviteLink).toContain("/l/aBcD234567");
+    // адрес ссылки в inviteLink НЕ пишем (по нему groupAccess ищет вошедших в группу)
+    expect(p70?.inviteLink).toBeNull();
+    expect(p70?.accessIssuedAt).not.toBeNull();
     expect(p50?.deliveryAwaitingChoice).toBe(true);
     expect(p50?.inviteLink).toBeNull();
-    // владелице про ручную ссылку сообщили один раз
+    // владелице про ручную ссылку сообщили один раз и сказали, что 50 ещё ждёт
     expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toMatch(/Ещё ждёт оплата за: Арт-десерты/);
+    // вопрос про Telegram сброшен: следующее сообщение клиентки задаст его заново
+    const contactAfter = await db.contact.findUnique({ where: { id: c.id } });
+    expect(contactAfter?.deliveryChoicePromptState).toBeNull();
   });
 
   it("одно сообщение с двумя ссылками на комплект закрывает обе покупки", async () => {
@@ -534,7 +540,7 @@ describe("настоящая база: ссылка Ширин тратится 
     await settleChoiceIfHandedOut(c.id);
     const rows = await db.purchase.findMany({ where: { contactId: c.id } });
     expect(rows.every((r) => r.deliveryAwaitingChoice === false)).toBe(true);
-    expect(new Set(rows.map((r) => r.inviteLink)).size).toBe(2);
+    expect(rows.every((r) => r.inviteLink === null && r.accessIssuedAt !== null)).toBe(true);
   });
 
   it("тот же номер операции, пока ждём ответа про Telegram и Ширин перехватила чат: клиентке всё равно уходит напоминание", async () => {
@@ -545,6 +551,32 @@ describe("настоящая база: ссылка Ширин тратится 
     });
     await handleReceiptVerdict(c, verdict("h3-second", { amount: 70, transactionId: "TXN-H3-111111" }));
     expect(sendToContact).toHaveBeenCalled();
+  });
+
+  it("31 сообщение Ширин без ссылки, потом ссылка: покупка всё равно закрывается (берём последние сообщения)", async () => {
+    const c = await newContact("h4");
+    const now = Date.now();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 3 * 3600_000) } });
+    for (let i = 0; i < 31; i++) {
+      await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: `Сообщение ${i}`, createdAt: new Date(now - 2 * 3600_000 + i * 1000) } });
+    }
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 3600_000) } });
+    expect(await settleChoiceIfHandedOut(c.id)).toBe(true);
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p70?.deliveryAwaitingChoice).toBe(false);
+  });
+
+  it("личная ссылка сайта, уже потраченная на покупку 50, не мешает закрыть 70 второй ссылкой (счёт без записи адресов)", async () => {
+    const c = await newContact("h5");
+    const now = Date.now();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 60 * 60_000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 50 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 40 * 60_000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 30 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    const rows = await db.purchase.findMany({ where: { contactId: c.id } });
+    expect(rows.every((r) => r.deliveryAwaitingChoice === false)).toBe(true);
   });
 });
 
