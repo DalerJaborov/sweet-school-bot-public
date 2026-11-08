@@ -36,6 +36,7 @@ import {
   parseSwitchRequest,
   isFreeSwitch,
 } from "../../src/course/channelSwitch.js";
+import { recoveryCodeFor } from "../../src/course/linkCode.js";
 import { openByLink } from "../../src/course/access.js";
 import { maybeRestoreAccess, looksLikeAccessRequest } from "../../src/course/recovery.js";
 import type { Contact } from "@prisma/client";
@@ -135,7 +136,14 @@ describe("parseSwitchRequest", () => {
     ]) {
       expect(parseSwitchRequest(t), t).toBe("web");
     }
-    for (const t of ["хочу в телеграм", "пришлите приглашение в группу", "переведите в Telegram", "дар Telegram мехоҳам", "Здравствуйте! Хочу в Telegram, пришлите приглашение в группу. Мой код: 7F3A-91C2", "Ассалому алейкум! Дар Telegram мехоҳам, линк ба гурӯҳ диҳед"]) {
+    for (const t of [
+      "хочу в телеграм",
+      "пришлите приглашение в группу",
+      "переведите в Telegram",
+      "дар Telegram мехоҳам",
+      "Здравствуйте! Хочу в Telegram, пришлите приглашение в группу. Мой код: 7F3A-91C2",
+      "Ассалому алейкум! Дар Telegram мехоҳам, линк ба гурӯҳ диҳед",
+    ]) {
       expect(parseSwitchRequest(t), t).toBe("telegram");
     }
   });
@@ -149,9 +157,15 @@ describe("parseSwitchRequest", () => {
 describe("isFreeSwitch", () => {
   it("первые сутки и «ещё не открывала» — бесплатно, иначе нет", () => {
     expect(isFreeSwitch([{ createdAt: new Date(), firstOpenedAt: new Date(), joinedAt: null }])).toBe(true);
-    expect(isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: null }])).toBe(true);
-    expect(isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: new Date(), joinedAt: null }])).toBe(false);
-    expect(isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: new Date() }])).toBe(false);
+    expect(isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: null }])).toBe(
+      true,
+    );
+    expect(
+      isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: new Date(), joinedAt: null }]),
+    ).toBe(false);
+    expect(
+      isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: new Date() }]),
+    ).toBe(false);
     expect(isFreeSwitch([])).toBe(false);
   });
 });
@@ -195,7 +209,12 @@ describe("одна действующая ссылка на человека", (
   });
 
   it("Telegram -> сайт: приглашение отозвано, выдана новая ссылка, она записана и работает как единственная", async () => {
-    contactRow = baseContact({ courseDeliveryChoice: "telegram", inviteLink: TG_LINK, accessTokenId: null, accessIssuedAt: null });
+    contactRow = baseContact({
+      courseDeliveryChoice: "telegram",
+      inviteLink: TG_LINK,
+      accessTokenId: null,
+      accessIssuedAt: null,
+    });
     purchaseRows = [purchase({ inviteLink: TG_LINK, firstOpenedAt: null })];
 
     const outcome = await switchCourseChannel(asContact(), "web", "bot");
@@ -250,7 +269,12 @@ describe("одна действующая ссылка на человека", (
   });
 
   it("сайтовая ссылка не доставилась: приглашение в группу осталось действующим (человек не остаётся ни с чем)", async () => {
-    contactRow = baseContact({ courseDeliveryChoice: "telegram", inviteLink: TG_LINK, accessTokenId: null, accessIssuedAt: null });
+    contactRow = baseContact({
+      courseDeliveryChoice: "telegram",
+      inviteLink: TG_LINK,
+      accessTokenId: null,
+      accessIssuedAt: null,
+    });
     purchaseRows = [purchase({ inviteLink: TG_LINK })];
     sendText.mockRejectedValue(new Error("network"));
 
@@ -374,18 +398,75 @@ describe("одна действующая ссылка на человека", (
   });
 
   it("из чата бота: «нет телеграма, хочу на сайте» -> бот сам переключает (чек в базе есть)", async () => {
-    contactRow = baseContact({ courseDeliveryChoice: "telegram", inviteLink: TG_LINK, accessTokenId: null, accessIssuedAt: null });
+    contactRow = baseContact({
+      courseDeliveryChoice: "telegram",
+      inviteLink: TG_LINK,
+      accessTokenId: null,
+      accessIssuedAt: null,
+    });
     purchaseRows = [purchase({ inviteLink: TG_LINK })];
     db.model("receiptCheck").count.mockResolvedValue(1);
     const text = "у меня нет телеграма, хочу на сайте";
     expect(looksLikeAccessRequest(text)).toBe(true);
 
-    const result = await maybeRestoreAccess(asContact(), text);
+    // Шаг 1: только вопрос «перевести вас?», ничего не меняется.
+    const first = await maybeRestoreAccess(asContact(), text);
+    expect(first).toEqual({ handled: true, outcome: "escalated" });
+    expect(String(sendText.mock.calls[0][1])).toContain("ответьте «да»");
+    expect(revokeInviteLink).not.toHaveBeenCalled();
+    expect(contactRow.courseDeliveryChoice).toBe("telegram");
 
+    // Шаг 2: «да» — переключение.
+    sendText.mockClear();
+    const result = await maybeRestoreAccess(asContact(), "да");
     expect(result).toEqual({ handled: true, outcome: "reissued" });
     expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100500", TG_LINK);
     expect(contactRow.courseDeliveryChoice).toBe("web");
     expect(String(sendText.mock.calls[0][1])).toContain("/l/");
+  });
+
+  it("«да» без вопроса ничего не делает, а любой другой ответ снимает вопрос", async () => {
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    expect(await maybeRestoreAccess(asContact(), "да")).toEqual({ handled: false });
+    await maybeRestoreAccess(asContact(), "хочу в телеграм");
+    await maybeRestoreAccess(asContact(), "а сколько стоит второй курс");
+    expect(await maybeRestoreAccess(asContact(), "да")).toEqual({ handled: false });
+    expect(createOneTimeInviteLink).not.toHaveBeenCalled();
+    expect(contactRow.accessTokenId).toBe(OLD_CODE);
+  });
+
+  it("обычные вопросы про чек и оплату не принимаются за просьбу переключить", () => {
+    for (const t of [
+      "Можно в тг скину чек?",
+      "Можно на сайте оплатить второй курс?",
+      "Курс на сайте сколько стоит?",
+      "Дайте ссылку на группу для вопросов",
+      "Ссылка в группу не открывается",
+      "Видео в телеграме не открывается",
+    ]) {
+      expect(parseSwitchRequest(t), t).toBeNull();
+    }
+  });
+
+  it("код с экрана ошибки из ДРУГОГО чата: бот не переключает и не советует /ссылка, владельцу кнопка перевода покупателя", async () => {
+    const buyer = { ...baseContact({ id: "11111111-1111-4111-8111-111111111111", igUserId: "ig-buyer" }) };
+    const code = recoveryCodeFor(String(buyer.accessTokenId));
+    db.model("contact").findUnique.mockImplementation(async ({ where }: { where: Row }) =>
+      where.accessTokenId === buyer.accessTokenId || where.id === buyer.id ? { ...buyer } : { ...contactRow },
+    );
+    db.model("contact").findMany.mockResolvedValue([buyer]);
+    purchaseRows = [purchase({ contactId: String(buyer.id) })];
+    const other = baseContact({ id: "c-9", channel: "WHATSAPP", igUserId: "992900000000" });
+
+    const result = await maybeRestoreAccess(
+      other as unknown as Contact,
+      `Здравствуйте! Хочу в Telegram, пришлите приглашение в группу. Мой код: ${code}`,
+    );
+
+    expect(result).toMatchObject({ handled: true, outcome: "escalated" });
+    expect(createOneTimeInviteLink).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendTelegramMessage.mock.calls.at(-1))).toContain(`mn:sw:${String(buyer.id)}:t`);
+    expect(JSON.stringify(sendTelegramMessage.mock.calls)).not.toContain("/ссылка");
   });
 
   it("из чата бота без чека в базе переключение не делается", async () => {

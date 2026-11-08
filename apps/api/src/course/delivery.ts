@@ -82,6 +82,9 @@ export async function issueCourseLink(contactId: string, opts: { automatic?: boo
     where: { id: contactId },
     data: { accessTokenId: jti, accessIssuedAt: new Date() },
   });
+  // Одна действующая ссылка на человека: явная выдача сайта владельцем закрывает Telegram-приглашение.
+  const { closeTelegramDoor } = await import("./channelSwitch.js");
+  await closeTelegramDoor(contactId).catch((err) => logError("delivery:closeTelegramDoor", err));
   return url;
 }
 

@@ -6,6 +6,7 @@ import { shouldSendAlert } from "../alertGate.js";
 import { chatIdFor, COURSE_TITLE, COURSE_50, COURSE_70, type Course } from "../courses.js";
 import { canTransferNow, issueMagicLink, recentTransfers, shortCode } from "./access.js";
 import { coursePlatformReady } from "./delivery.js";
+import { revokeInvitesForContact } from "../links/telegramInvites.js";
 
 /**
  * ОДНА ДЕЙСТВУЮЩАЯ ССЫЛКА НА ЧЕЛОВЕКА (владелец 08.11.2026).
@@ -46,10 +47,10 @@ const WEB_REQUEST = new RegExp(
   [
     `(?:нет|нету|без)\\s+${TG}`,
     `${TG}\\s+(?:нет|нету|надорам|нест)`,
-    `${TG}\\s+не\\s+(?:работает|открывается|установлен\\p{L}*|ставится)`,
+    `${TG}\\s+не\\s+(?:установлен\\p{L}*|ставится)`,
     `не\\s+(?:могу|получается|выходит)\\s+(?:зайти|войти|вступить)\\s+(?:в|во)\\s+(?:группу|чат|${TG})`,
-    `(?:ссылк\\p{L}*|уроки|курс)\\s+(?:на|через)\\s+сайт\\p{L}*`,
-    `(?:хочу|давайте|лучше|переведите|перенесите|можно)\\s+(?:на|через)\\s+сайт\\p{L}*`,
+    `(?:пришлите|дайте|нужна|нужно)\\s+ссылк\\p{L}*\\s+(?:на|через)\\s+сайт\\p{L}*`,
+    `(?:хочу|переведите|перенесите)\\s+(?:на|через)\\s+сайт\\p{L}*`,
     `(?:дар|ба)\\s+сайт\\s+(?:мехоҳам|диҳед|гузаронед)`,
     `линк\\p{L}*\\s+(?:ба|дар)\\s+сайт`,
     `ба\\s+гурӯҳ\\s+даромада\\s+наметавонам`,
@@ -58,8 +59,8 @@ const WEB_REQUEST = new RegExp(
 );
 const TELEGRAM_REQUEST = new RegExp(
   [
-    `(?:хочу|давайте|лучше|переведите|перенесите|можно)\\s+(?:в|через|на)\\s+${TG}`,
-    `(?:ссылк\\p{L}*|приглашени\\p{L}*)\\s+(?:в|на)\\s+(?:группу|${TG})`,
+    `(?:хочу|переведите|перенесите)\\s+(?:в|через|на)\\s+${TG}`,
+    `(?:пришлите|дайте|нужно)\\s+(?:ссылк\\p{L}*|приглашени\\p{L}*)\\s+в\\s+(?:группу|${TG})`,
     `(?:хочу|переведите|перенесите)\\s+(?:в|на)\\s+группу`,
     `(?:дар|ба)\\s+${TG}\\s+(?:мехоҳам|диҳед|гузаронед)`,
     `линк\\p{L}*\\s+(?:ба|дар)\\s+(?:гурӯҳ|${TG})`,
@@ -78,7 +79,58 @@ export function parseSwitchRequest(text: string): SwitchTarget | null {
 
 // -- Тексты ------------------------------------------------------------------
 
-const TEXT: Record<Lang, { web: string; telegram: string; passed: string; approvedWeb: string; approvedTelegram: string }> = {
+const CONFIRM: Record<Lang, { web: string; telegram: string }> = {
+  ru: {
+    web:
+      "Перевести вас на сайт? Приглашение в группу Telegram перестанет действовать, а ссылку на сайт я пришлю сразу. " +
+      "Если согласны, ответьте «да».",
+    telegram:
+      "Перевести вас в Telegram? Ссылка на сайт перестанет открывать уроки, а приглашение в группу я пришлю сразу. " +
+      "Если согласны, ответьте «да».",
+  },
+  tg: {
+    web:
+      "Шуморо ба сайт гузаронам? Даъвати гурӯҳи Telegram дигар амал намекунад, линки сайтро фавран мефиристам. " +
+      "Агар розӣ бошед, «ҳа» нависед.",
+    telegram:
+      "Шуморо ба Telegram гузаронам? Линки сайт дигар дарсҳоро намекушояд, даъват ба гурӯҳро фавран мефиристам. " +
+      "Агар розӣ бошед, «ҳа» нависед.",
+  },
+  en: {
+    web: "Move you to the website? The Telegram invitation will stop working. Reply yes to confirm.",
+    telegram: "Move you to Telegram? The website link will stop working. Reply yes to confirm.",
+  },
+};
+
+/** Просьба поменять способ входа не выполняется сразу: сначала переспрашиваем (30 минут на ответ «да»). */
+const PENDING_MS = 30 * 60_000;
+const pending = new Map<string, { target: SwitchTarget; until: number }>();
+export function pendingSwitchTarget(contactId: string): SwitchTarget | null {
+  const p = pending.get(contactId);
+  if (!p) return null;
+  if (p.until < Date.now()) {
+    pending.delete(contactId);
+    return null;
+  }
+  return p.target;
+}
+export function clearPendingSwitch(contactId: string): void {
+  pending.delete(contactId);
+}
+export function isYes(text: string): boolean {
+  return /^(?:да|ага|хорошо|ок|согласна|согласен|ҳа|ха|бале|розӣ|розиям|yes)[\s.!]*$/iu.test(text.trim());
+}
+
+/** Спросить подтверждение. Ничего не меняется, пока человек не ответит «да». */
+export async function askSwitchConfirmation(contact: Contact, target: SwitchTarget, language: Lang): Promise<void> {
+  pending.set(contact.id, { target, until: Date.now() + PENDING_MS });
+  await deliver(contact, CONFIRM[language][target === "web" ? "web" : "telegram"], false);
+}
+
+const TEXT: Record<
+  Lang,
+  { web: string; telegram: string; passed: string; approvedWeb: string; approvedTelegram: string }
+> = {
   ru: {
     web:
       "Перевела вас на сайт. Вот ваша ссылка на уроки, откройте её на телефоне. " +
@@ -111,7 +163,8 @@ const TEXT: Record<Lang, { web: string; telegram: string; passed: string; approv
   },
   en: {
     web: "I moved you to the website. Here is your link, open it on your phone. The Telegram group invitation no longer works:\n",
-    telegram: "I moved you to Telegram. Here is the one-time group invitation. The website link no longer opens the lessons:\n",
+    telegram:
+      "I moved you to Telegram. Here is the one-time group invitation. The website link no longer opens the lessons:\n",
     passed: "I passed this to Shirin, she will look and reply.",
     approvedWeb: "Shirin approved the move to the website. Here is your link:\n",
     approvedTelegram: "Shirin approved the move to Telegram. Here is the group invitation:\n",
@@ -125,7 +178,8 @@ function lang(contact: Contact, given?: Lang): Lang {
 
 // -- Состояние ---------------------------------------------------------------
 
-const isTelegramLink = (link: string | null | undefined): link is string => Boolean(link && /^https?:\/\/t\.me\//i.test(link));
+const isTelegramLink = (link: string | null | undefined): link is string =>
+  Boolean(link && /^https?:\/\/t\.me\//i.test(link));
 
 /** Сайтовая ссылка жива: код выдан и не «мёртвый» (после перехода в Telegram мы ставим дату 1970). */
 function webLinkIsLive(contact: Pick<Contact, "accessTokenId" | "accessIssuedAt">): boolean {
@@ -171,7 +225,10 @@ async function revokeInvite(botToken: string, link: string): Promise<boolean> {
 async function leaveGroups(botToken: string, telegramUserId: string): Promise<boolean> {
   let ok = true;
   for (const chatId of await groupChats()) {
-    for (const [method, extra] of [["banChatMember", {}], ["unbanChatMember", { only_if_banned: true }]] as const) {
+    for (const [method, extra] of [
+      ["banChatMember", {}],
+      ["unbanChatMember", { only_if_banned: true }],
+    ] as const) {
       try {
         const res = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
           method: "POST",
@@ -270,7 +327,8 @@ async function toWeb(
   chargeData: Record<string, unknown>,
 ): Promise<SwitchOutcome> {
   const ready = await Promise.all(purchases.map((p) => coursePlatformReady(p.course as Course)));
-  if (!ready.some(Boolean)) return "unavailable";
+  // Курс без уроков на сайте потерялся бы целиком: переводим, только если готовы ВСЕ купленные.
+  if (!ready.every(Boolean)) return "unavailable";
   const { url, jti } = issueMagicLink(fresh.id);
   if (!url.startsWith("http")) return "unavailable";
 
@@ -292,17 +350,26 @@ async function toWeb(
   } else if (links.size > 0) {
     notRevoked.push(...links);
   }
+  // Ссылки из раздела «Ссылки» панели, выданные этой ученице, — тоже вторая дверь.
+  const panelFailed = await revokeInvitesForContact(fresh.id).catch((err) => {
+    logError("channelSwitch:panelInvites", err);
+    return -1;
+  });
+  if (panelFailed !== 0 && panelFailed !== undefined) notRevoked.push("panel");
   let kicked: boolean | null = null;
   if (kind === "owner" && fresh.telegramUserId && botToken) kicked = await leaveGroups(botToken, fresh.telegramUserId);
 
-  await prisma.contact.update({
-    where: { id: fresh.id },
-    data: { courseDeliveryChoice: "web", inviteLink: null, ...chargeData },
-  });
-  // Как в grantCourses: у веб-доставки в Purchase.inviteLink лежит сама ссылка.
-  await prisma.purchase.updateMany({
-    where: { contactId: fresh.id, revokedAt: null },
-    data: { inviteLink: url, deliveryAwaitingChoice: false },
+  // Запись одним куском: либо выбор и ссылки записаны целиком, либо ничего.
+  await prisma.$transaction(async (tx) => {
+    await tx.contact.update({
+      where: { id: fresh.id },
+      data: { courseDeliveryChoice: "web", inviteLink: null, ...chargeData },
+    });
+    // Как в grantCourses: у веб-доставки в Purchase.inviteLink лежит сама ссылка.
+    await tx.purchase.updateMany({
+      where: { contactId: fresh.id, revokedAt: null },
+      data: { inviteLink: url, deliveryAwaitingChoice: false },
+    });
   });
   logInfo("course:channelSwitch", `контакт ${fresh.id}: Telegram -> сайт (${kind})`);
   await notifyOwner(
@@ -360,17 +427,25 @@ async function toTelegram(
 
   // Приглашение доставлено — сайтовые сессии гасим: удаляются все устройства
   // (а с ними и офлайн-ключи). Заблокированные владельцем не трогаем.
-  await prisma.device.deleteMany({ where: { contactId: fresh.id, blockedAt: null } });
-  for (const c of created) {
-    await prisma.purchase.update({
-      where: { id: c.purchase.id },
-      data: { inviteLink: c.link, deliveryAwaitingChoice: false },
+  // Одним куском: устройства удаляются и выбор записывается вместе, иначе остались бы обе двери.
+  const previous = new Set<string>();
+  for (const p of purchases) if (isTelegramLink(p.inviteLink)) previous.add(p.inviteLink);
+  if (isTelegramLink(fresh.inviteLink)) previous.add(fresh.inviteLink);
+  await prisma.$transaction(async (tx) => {
+    await tx.device.deleteMany({ where: { contactId: fresh.id, blockedAt: null } });
+    for (const c of created) {
+      await tx.purchase.update({
+        where: { id: c.purchase.id },
+        data: { inviteLink: c.link, deliveryAwaitingChoice: false },
+      });
+    }
+    await tx.contact.update({
+      where: { id: fresh.id },
+      data: { courseDeliveryChoice: "telegram", inviteLink: created[created.length - 1].link, ...chargeData },
     });
-  }
-  await prisma.contact.update({
-    where: { id: fresh.id },
-    data: { courseDeliveryChoice: "telegram", inviteLink: created[created.length - 1].link, ...chargeData },
   });
+  // Прежние приглашения (режим «обе ссылки») отзываем: у человека остаётся только новое.
+  for (const link of previous) await revokeInvite(botToken, link).catch(() => false);
   logInfo("course:channelSwitch", `контакт ${fresh.id}: сайт -> Telegram (${kind})`);
   await notifyOwner(
     fresh,
@@ -417,17 +492,20 @@ function who(contact: Contact): string {
     .join(", ");
 }
 
-async function askOwner(contact: Contact, target: SwitchTarget, what: string, withButton: boolean): Promise<void> {
+export async function askOwner(contact: Contact, target: SwitchTarget, what: string, withButton: boolean): Promise<void> {
   const chat = await ownerChat();
   if (!chat) return;
   if (!(await shouldSendAlert(`channel-switch:${target}:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
   const to = target === "web" ? "сайт" : "Telegram";
-  const button = target === "web" && contact.joinedGroupAt ? "Перевести на сайт и убрать из группы" : `Перевести на ${to}`;
+  const button =
+    target === "web" && contact.joinedGroupAt ? "Перевести на сайт и убрать из группы" : `Перевести на ${to}`;
   await sendTelegramMessage(
     chat.botToken,
     chat.chatId,
     `${who(contact)}: ${what}. Хочет: ${to}.` +
-      (withButton ? " Если это она, нажмите кнопку: прежний способ входа перестанет работать, новая ссылка уйдёт ей в чат." : ""),
+      (withButton
+        ? " Если это она, нажмите кнопку: прежний способ входа перестанет работать, новая ссылка уйдёт ей в чат."
+        : ""),
     undefined,
     withButton
       ? { inline_keyboard: [[{ text: button, callback_data: `mn:sw:${contact.id}:${target === "web" ? "w" : "t"}` }]] }
@@ -438,6 +516,7 @@ async function askOwner(contact: Contact, target: SwitchTarget, what: string, wi
 async function notifyOwner(contact: Contact, what: string): Promise<void> {
   const chat = await ownerChat();
   if (!chat) return;
+  if (!(await shouldSendAlert(`channel-switch-done:${contact.id}`, { cooldownMs: 3_600_000 }))) return;
   await sendTelegramMessage(chat.botToken, chat.chatId, `${who(contact)}: ${what}`).catch((err) =>
     logError("channelSwitch:notifyOwner", err),
   );
@@ -450,4 +529,23 @@ export async function approveSwitchByOwner(contactId: string, target: SwitchTarg
   const outcome = await switchCourseChannel(contact, target, "owner");
   logInfo("course:channelSwitch", `контакт ${contactId}: владелец разрешил переход на ${target}, итог ${outcome}`);
   return outcome === "switched";
+}
+
+/**
+ * Владелец сам выдал сайтовую ссылку (/ссылка, панель) человеку, у которого был
+ * Telegram: вторую дверь закрываем, иначе у человека два способа (инвариант).
+ * Вызывается из delivery.issueCourseLink только для явной выдачи владельцем.
+ */
+export async function closeTelegramDoor(contactId: string): Promise<void> {
+  const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+  if (!contact || contact.courseDeliveryChoice !== "telegram") return;
+  const botToken = (await getSetting("telegramBotToken"))?.trim();
+  const purchases = await prisma.purchase.findMany({ where: { contactId, revokedAt: null } });
+  const links = new Set<string>();
+  for (const p of purchases) if (isTelegramLink(p.inviteLink)) links.add(p.inviteLink);
+  if (isTelegramLink(contact.inviteLink)) links.add(contact.inviteLink);
+  if (botToken) for (const link of links) await revokeInvite(botToken, link).catch(() => false);
+  await revokeInvitesForContact(contactId).catch((err) => logError("channelSwitch:closeDoorPanel", err));
+  await prisma.contact.update({ where: { id: contactId }, data: { courseDeliveryChoice: "web", inviteLink: null } });
+  logInfo("course:channelSwitch", `контакт ${contactId}: владелец выдал сайт, приглашение в группу закрыто`);
 }

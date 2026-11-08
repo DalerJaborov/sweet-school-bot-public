@@ -8,7 +8,7 @@ import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact } from "@prisma/client";
 import { isBotFrozen } from "../messaging/automation.js";
 import { parseRecoveryCode, findContactByRecoveryCode } from "./linkCode.js";
-import { handleSwitchRequest, parseSwitchRequest } from "./channelSwitch.js";
+import { askOwner as askOwnerToSwitch, askSwitchConfirmation, clearPendingSwitch, handleSwitchRequest, isYes, parseSwitchRequest, pendingSwitchTarget } from "./channelSwitch.js";
 
 /**
  * САМОВОССТАНОВЛЕНИЕ ДОСТУПА — «не открывается курс, дайте ссылку заново».
@@ -114,8 +114,12 @@ export async function maybeRestoreAccess(
 ): Promise<RecoveryResult> {
   if (await isBotFrozen()) return { handled: false };
   // Бот уже просил доказательство смены телефона: код, картинка или имя с номером — продолжение.
+  // Ответ «да» на вопрос «перевести вас?» — продолжение просьбы о переключении; любое другое сообщение вопрос снимает.
+  const confirmTarget = pendingSwitchTarget(contact.id);
+  const confirming = confirmTarget !== null && isYes(text);
+  if (confirmTarget && !confirming) clearPendingSwitch(contact.id);
   const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
-  if (!waiting && !looksLikeAccessRequest(text)) return { handled: false };
+  if (!confirming && !waiting && !looksLikeAccessRequest(text)) return { handled: false };
 
   // Код из ссылки: покупка могла быть сделана в другом чате. Бот выдаёт ссылку
   // САМ только когда код указывает на ЭТОТ ЖЕ контакт; на чужой — только владельцу.
@@ -155,9 +159,15 @@ export async function maybeRestoreAccess(
 
   // Переключение способа входа (Telegram <-> сайт): одна действующая ссылка на
   // человека, channelSwitch.ts. «Уже так» — идём обычным путём ниже.
-  const switchTarget = waiting ? null : parseSwitchRequest(text);
+  const switchTarget = confirming ? confirmTarget : waiting ? null : parseSwitchRequest(text);
   if (switchTarget && paidProof) {
     if (await isBotFrozen()) return { handled: false };
+    if (!confirming) {
+      // Сначала переспрашиваем: переключение гасит рабочую ссылку, а фраза могла быть просто вопросом.
+      await askSwitchConfirmation(contact, switchTarget, language);
+      return { handled: true, outcome: "escalated" };
+    }
+    clearPendingSwitch(contact.id);
     const switched = await handleSwitchRequest(contact, switchTarget, language);
     if (switched !== "already") return { handled: true, outcome: switched === "switched" ? "reissued" : "escalated" };
   }
@@ -224,6 +234,13 @@ async function handleForeignCode(contact: Contact, owner: Contact, text: string)
   const purchases = await prisma.purchase.findMany({ where: { contactId: owner.id }, orderBy: { createdAt: "desc" } });
   const active = purchases.filter((p) => !p.revokedAt);
   await reply(contact, TEXTS[language].foreign);
+  // Просьба «хочу в Telegram» (кнопка на экране ошибки): владельцу не /ссылка (она выдаст сайт),
+  // а кнопка перевода покупателя в Telegram.
+  if (active.length > 0 && parseSwitchRequest(text) === "telegram") {
+    const writer = contact.username ? `@${contact.username}` : contact.igUserId;
+    await askOwnerToSwitch(owner, "telegram", `просят перевести в Telegram, но пишут с ДРУГОГО чата (${contact.channel} ${writer})`, true);
+    return { handled: true, outcome: "escalated" };
+  }
 
   const courses = purchases
     .map((p) => `${p.course}, куплено ${p.createdAt.toISOString().slice(0, 10)}${p.revokedAt ? " (ДОСТУП ОТОЗВАН)" : ""}`)

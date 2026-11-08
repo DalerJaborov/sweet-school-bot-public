@@ -158,6 +158,8 @@ export async function performPhoneChange(
 ): Promise<"changed" | "send_failed" | "no_link"> {
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh || fresh.accessRevokedAt || fresh.spamBlockedAt) return "no_link";
+  // Выдача идёт через Telegram-группу: сайтовую ссылку здесь не воскрешаем (одна ссылка на человека).
+  if (fresh.courseDeliveryChoice === "telegram") return "no_link";
   const { url, jti } = issueMagicLink(fresh.id);
   if (!url.startsWith("http")) return "no_link";
   // Заблокированное устройство тоже занимает единственное место. Бот его не
