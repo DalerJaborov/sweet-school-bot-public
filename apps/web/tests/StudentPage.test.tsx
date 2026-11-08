@@ -147,6 +147,17 @@ describe("StudentPage — карточка ученицы", () => {
     expect(calls.filter((c) => c.url === "/admin/metrics/student/c1").length).toBe(2);
   });
 
+  it("у ЗАБЛОКИРОВАННОГО устройства кнопки «Освободить место» нет — удаление сняло бы блокировку", async () => {
+    mockFetch();
+    render(<StudentPage contactId="c1" onBack={vi.fn()} />);
+    await screen.findByText("Мадина Р.");
+    // d1 живое, d2 заблокировано: кнопка одна, и она у живого.
+    expect(screen.getAllByRole("button", { name: "Освободить место" })).toHaveLength(1);
+    const blockedRow = screen.getByText("Instagram на iPhone").closest(".list-row") as HTMLElement;
+    expect(within(blockedRow).queryByRole("button", { name: "Освободить место" })).toBeNull();
+    expect(within(blockedRow).getByRole("button", { name: "Разблокировать" })).toBeTruthy();
+  });
+
   it("передумала в подтверждении — ничего не освобождается", async () => {
     mockFetch();
     render(

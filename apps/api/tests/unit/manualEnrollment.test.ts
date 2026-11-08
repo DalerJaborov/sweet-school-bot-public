@@ -165,6 +165,24 @@ describe("admin manual enrollment", () => {
     expect(db.model("purchase").create).not.toHaveBeenCalled();
   });
 
+  it("ссылку, которой жить несколько часов, не отдаёт — просит выдать новую в карточке", async () => {
+    // 6 дней 20 часов из 7: хозяйка перешлёт, ученица откроет завтра — «устарела».
+    customer = fakeContact({
+      id: "manual-1",
+      channel: "MANUAL",
+      accessTokenId: "Abcdefgh23",
+      accessIssuedAt: new Date(Date.now() - (6 * 86400000 + 20 * 3600000)),
+      paid: true,
+    });
+    purchases = [{ id: "p-old", course: "COURSE50", amount: 50 }];
+    const res = await post({ ...input, course: "COURSE70", amount: 70 });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; url?: string };
+    expect(body.url).toBeUndefined();
+    expect(body.error).toContain("Новая ссылка");
+    expect(db.model("purchase").create).not.toHaveBeenCalled();
+  });
+
   it.each(["empty", "processing", "missing-hls", "missing-key", "inactive", "preview-only"])(
     "rejects %s inventory before any customer write",
     async (state) => {

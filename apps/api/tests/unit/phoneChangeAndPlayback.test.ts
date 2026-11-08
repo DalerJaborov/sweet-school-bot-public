@@ -17,7 +17,7 @@ vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
-import { handlePhoneChange, phoneChangeProof, approveTransferByOwner } from "../../src/course/phoneChange.js";
+import { handlePhoneChange, phoneChangeProof, approveTransferByOwner, resetPhoneChangeState } from "../../src/course/phoneChange.js";
 import { recoveryCodeFor } from "../../src/course/linkCode.js";
 import { claimPlayback, resetPlaybackLocks } from "../../src/course/playbackLock.js";
 import type { Contact } from "@prisma/client";
@@ -42,6 +42,7 @@ describe("смена телефона через бота", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
+    resetPhoneChangeState();
     sendText.mockClear();
     sendTelegramMessage.mockClear();
     db.model("contact").findUnique.mockResolvedValue(contact);
@@ -160,16 +161,16 @@ describe("смена телефона через бота", () => {
     expect(JSON.stringify(sendTelegramMessage.mock.calls.at(-1)?.[4])).toContain("mn:tr:c-1");
   });
 
-  it("заблокированное владельцем устройство держит место: бот не переносит, владельцу кнопка; владелец снимает и его", async () => {
+  it("заблокированное устройство держит место: ни бот, ни кнопка владельца его не снимают (блокировка выше переноса)", async () => {
     db.model("device").count.mockResolvedValue(1);
-    expect(await handlePhoneChange(contact, `сменила телефон ${CODE}`, "ru")).toBe("send_failed");
+    expect(await handlePhoneChange(contact, `сменила телефон ${CODE}`, "ru")).toBe("blocked");
     expect(db.model("contact").updateMany).not.toHaveBeenCalled();
     expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls.at(-1)?.[2])).toContain("разблокируйте");
     expect(JSON.stringify(sendTelegramMessage.mock.calls.at(-1)?.[4])).toContain("mn:tr:c-1");
 
-    expect(await approveTransferByOwner("c-1")).toBe(true);
-    const where = db.model("device").findMany.mock.calls.at(-1)?.[0] as { where: Record<string, unknown> };
-    expect(where.where).not.toHaveProperty("blockedAt");
+    expect(await approveTransferByOwner("c-1")).toBe("blocked");
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
   });
 
   it("доступ отозван — ссылку не выдаём вообще", async () => {
@@ -179,13 +180,28 @@ describe("смена телефона через бота", () => {
     expect(db.model("device").deleteMany).not.toHaveBeenCalled();
   });
 
-  it("владелец разрешил: лимит сброшен, перенос сделан сразу, новая ссылка ушла в чат", async () => {
-    expect(await approveTransferByOwner("c-1")).toBe(true);
-    const reset = db.model("contact").update.mock.calls[0][0] as { data: Record<string, unknown> };
-    expect(reset.data).toEqual({ deviceSwaps: 0, deviceSwapAt: null });
+  it("карточка владельца одноразовая: без карточки — «устарела»; после перенос; повторное нажатие — «устарела»", async () => {
+    expect(await approveTransferByOwner("c-1")).toBe("expired");
+
+    await handlePhoneChange(contact, "сменила телефон", "ru"); // карточка ушла владельцу
+    sendText.mockClear();
+    const used = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 2 * 86_400_000) };
+    db.model("contact").findUnique.mockResolvedValue(used);
+    expect(await approveTransferByOwner("c-1")).toBe("ok");
     expect(String(sendText.mock.calls[0][1])).toContain("Ширин разрешила перенос");
     expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
     expect(db.model("device").deleteMany).toHaveBeenCalled();
+    // Счётчик растёт после доставки, окно начинается заново.
+    const upd = db.model("contact").update.mock.calls.at(-1)?.[0] as { data: { deviceSwaps: number } };
+    expect(upd.data.deviceSwaps).toBe(1);
+
+    expect(await approveTransferByOwner("c-1")).toBe("expired");
+  });
+
+  it("фото без совпадения (домашка) после запроса доказательства — не доказательство и бот молчит", async () => {
+    await handlePhoneChange(contact, "сменила телефон", "ru");
+    sendText.mockClear();
+    expect(await phoneChangeProof(contact, "", ["hash-homework"])).toBeNull();
   });
 
   it("по-таджикски сообщения приходят на таджикском", async () => {

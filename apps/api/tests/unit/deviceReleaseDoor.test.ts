@@ -16,9 +16,6 @@ vi.mock("../../src/storage/s3.js", () => ({
   listBuckets: vi.fn(),
 }));
 
-const approveTransferByOwner = vi.hoisted(() => vi.fn());
-vi.mock("../../src/course/phoneChange.js", () => ({ approveTransferByOwner }));
-
 import { courseAdminRouter } from "../../src/course/adminRoutes.js";
 
 /**
@@ -59,25 +56,13 @@ const device = {
 };
 
 describe("POST /admin/course-devices/:id/release", () => {
-  it("освобождение идёт как перенос: ссылка меняется, а не просто удаляется устройство", async () => {
+  it("освобождение: устройство снимается через releaseDevice и пишется в журнал", async () => {
     db.model("device").findUnique.mockResolvedValue(device);
-    approveTransferByOwner.mockResolvedValue(true);
 
     const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
 
     expect(res.status).toBe(200);
-    expect(approveTransferByOwner).toHaveBeenCalledWith("contact-1");
-    expect(db.model("device").delete).not.toHaveBeenCalled();
-  });
-
-  it("новая ссылка не ушла — ошибка простыми словами, место не освобождено", async () => {
-    db.model("device").findUnique.mockResolvedValue(device);
-    approveTransferByOwner.mockResolvedValue(false);
-
-    const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
-
-    expect(res.status).toBe(502);
-    expect(((await res.json()) as { error: string }).error).toContain("место не освобождено");
+    expect(db.model("device").delete).toHaveBeenCalledWith({ where: { id: "device-1" } });
   });
 
   it("устройства уже нет — 404 простыми словами, ничего не удаляем", async () => {
@@ -87,6 +72,23 @@ describe("POST /admin/course-devices/:id/release", () => {
 
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error: string }).error).toContain("Устройство не найдено");
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+  });
+
+  it("ЗАБЛОКИРОВАННОЕ не освобождается: 409 «сначала разблокируйте», блокировка остаётся", async () => {
+    db.model("device").findUnique.mockResolvedValue({ ...device, blockedAt: new Date() });
+
+    const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain("разблокируйте");
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+    expect(db.model("accessEvent").create).not.toHaveBeenCalled();
+  });
+
+  it("дверь сама защищает: releaseDevice отказывает заблокированному для ЛЮБОГО вызывающего", async () => {
+    const { releaseDevice, DeviceBlockedError } = await import("../../src/course/access.js");
+    await expect(releaseDevice({ ...device, blockedAt: new Date() } as never, "bot")).rejects.toBeInstanceOf(DeviceBlockedError);
     expect(db.model("device").delete).not.toHaveBeenCalled();
   });
 

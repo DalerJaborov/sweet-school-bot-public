@@ -385,14 +385,6 @@ export function purchaseFor(purchases: Purchase[], courseId: string | null | und
   return purchases.find((p) => p.courseId === courseId) ?? null;
 }
 
-/**
- * Лимит устройств покупки. ОДНО место на всю систему: recovery.ts раньше
- * считал по-своему (запас 3 против 2 здесь, и без заблокированных) — и
- * самовосстановление доступа не освобождало место, а бот бодро отвечал «вот
- * новая ссылка», по которой ученица упиралась в тот же отказ (разбор
- * безопасности 03.09.2026). Запас 3, как в схеме: браузер внутри Instagram
- * считается отдельным устройством.
- */
 /** Кто освободил, заблокировал или вернул место (журнал AccessEvent). */
 export type DeviceActor = "owner" | "student" | "bot";
 export type DeviceAction = "released" | "blocked" | "unblocked";
@@ -429,9 +421,21 @@ export async function recordAccessEvent(
  * Чтобы смотреть снова, нужна ссылка — и она займёт свободное место.
  */
 export async function releaseDevice(device: Device, actor: DeviceActor): Promise<void> {
+  // Заблокированное устройство не освобождаем (ревью PR 59): удаление снимает
+  // и блокировку — тот, кого заблокировали, снова вошёл бы по ссылке. Сначала
+  // «Разблокировать» осознанно, потом освобождать. Замена и бот и так берут
+  // только незаблокированные; здесь — защита по умолчанию для всех входов.
+  if (device.blockedAt) throw new DeviceBlockedError();
   await prisma.device.delete({ where: { id: device.id } });
   await recordAccessEvent(device, "released", actor);
   logInfo("course:deviceRelease", `контакт ${device.contactId}: место освобождено (${actor}), устройство ${device.id}`);
+}
+
+/** Освобождать заблокированное устройство нельзя — см. releaseDevice. */
+export class DeviceBlockedError extends Error {
+  constructor() {
+    super("Устройство заблокировано — сначала разблокируйте его");
+  }
 }
 
 /**
@@ -531,13 +535,17 @@ export async function occupiedPhoneLabel(contactId: string): Promise<string | nu
 
 /** Сообщение «курс открыт на другом телефоне» (русский запасной текст сервера). */
 export function devicePhoneMessage(label: string | null): string {
-  return `Этот курс открывается на ${label ? `телефоне ${label}` : "вашем основном телефоне"}. Чтобы смотреть на другом телефоне, купите курс для него`;
+  void label;
+  return "Для второго телефона нужен отдельный доступ, он оформляется на другой аккаунт или номер, напишите Ширин";
 }
 
 export async function deviceLimitFor(_contactId: string): Promise<number> {
-  // Политика «один телефон» одна на всех. Столбец Course.deviceLimit больше не
-  // читается: прежний «запас 2–3» как раз и позволял пользоваться вдвоём.
-  return ONE_PHONE_LIMIT;
+  // Политика «один телефон» одна на всех (владелец 08.11.2026), рубильник —
+  // настройка courseDeviceLimit. Столбец Course.deviceLimit не читается:
+  // прежний «запас 2–3» как раз и позволял пользоваться вдвоём. Знакомые
+  // устройства (в том числе у учениц, у которых их уже два) лимит не трогает.
+  const raw = Number((await getSetting("courseDeviceLimit"))?.trim());
+  return Number.isInteger(raw) && raw >= 1 && raw <= 5 ? raw : ONE_PHONE_LIMIT;
 }
 
 /** Занятые места. Заблокированные СЧИТАЮТСЯ: иначе блокировка освобождала бы место. */

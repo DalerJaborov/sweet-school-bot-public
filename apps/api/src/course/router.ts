@@ -15,10 +15,9 @@ import {
   pairDevice,
   issuePairToken,
   occupiedPhoneLabel,
-  ownerOfExpiredLink,
   type AccessResult,
 } from "./access.js";
-import { restoreAccessFromSite } from "./recovery.js";
+import { relinkBySiteToken } from "./recovery.js";
 import { masterManifest, variantManifest, offlineSegmentList } from "./manifest.js";
 import { OFFLINE_RENDITION } from "../storage/videoPipeline.js";
 import { chatHistory, receiveQuestion } from "./chat.js";
@@ -154,7 +153,8 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
  * Принимает тот же код из адреса. Ссылку в ответе НЕ отдаёт никогда — она
  * уходит в переписку человека (course/recovery.ts → restoreAccessFromSite).
  * Ответ — только исход, по нему экран выбирает текст:
- *   sent        — новая ссылка уже в переписке;
+ *   sent        — новая ссылка уже в переписке (Instagram/WhatsApp; купившим
+ *                 через чат сайта — никогда, их ссылку шлёт хозяйка);
  *   write_first — напишите нам «Нужна новая ссылка», бот ответит сам;
  *   escalated   — передали Ширин;
  *   revoked     — доступ закрыт;
@@ -167,13 +167,8 @@ courseRouter.post(`${API_BASE}/relink`, async (req: Request, res: Response) => {
     res.status(400).json({ error: "Нужен token" });
     return;
   }
-  const contact = await ownerOfExpiredLink(parsed.data.token);
-  if (!contact) {
-    res.json({ outcome: "unknown", channel: null });
-    return;
-  }
-  const outcome = await restoreAccessFromSite(contact);
-  res.json({ outcome, channel: contact.channel });
+  // Двойное нажатие и повтор после обрыва сети — один исход (relinkBySiteToken).
+  res.json(await relinkBySiteToken(parsed.data.token));
 });
 
 /** Установленное приложение обменивает pair-токен на сессию (см. access.ts). */

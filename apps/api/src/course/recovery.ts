@@ -1,12 +1,13 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
-import { handlePhoneChange, isAwaitingProof } from "./phoneChange.js";
+import { handlePhoneChange, isAwaitingProof, phoneChangeProof } from "./phoneChange.js";
+import { ownerOfExpiredLink } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact, Purchase } from "@prisma/client";
-import { isBotFrozen } from "../messaging/automation.js";
+import { isBotFrozen, contactAutomationBlocked } from "../messaging/automation.js";
 import { parseRecoveryCode, findContactByRecoveryCode } from "./linkCode.js";
 
 /**
@@ -51,7 +52,7 @@ const WINDOW_DAYS = 30;
  */
 const ACCESS_SUBJECT = /(ссылк|доступ|кабинет|курс|урок[иов]*|линк|дастрас|дарс)/iu;
 const ACCESS_PROBLEM = /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
-const NEW_DEVICE = /(смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
+const NEW_DEVICE = /(это\s+мой\s+телефон|телефони\s+ман|смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
@@ -111,6 +112,10 @@ export async function maybeRestoreAccess(
   // Бот уже просил доказательство смены телефона: код, картинка или имя с номером — продолжение.
   const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
   if (!waiting && !looksLikeAccessRequest(text)) return { handled: false };
+  // Ждём доказательство, а пришло просто фото (домашка) или чужой код: это не наш случай.
+  if (waiting && !looksLikeAccessRequest(text) && !(await phoneChangeProof(contact, text, imageHashes))) {
+    return { handled: false };
+  }
 
   // Код из ссылки: покупка могла быть сделана в другом чате. Бот выдаёт ссылку
   // САМ только когда код указывает на ЭТОТ ЖЕ контакт; на чужой — только владельцу.
@@ -255,8 +260,51 @@ export type SiteRelinkOutcome = "sent" | "write_first" | "escalated" | "revoked"
 
 /** Окно Meta/WhatsApp: писать первыми можно в течение суток после человека. */
 const MESSAGING_WINDOW_MS = 24 * 3_600_000;
-/** Каналы, куда бот умеет доставить ссылку сам (см. messaging/send.ts). */
+/** Каналы, куда бот умеет доставить ссылку сам (см. messaging/send.ts). WEB
+ *  здесь есть, но ниже уходит хозяйке: чат сайта привязан к старому браузеру. */
 const DELIVERABLE = ["INSTAGRAM", "MESSENGER", "WHATSAPP", "WEB"];
+
+export type SiteRelinkResult = { outcome: SiteRelinkOutcome | "unknown"; channel: string | null };
+
+/** Сколько помним исход по коду: двойное нажатие, «назад» в браузере,
+ *  повтор после обрыва сети — одна выдача, один счётчик, одна тревога. */
+const RELINK_MEMORY_MS = 10 * 60_000;
+const RELINK_MEMORY_MAX = 500;
+const recentRelinks = new Map<string, { at: number; result: Promise<SiteRelinkResult> }>();
+
+/**
+ * ВХОД КНОПКИ «ПОЛУЧИТЬ НОВУЮ ССЫЛКУ» — ИДЕМПОТЕНТНЫЙ (ревью PR 59).
+ *
+ * Без этого два почти одновременных нажатия видели один и тот же просроченный
+ * код: обе выдачи сходились на одной новой ссылке (CAS в issueCourseLink), но
+ * ученица получала её дважды, а лимит перевыдач тратился за два раза. Теперь
+ * второй запрос с тем же кодом в течение 10 минут ждёт и получает исход
+ * первого, ничего не делая сам. Процесс API один (один контейнер), поэтому
+ * памяти процесса достаточно; после перезапуска старый код всё равно уже
+ * никого не находит, если ссылку успели выдать.
+ */
+export function relinkBySiteToken(token: string, now = Date.now()): Promise<SiteRelinkResult> {
+  for (const [key, entry] of recentRelinks) {
+    if (now - entry.at > RELINK_MEMORY_MS) recentRelinks.delete(key);
+  }
+  const hit = recentRelinks.get(token);
+  if (hit) return hit.result;
+  const result = (async (): Promise<SiteRelinkResult> => {
+    const contact = await ownerOfExpiredLink(token);
+    if (!contact) return { outcome: "unknown", channel: null };
+    return { outcome: await restoreAccessFromSite(contact), channel: contact.channel };
+  })();
+  if (recentRelinks.size >= RELINK_MEMORY_MAX) recentRelinks.delete(recentRelinks.keys().next().value as string);
+  recentRelinks.set(token, { at: now, result });
+  // Сбой (база недоступна) не запоминаем: следующее нажатие должно попробовать снова.
+  result.catch(() => recentRelinks.delete(token));
+  return result;
+}
+
+/** Для тестов: забыть недавние нажатия. */
+export function resetRelinkMemory(): void {
+  recentRelinks.clear();
+}
 
 export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelinkOutcome> {
   const verdict = await eligibility(contact);
@@ -274,14 +322,28 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
     await tellOwner(contact, "ссылка устарела, просит новую на сайте — пришлите её вручную", active.length, reissues);
     return "escalated";
   }
+  // Чат ведёт человек, контакт личный/сохранённый или помечен спамом — бот сюда
+  // не пишет (messaging/automation.ts). Проверяем ДО выдачи: иначе новая ссылка
+  // погасила бы старую, а доставить её бот всё равно не смог бы (ревью PR 59).
+  if (contactAutomationBlocked(contact)) {
+    await tellOwner(contact, "просит новую ссылку на сайте, но переписку ведёте вы — пришлите её сами", active.length, reissues);
+    return "escalated";
+  }
+  // Купила через чат сайта: переписка привязана к куке посетителя, а ученица с
+  // просроченной ссылкой почти всегда в другом браузере — там чат пуст, и
+  // «ссылка уже у вас» было бы неправдой. Ссылку не выдаём (старую не гасим),
+  // хозяйку зовём без суточного глушения: другого пути у ученицы нет.
+  if (contact.channel === "WEB") {
+    await tellOwner(contact, "купила на сайте, ссылка устарела — пришлите новую по телефону или в WhatsApp", active.length, reissues, { always: true });
+    return "escalated";
+  }
 
   const lastIn = await prisma.message.findFirst({
     where: { contactId: contact.id, direction: "IN" },
     orderBy: { createdAt: "desc" },
     select: { createdAt: true, text: true },
   });
-  const windowOpen =
-    contact.channel === "WEB" || (lastIn != null && Date.now() - lastIn.createdAt.getTime() < MESSAGING_WINDOW_MS);
+  const windowOpen = lastIn != null && Date.now() - lastIn.createdAt.getTime() < MESSAGING_WINDOW_MS;
   if (!windowOpen) return "write_first";
 
   const language: ClientLanguage =
@@ -375,20 +437,26 @@ async function reply(contact: Contact, text: string): Promise<boolean> {
 
 /** Владелец видит КАЖДЫЙ случай, даже разобранный ботом: это его деньги, и он
  *  должен замечать закономерности вроде «одна и та же ученица каждую неделю». */
-async function tellOwner(contact: Contact, what: string, purchases: number, reissues: number): Promise<void> {
-  const who = contact.username ? `@${contact.username}` : contact.igUserId;
-  await sendOwnerAlert(
-    `recovery:${contact.id}`,
-    `🔑 ${who}: ${what}
-Курсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`
-  );
+async function tellOwner(
+  contact: Contact,
+  what: string,
+  purchases: number,
+  reissues: number,
+  opts: { always?: boolean } = {}
+): Promise<void> {
+  const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
+  const text = `🔑 ${who}: ${what}
+Курсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`;
+  // always — случай, где кроме хозяйки помочь некому (покупательница с сайта):
+  // суточное глушение не действует. От двойного нажатия защищает relinkBySiteToken.
+  await sendOwnerAlert(`recovery:${contact.id}`, text, opts.always === true);
 }
 
-async function sendOwnerAlert(gateKey: string, text: string): Promise<void> {
+async function sendOwnerAlert(gateKey: string, text: string, always = false): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!botToken || !chatId) return;
-  // Одно и то же — не чаще раза в сутки (08.11.2026).
-  if (!(await shouldSendAlert(gateKey, { cooldownMs: 24 * 3_600_000 }))) return;
+  // Одно и то же — не чаще раза в сутки (08.11.2026), кроме always.
+  if (!always && !(await shouldSendAlert(gateKey, { cooldownMs: 24 * 3_600_000 }))) return;
   await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("recovery:tellOwner", err));
 }

@@ -247,7 +247,7 @@ describe("openByLink", () => {
     const result = await openByLink(fakeReq(), fakeRes() as never, token);
 
     expect(result).toMatchObject({ ok: false, reason: "device_limit" });
-    expect((result as { message: string }).message).toContain("другом телефоне");
+    expect((result as { message: string }).message).toContain("отдельный доступ");
     expect(db.model("device").create).not.toHaveBeenCalled();
   });
 
@@ -754,11 +754,11 @@ describe("политика «один телефон»", () => {
     expect(result).toMatchObject({ ok: false, reason: "device_limit" });
   });
 
-  it("второй телефон: отказ с понятным текстом «купите курс для него», ничего не удаляется и не переносится", async () => {
+  it("второй телефон: отказ «нужен отдельный доступ на другой аккаунт или номер», ничего не удаляется и не переносится", async () => {
     const result = await open(IPHONE, [occupied({ lastSeenAt: new Date() })]);
     expect(result).toMatchObject({ ok: false, reason: "device_limit" });
-    expect((result as { message: string }).message).toMatch(/Этот курс открывается на/);
-    expect((result as { message: string }).message).toMatch(/купите курс для него/);
+    expect((result as { message: string }).message).toMatch(/отдельный доступ/);
+    expect((result as { message: string }).message).toMatch(/напишите Ширин/);
     expect(db.model("device").deleteMany).not.toHaveBeenCalled();
     expect(db.model("contact").update).not.toHaveBeenCalled();
   });
@@ -769,7 +769,7 @@ describe("политика «один телефон»", () => {
     expect(phoneLabel(ANDROID_REDUCED)).toBeNull();
     expect(phoneLabel(WINDOWS)).toBeNull();
     expect(phoneLabel(null)).toBeNull();
-    expect(devicePhoneMessage(null)).toBe("Этот курс открывается на вашем основном телефоне. Чтобы смотреть на другом телефоне, купите курс для него");
-    expect(devicePhoneMessage("iPhone")).toContain("на телефоне iPhone.");
+    expect(devicePhoneMessage(null)).toBe("Для второго телефона нужен отдельный доступ, он оформляется на другой аккаунт или номер, напишите Ширин");
+    expect(devicePhoneMessage("iPhone")).toBe(devicePhoneMessage(null));
   });
 });

@@ -231,9 +231,13 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
                   <div className="list-chips">{d.blocked && <span className="chip chip-err">заблокировано</span>}</div>
                 </div>
                 <div className="list-actions">
-                  <button type="button" className="btn small" disabled={busy === d.id} onClick={() => void releaseDevice(d)}>
-                    Освободить место
-                  </button>
+                  {/* У заблокированного кнопки нет: удаление сняло бы блокировку
+                      (сервер тоже откажет — access.ts releaseDevice). */}
+                  {!d.blocked && (
+                    <button type="button" className="btn small" disabled={busy === d.id} onClick={() => void releaseDevice(d)}>
+                      Освободить место
+                    </button>
+                  )}
                   <button type="button" className={`btn small ${d.blocked ? "" : "quiet"}`} disabled={busy === d.id} onClick={() => void toggleDevice(d)}>
                     {d.blocked ? "Разблокировать" : "Заблокировать"}
                   </button>

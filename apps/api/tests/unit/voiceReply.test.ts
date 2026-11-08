@@ -4,7 +4,7 @@ vi.mock("../../src/db.js", () => ({ prisma: {}, getSetting: vi.fn(async () => nu
 vi.mock("../../src/messaging/send.js", () => ({ sendAttachmentToContact: vi.fn() }));
 vi.mock("../../src/ai/voiceClone.js", () => ({ synthesizeToFile: vi.fn(), voiceEnabled: vi.fn(async () => false) }));
 
-import { chooseVoiceOrText, trySendVoiceReply } from "../../src/ai/voiceReply.js";
+import { chooseVoiceOrText, planVoice, trySendVoiceReply } from "../../src/ai/voiceReply.js";
 
 const ctx = { channel: "WHATSAPP", clientSentVoice: false, lastReplyWasVoice: false };
 
@@ -16,11 +16,11 @@ describe("chooseVoiceOrText", () => {
     expect(chooseVoiceOrText("Запись тут: https://shirinsweets.online", ctx)).toBe("text");
     expect(chooseVoiceOrText("Курс стоит 500 сомони", ctx)).toBe("text");
     expect(chooseVoiceOrText("Переведите на карту, пожалуйста", ctx)).toBe("text");
-    expect(chooseVoiceOrText("Раз\nДва", ctx)).toBe("text");
-    expect(chooseVoiceOrText("а".repeat(200), ctx)).toBe("text");
+    expect(chooseVoiceOrText(["Раз", "Два"].join(String.fromCharCode(10)), ctx)).toBe("voice"); // перенос строки голосу не мешает
+    expect(chooseVoiceOrText("а".repeat(300), ctx)).toBe("text");
   });
   it("после голосового клиента порог длины мягче", () => {
-    const mid = "Конечно, с удовольствием расскажу про курс: в нём много практики, вы будете готовить вместе с нами, а если что-то не получится, мы всегда поможем советом и поддержкой в чате.";
+    const mid = "Конечно, с удовольствием расскажу про курс: в нём много практики, вы будете готовить вместе с нами, а если что-то не получится, мы всегда поможем советом и поддержкой в чате, и вы никогда не останетесь одни с вашим вопросом, потому что мы рядом на каждом шаге обучения.";
     expect(chooseVoiceOrText(mid, ctx)).toBe("text");
     expect(chooseVoiceOrText(mid, { ...ctx, clientSentVoice: true })).toBe("voice");
   });
@@ -34,7 +34,7 @@ describe("chooseVoiceOrText", () => {
 
 describe("trySendVoiceReply", () => {
   it("рубильник выключен по умолчанию — голосом не отвечает", async () => {
-    expect(await trySendVoiceReply({ id: "c", igUserId: "x", channel: "WHATSAPP" }, "Здравствуйте!", true)).toBe(false);
+    expect(await trySendVoiceReply({ id: "c", igUserId: "x", channel: "WHATSAPP" }, "Здравствуйте!", true)).toBeNull();
   });
 });
 
@@ -58,5 +58,24 @@ describe("splitForVoice — нарезка на короткие голосов�
   it("слишком длинный ответ (больше 4 кусков) — null, то есть текстом", async () => {
     const { splitForVoice } = await vi.importActual<typeof import("../../src/ai/voiceClone.js")>("../../src/ai/voiceClone.js");
     expect(splitForVoice("Очень длинное предложение для проверки. ".repeat(40))).toBeNull();
+  });
+});
+
+describe("planVoice — часть голосом, цифры текстом", () => {
+  const c = { channel: "INSTAGRAM", clientSentVoice: true, lastReplyWasVoice: false };
+  it("клиент прислал голос: предложения без цифр голосом, с ценой - текстом", () => {
+    const plan = planVoice("Рахмат, ки навиштед. Нархи курс 70 сомонӣ. Кадом курс ба шумо маъқул аст?", c)!;
+    expect(plan.voice).toContain("Рахмат");
+    expect(plan.voice).not.toMatch(/\d|сомонӣ/);
+    expect(plan.rest).toContain("70");
+  });
+  it("клиент писал текстом: ответ с цифрами остаётся целиком текстом", () => {
+    expect(planVoice("Нархи курс 70 сомонӣ. Рахмат.", { ...c, clientSentVoice: false })).toBeNull();
+  });
+  it("весь ответ без цифр - целиком голосом, остатка нет", () => {
+    expect(planVoice("Салом, хуш омадед!", c)).toEqual({ voice: "Салом, хуш омадед!", rest: "" });
+  });
+  it("после прошлого голосового - текст", () => {
+    expect(planVoice("Рахмат. Нарх 70.", { ...c, lastReplyWasVoice: true })).toBeNull();
   });
 });

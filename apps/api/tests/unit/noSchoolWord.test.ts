@@ -30,8 +30,8 @@ describe("Слова «школа» нет в текстах для клиент
   });
 
   it("язык уроков в правилах — честная формула, а не «только на таджикском»", () => {
-    expect(ALWAYS_RULES).toContain("Ширин в видео говорит по-таджикски");
-    expect(ALWAYS_RULES).toContain("на русском и таджикском");
+    expect(ALWAYS_RULES).toContain("Уроки на таджикском языке");
+    expect(ALWAYS_RULES).not.toContain("на русском и таджикском");
     expect(ALWAYS_RULES).not.toMatch(/уроки курса и телеграм-канал только на таджикском/);
   });
 
