@@ -22,6 +22,8 @@ export type ReceiptLike = {
   id: string;
   handle: string;
   amount: number | null;
+  /** null - сумма не подходит ни к одному курсу; undefined - подсказка неизвестна. */
+  courseGuess?: string | null;
 };
 
 const COURSE_OPTIONS = [
@@ -52,8 +54,11 @@ export function useReceiptDecision(opts: { onSettled?: () => void } = {}) {
   const approve = useCallback(
     async (receipt: ReceiptLike, course?: CourseChoice) => {
       let chosen = course;
-      if (receipt.amount == null && !chosen) {
-        const picked = await chooseOption({ title: "Сумма не прочиталась — какой курс открыть?", options: COURSE_OPTIONS });
+      if ((receipt.amount == null || receipt.courseGuess === null) && !chosen) {
+        const picked = await chooseOption({
+          title: receipt.amount == null ? "Сумма не прочиталась — какой курс открыть?" : "Сумма не подходит ни к одному курсу — какой курс открыть?",
+          options: COURSE_OPTIONS,
+        });
         if (!picked) return false;
         chosen = picked as CourseChoice;
       }

@@ -11,7 +11,8 @@ import { prisma as originalPrisma, setPrismaClient } from "../../src/db.js";
  * ошибок в условиях запросов. Здесь схема накатывается во временный файл, а
  * Telegram и отправка клиенту - заглушки.
  */
-const sendToContact = vi.fn(async (..._a: unknown[]) => "mid-1");
+let midCounter = 0;
+const sendToContact = vi.fn(async (..._a: unknown[]) => `mid-${++midCounter}`);
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[]) => sendToContact(...a) }));
 const sendReceiptForReview = vi.fn(async (..._a: unknown[]) => ({ chatId: "owner-1", messageId: 5 }));
 const sendTelegramMessage = vi.fn(async (..._a: unknown[]) => 1);
@@ -32,6 +33,8 @@ import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 import { settleChoiceIfHandedOut } from "../../src/course/handedOut.js";
 import { closeSettledReceiptAlerts, resetSweepClock } from "../../src/receiptAlerts.js";
 import { decideReceipt } from "../../src/receiptDecision.js";
+import { deferGrantForChoice } from "../../src/course/deliveryChoice.js";
+import { planForAmount } from "../../src/courses.js";
 import { resetPriceCache } from "../../src/services/priceService.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -383,5 +386,62 @@ describe("настоящая база: ревью 5", () => {
     await handleReceiptVerdict(c, verdict("r70", { amount: 70, tamperingSuspected: true }));
     const args = sendReceiptForReview.mock.calls[0][2] as { caption: string };
     expect(args.caption).toMatch(/отозван/);
+  });
+});
+
+describe("настоящая база: ревью PR 72", () => {
+  it("после напоминания номер вопроса обновлён: короткое 'да' будет засчитано", async () => {
+    const c = await db.contact.create({ data: { id: "f1", igUserId: "ig-f1", username: "f1", deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: "mid-old" } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await handleReceiptVerdict(c, verdict("f1-50", { amount: 50 }));
+    const fresh = await db.contact.findUnique({ where: { id: c.id } });
+    const lastOut = await db.message.findFirst({ where: { contactId: c.id, direction: "OUT" }, orderBy: { createdAt: "desc" } });
+    expect(fresh?.deliveryChoicePromptMid).toBeTruthy();
+    expect(fresh?.deliveryChoicePromptMid).not.toBe("mid-old");
+    expect(lastOut?.mid).toBe(fresh?.deliveryChoicePromptMid);
+  });
+
+  it("курс 50 выдан руками, чек 70: покупка 70 записана на полную сумму 70, а не 35", async () => {
+    const c = await newContact("f2");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, inviteLink: "https://x/l/m", source: "MANUAL" } });
+    await deferGrantForChoice(c, { grant: ["COURSE50", "COURSE70"], note: "n" }, 70, { amount: 70, currency: "TJS" }, {});
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p70?.amount).toBe(70);
+  });
+
+  it("чек 40 + выбор курса 50: в покупку идёт сумма чека 40, не цена курса", async () => {
+    const c = await newContact("f3");
+    const r = await db.receiptCheck.create({ data: { contactId: c.id, kind: "suspicious", confidence: 80, reason: "r", imageHash: "f3", amount: 40, ownerDecision: "PENDING" } });
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await decideReceipt(r.id, "approve", "COURSE50");
+    expect(grantCourses.mock.calls[0][2]).toBe(40);
+  });
+
+  it("ссылка Ширин сняла вопрос: курс помечен выданным вручную и не считается недоставленным", async () => {
+    const c = await newContact("f4");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Вот https://shirinsweets.online/l/aBcD234567" } });
+    expect(await settleChoiceIfHandedOut(c.id)).toBe(true);
+    const plan = await planForAmount(c.id, 70);
+    expect(plan.grant).toEqual([]);
+    expect(plan.duplicate).toBe(true);
+    expect(plan.retry).toEqual([]);
+  });
+
+  it("первый вопрос про Telegram не дошёл (FAILED): второй чек не тонет в тишине", async () => {
+    const c = await db.contact.create({ data: { id: "f5", igUserId: "ig-f5", username: "f5", deliveryChoicePromptState: "FAILED" } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await handleReceiptVerdict(c, verdict("f5-50", { amount: 50 }));
+    expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
+  });
+
+  it("отозван курс 70, чек 70, 'Подтвердить': ответ про отзыв, а не 'дубль'", async () => {
+    const c = await newContact("f6");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, revokedAt: new Date(), inviteLink: "https://x/l/a" } });
+    const r = await db.receiptCheck.create({ data: { contactId: c.id, kind: "suspicious", confidence: 80, reason: "r", imageHash: "f6", amount: 70, ownerDecision: "PENDING" } });
+    const res = await decideReceipt(r.id, "approve");
+    expect(String((res as { message: string }).message)).toMatch(/отозван/);
   });
 });

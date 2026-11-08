@@ -178,8 +178,14 @@ async function remindDeliveryChoice(contact: Contact): Promise<void> {
   });
   const text = CHOICE_REMINDER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
   if (await isBotFrozen()) return;
+  // Напоминание становится ПОСЛЕДНИМ сообщением бота, поэтому его номер пишем как номер
+  // вопроса: иначе короткое "да" после напоминания не засчитывается (ревью PR 72).
   await sendToContact(contact, text)
-    .then((mid) => (mid ? recordOutgoingMessage(contact.id, text, mid) : undefined))
+    .then(async (mid) => {
+      if (!mid) return;
+      await recordOutgoingMessage(contact.id, text, mid);
+      await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptMid: mid, deliveryChoicePromptState: "WAITING" } });
+    })
     .catch((err) => logError("receiptVerdict:choiceReminder", err));
 }
 
@@ -635,7 +641,7 @@ export async function handleReceiptVerdict(
   }
 
   if (await isBotFrozen()) return;
-  if (saved && waitingForChoice && contact.deliveryChoicePromptState === "WAITING") {
+  if (saved && waitingForChoice && contact.deliveryChoicePromptState) {
     // Второй платёж прошёл, а вопрос про Telegram задан раньше и ждёт ответа.
     await remindDeliveryChoice(contact);
   }

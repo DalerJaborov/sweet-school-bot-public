@@ -44,6 +44,11 @@ export async function deferGrantForChoice(
   if (fresh.accessRevokedAt || fresh.spamBlockedAt) return true;
   if (!opts.byHuman && await isBotFrozen()) return true;
   await prisma.$transaction(async (tx) => {
+    // Сумма делится только между НОВЫМИ покупками (ревью PR 72): курс, выданный
+    // раньше, не должен уменьшать долю нового (35 вместо 70).
+    const priors = await tx.purchase.findMany({ where: { contactId: contact.id, course: { in: plan.grant } }, select: { course: true } });
+    const newCourses = plan.grant.filter((c) => !(priors ?? []).some((p) => p.course === c));
+    let newIndex = 0;
     for (let i = 0; i < plan.grant.length; i++) {
       const course = plan.grant[i];
       const prior = await tx.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
@@ -51,11 +56,15 @@ export async function deferGrantForChoice(
       if (prior) {
         await tx.purchase.update({ where: { id: prior.id }, data: { deliveryAwaitingChoice: true } });
       } else {
-        const share = Math.floor(amount / plan.grant.length);
+        const newCount = Math.max(1, newCourses.length);
+        const share = Math.floor(amount / newCount);
+        const before = newIndex;
+        const isLastNew = before === newCount - 1;
+        newIndex += 1;
         const catalog = await tx.course.findUnique({ where: { code: course } });
         await tx.purchase.create({ data: {
           contactId: contact.id, course, courseId: catalog?.id ?? null,
-          amount: i === plan.grant.length - 1 ? amount - share * i : share,
+          amount: isLastNew ? amount - share * before : share,
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", deliveryAwaitingChoice: true,
         } });
       }

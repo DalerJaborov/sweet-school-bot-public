@@ -164,6 +164,7 @@ async function decideReceiptInner(
   // выбранного курса, а не угаданное число.
   let amount: number;
   let plan: Allocation;
+  let revokedFromPlan: Course[] = [];
   if (receipt.amount != null && (await coursesForAmount(Math.round(receipt.amount))).length > 0) {
     amount = receipt.amount;
     // ТОЛЬКО курсы, которые даёт сама сумма чека, и только те, которых у клиентки
@@ -171,6 +172,7 @@ async function decideReceiptInner(
     // "второй курс" за повторный чек на ту же сумму - то есть бесплатно.
     const own = await planForAmount(receipt.contactId, amount);
     const grant = own.grant;
+    revokedFromPlan = own.revoked;
     plan = {
       grant,
       note: grant.length > 0 ? `по сумме: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "этот курс у клиентки уже есть - ничего не выдано",
@@ -184,7 +186,8 @@ async function decideReceiptInner(
           ? [courseChoice]
           : [];
     const { price } = await getPrices();
-    amount = grant.reduce((sum, c) => sum + price[c], 0);
+    // Сумма на чеке есть - в покупки пишем её (а не цену курса), иначе отчёт врёт.
+    amount = receipt.amount != null ? receipt.amount : grant.reduce((sum, c) => sum + price[c], 0);
     plan = {
       grant,
       note: grant.length > 0 ? `выбрано владельцем вручную: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "уже куплено",
@@ -200,7 +203,7 @@ async function decideReceiptInner(
     where: { contactId: receipt.contactId, course: { in: plan.grant }, revokedAt: { not: null } },
     select: { course: true, revokedAt: true },
   });
-  const revokedCourses = new Set((revokedRows ?? []).filter((r) => r.revokedAt).map((r) => r.course));
+  const revokedCourses = new Set<string>([...(revokedRows ?? []).filter((r) => r.revokedAt).map((r) => r.course), ...revokedFromPlan]);
   if (revokedCourses.size > 0) {
     // Из комплекта убираем только отозванный курс; оплаченный второй выдаём.
     plan = { ...plan, grant: plan.grant.filter((c) => !revokedCourses.has(c)) };
@@ -216,7 +219,7 @@ async function decideReceiptInner(
   // A previous send failure preserves the paid purchase. Retry its delivery,
   // rather than allocating another course from the same payment amount.
   const pending = await prisma.purchase.findMany({
-    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null, deliveryAwaitingChoice: false },
+    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null, accessIssuedAt: null, deliveryAwaitingChoice: false },
   });
   if (pending.some((p) => p.accessDeliveryUncertainAt)) {
     await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });

@@ -38,7 +38,7 @@ export async function deliveredCoursesSince(contactId: string, since: Date): Pro
       contactId,
       revokedAt: null,
       accessDeliveryUncertainAt: null,
-      inviteLink: { not: null },
+      OR: [{ inviteLink: { not: null } }, { accessIssuedAt: { not: null } }],
       createdAt: { gte: since },
     },
     select: { course: true },
@@ -79,7 +79,8 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
     if (p.inviteLink || (waiting.length === 1 && (await manualLinkSince(contactId, p.createdAt)))) settled.push(p.id);
   }
   if (settled.length === 0) return false;
-  await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false } });
+  // accessIssuedAt: метка "выдано вручную" - планировщик не считает курс недоставленным
+  await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false, accessIssuedAt: new Date() } });
   // Ссылка Ширин не привязана к курсу (и может вести в бесплатную группу): после
   // снятия вопроса владельцу уходит напоминание проверить, что ссылка нужная.
   if (waiting.some((p) => settled.includes(p.id) && !p.inviteLink)) await tellOwnerChoiceSettled(contactId);

@@ -137,7 +137,7 @@ export async function planForAmount(
   const rows = await prisma.purchase
     .findMany({
       where: { contactId, course: { in: wanted } },
-      select: { course: true, revokedAt: true, inviteLink: true, deliveryAwaitingChoice: true },
+      select: { course: true, revokedAt: true, inviteLink: true, accessIssuedAt: true, deliveryAwaitingChoice: true },
     })
     .catch(() => []);
   const revoked: Course[] = [];
@@ -148,7 +148,7 @@ export async function planForAmount(
     if (r.revokedAt) revoked.push(c);
     // Куплен, но ссылка не ушла (сбой отправки) и не ждёт ответа про Telegram:
     // решение владельца ПОВТОРИТ доставку, значит это не "дубль".
-    else if (r.inviteLink === null && r.deliveryAwaitingChoice === false) retry.push(c);
+    else if (r.inviteLink === null && r.accessIssuedAt === null && r.deliveryAwaitingChoice === false) retry.push(c);
     else owned.push(c);
   }
   const grant = wanted.filter((c) => !revoked.includes(c) && !owned.includes(c));

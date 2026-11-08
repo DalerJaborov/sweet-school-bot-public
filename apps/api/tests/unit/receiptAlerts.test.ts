@@ -213,9 +213,15 @@ describe("сторож: понятие «чек принят» живёт в о�
     const copies = files.filter((f) => {
       if (f.endsWith("receiptAccepted.ts")) return false;
       const text = fsm.readFileSync(f, "utf8");
-      // любой порядок записи: в одном OR-массиве рядом linkSent:true и ownerDecision:"APPROVED"
-      const arrays = text.match(/OR:\s*\[[^\]]{0,400}\]/g) ?? [];
-      return arrays.some((a) => /linkSent:\s*true/.test(a) && /ownerDecision:\s*"APPROVED"/.test(a));
+      // любой порядок записи, любые кавычки, in:[...] вместо равенства: в одном OR-массиве
+      // (или в ownerDecision: { in: [...] }) рядом linkSent и одобрение
+      const norm = text.replace(/\s+/g, "").replace(/'/g, '"');
+      const arrays = norm.match(/OR:\[.{0,400}?\]\]?/g) ?? [];
+      const ins = norm.match(/ownerDecision:\{in:\[[^\]]*\]\}/g) ?? [];
+      return (
+        arrays.some((a) => /linkSent:true/.test(a) && /"APPROVED"/.test(a)) ||
+        ins.some((a) => /"APPROVED"/.test(a) && /"HANDLED"/.test(a))
+      );
     });
     expect(copies).toEqual([]);
   });

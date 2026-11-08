@@ -80,7 +80,7 @@ describe("случай 2: отложенная автоматика после �
     db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70" }]);
     await handleReceiptVerdict(contact, verdict(), "q1");
     expect(db.model("purchase").findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ inviteLink: { not: null }, revokedAt: null }) }),
+      expect.objectContaining({ where: expect.objectContaining({ OR: [{ inviteLink: { not: null } }, { accessIssuedAt: { not: null } }], revokedAt: null }) }),
     );
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendToContact).not.toHaveBeenCalled();
@@ -165,7 +165,7 @@ describe("случай 2: отложенная автоматика после �
     ]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(false);
     expect(db.model("purchase").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: { in: ["p1"] } }, data: { deliveryAwaitingChoice: false } }),
+      expect.objectContaining({ where: { id: { in: ["p1"] } }, data: expect.objectContaining({ deliveryAwaitingChoice: false }) }),
     );
     await askDeliveryChoice(contact);
     expect(sendToContact).not.toHaveBeenCalled();
