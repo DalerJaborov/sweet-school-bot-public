@@ -490,19 +490,38 @@ describe("политика «один телефон»", () => {
     expect(result).toMatchObject({ ok: false, reason: "device_limit" });
   });
 
-  it("Android той же модели в другом браузере — НЕ блокируем: тот же телефон, владельцу сводка", async () => {
+  it("Instagram → Chrome на том же Android: та же модель и сеть — пускаем тихо, без тревоги", async () => {
     const result = await open(ANDROID_A.replace("Chrome/120", "Instagram 300 Chrome/120"), [occupied({})]);
     expect(result.ok).toBe(true);
     expect(db.model("device").create).not.toHaveBeenCalled();
     expect(db.model("device").update).toHaveBeenCalled();
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("смена сети (Wi-Fi → мобильный): та же модель Android, другой адрес — пускаем, владельцу сводка", async () => {
+    const result = await open(ANDROID_A, [occupied({ lastIp: "192.168.7.20" })]);
+    expect(result.ok).toBe(true);
+    expect(db.model("device").create).not.toHaveBeenCalled();
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Возможно, второй телефон");
   });
 
-  it("модель скрыта (Chrome режет до «K»), сеть та же и заход свежий — сомнительно, пускаем и сообщаем", async () => {
+  it("iPhone без модели: Instagram → Safari в той же сети недавно — тихо тот же телефон", async () => {
+    const result = await open(IPHONE, [occupied({ userAgent: IPHONE.replace("Mobile/15E148", "Mobile/15E148 Instagram 300"), lastSeenAt: new Date(Date.now() - 20 * 60_000) })]);
+    expect(result.ok).toBe(true);
+    expect(db.model("device").create).not.toHaveBeenCalled();
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("iPhone без модели в ДРУГОЙ сети и без совпавшего отпечатка — другой телефон: стоп", async () => {
+    const result = await open(IPHONE, [occupied({ userAgent: IPHONE, lastIp: "172.16.9.9", lastSeenAt: new Date() })]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+  });
+
+  it("Android с урезанным User-Agent («K»), та же сеть, свежий заход — тихо тот же телефон", async () => {
     const result = await open(ANDROID_REDUCED, [occupied({ userAgent: ANDROID_REDUCED, lastSeenAt: new Date(Date.now() - 5 * 60_000) })]);
     expect(result.ok).toBe(true);
     expect(db.model("device").create).not.toHaveBeenCalled();
-    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("модель скрыта, сеть та же, но прошлый заход давно — другой телефон: стоп", async () => {

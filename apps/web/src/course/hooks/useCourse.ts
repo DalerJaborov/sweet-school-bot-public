@@ -12,6 +12,9 @@ import {
   saveProgress,
   saveProgressBeacon,
   startPreview,
+  requestTransfer,
+  confirmTransfer,
+  type TransferStatus,
   type CourseInfo,
   type CourseView,
   type DeviceLimitData,
@@ -60,6 +63,12 @@ import { useOnline } from "./useOnline";
 
 /** После скольких секунд просмотра урок считается «нужным» и сохраняется. */
 const AUTOSAVE_AFTER_SEC = 30;
+
+/** Код ссылки из адреса: /l/<код> или старое ?token=. */
+function currentLinkToken(): string | null {
+  const short = /^\/l\/([A-Za-z0-9]{6,32})$/.exec(window.location.pathname);
+  return short?.[1] ?? new URLSearchParams(window.location.search).get("token");
+}
 
 export type Source = "network" | "cache";
 export type CourseErrorState = { message: string; reason: string };
@@ -198,12 +207,33 @@ export function useCourse() {
     }
   }, []);
 
-  /** Ученица подтвердила: это её новый телефон — вытесняем самое старое. */
-  const replaceOldestDevice = useCallback(async () => {
-    setDeviceLimit((d) => (d ? { ...d, busy: true } : d));
-    await bootstrap(false, true);
-    setDeviceLimit((d) => (d ? { ...d, busy: false } : d));
-  }, [bootstrap]);
+  /** «Перенести»: код подтверждения уходит в чат покупательницы. */
+  const requestTransferCode = useCallback(async (): Promise<TransferStatus | "error"> => {
+    const token = currentLinkToken();
+    if (!token) return "error";
+    try {
+      return (await requestTransfer(token)).status;
+    } catch {
+      return "error";
+    }
+  }, []);
+
+  /** Код введён: сервер аннулирует старый телефон, этот открывается. */
+  const confirmTransferCode = useCallback(
+    async (code: string): Promise<boolean> => {
+      const token = currentLinkToken();
+      if (!token) return false;
+      try {
+        await confirmTransfer(token, code);
+      } catch {
+        return false;
+      }
+      setDeviceLimit(null);
+      await bootstrap(false, false);
+      return true;
+    },
+    [bootstrap],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -347,7 +377,8 @@ export function useCourse() {
     error,
     inAppTrap,
     deviceLimit,
-    replaceOldestDevice,
+    requestTransferCode,
+    confirmTransferCode,
     source,
     online,
     lang,

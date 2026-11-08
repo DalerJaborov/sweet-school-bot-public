@@ -1,24 +1,46 @@
+import { useState } from "react";
 import { ContactsBlock } from "../components/ContactsBlock";
 import type { DeviceLimitState } from "../hooks/useCourse";
 import { formatLastSeen, type Dict } from "../i18n";
+import type { TransferStatus } from "../api";
 
 /**
- * ЛИМИТ УСТРОЙСТВ (дизайн доступа 03.09.2026). Раньше 429 был тупиком с
- * подсказкой «напишите нам» — а самый частый случай простой: человек сменил
- * телефон. Показываем, что занято, и даём заменить самое старое одним
- * нажатием, пока сервер разрешает замены (swapsLeft). Кончились — остаётся
- * написать школе; контакты берём из сохранённого /me, если он есть.
+ * КУРС ОТКРЫТ НА ДРУГОМ ТЕЛЕФОНЕ (политика «один телефон», 08.11.2026).
+ * Один телефон — любые его браузеры; на другом телефоне курс не открывается,
+ * пока человек не перенесёт доступ: код подтверждения приходит в ЕГО чат с
+ * ботом, после ввода старый телефон аннулируется. Не чаще раза в месяц —
+ * повторный перенос решает владелец, ученица видит, что мы его спросили.
  */
 export function DeviceLimitScreen({
   t,
   limit,
-  onReplace,
+  onRequest,
+  onConfirm,
 }: {
   t: Dict;
   limit: DeviceLimitState;
-  onReplace: () => void;
+  onRequest: () => Promise<TransferStatus | "error">;
+  onConfirm: (code: string) => Promise<boolean>;
 }) {
-  const canSwap = limit.swapsLeft > 0;
+  const [stage, setStage] = useState<"idle" | "code" | "owner" | "failed">("idle");
+  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState("");
+  const [bad, setBad] = useState(false);
+
+  const request = async () => {
+    setBusy(true);
+    const status = await onRequest();
+    setBusy(false);
+    setBad(false);
+    setStage(status === "sent" || status === "cooldown" ? "code" : status === "owner_asked" ? "owner" : "failed");
+  };
+  const confirm = async () => {
+    setBusy(true);
+    const ok = await onConfirm(code.trim());
+    setBusy(false);
+    setBad(!ok);
+  };
+
   return (
     <div className="center devices-screen" role="alert">
       <h1>{t.deviceLimitTitle}</h1>
@@ -45,21 +67,35 @@ export function DeviceLimitScreen({
           );
         })}
       </ul>
-      {canSwap ? (
+      {(stage === "idle" || stage === "failed") && (
+        <button type="button" className="btn btn-big" onClick={() => void request()} disabled={busy}>
+          {t.transferButton}
+        </button>
+      )}
+      {stage === "code" && (
         <>
-          <button type="button" className="btn btn-big" onClick={onReplace} disabled={limit.busy}>
-            {t.replaceOldest}
+          <p>{t.transferSent}</p>
+          <label>
+            <span className="muted">{t.transferCodeLabel}</span>
+            <input
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            />
+          </label>
+          {bad && <p role="alert">{t.transferBadCode}</p>}
+          <button type="button" className="btn btn-big" onClick={() => void confirm()} disabled={busy || code.length !== 6}>
+            {t.transferConfirm}
           </button>
-          <p className="muted">{t.swapsLeft(limit.swapsLeft)}</p>
         </>
-      ) : (
+      )}
+      {stage === "owner" && <p>{t.transferOwnerAsked}</p>}
+      {stage === "failed" && (
         <>
-          <p>{t.noSwapsLeft}</p>
-          {limit.school ? (
-            <ContactsBlock t={t} school={limit.school} />
-          ) : (
-            <p className="muted">{t.help.device_limit}</p>
-          )}
+          <p>{t.transferSendFailed}</p>
+          {limit.school && <ContactsBlock t={t} school={limit.school} />}
         </>
       )}
     </div>

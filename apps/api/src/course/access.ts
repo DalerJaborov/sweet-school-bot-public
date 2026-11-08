@@ -489,9 +489,12 @@ export async function registerDevice(
   // запись того же устройства и сообщаем владельцу.
   if (used >= limit) {
     const existing = await prisma.device.findMany({ where: { contactId: contact.id, blockedAt: null } });
-    const doubtful = existing.find((d) => samePhoneVerdict(d, req, ip) === "unsure");
+    const sure = existing.find((d) => samePhoneVerdict(d, req, ip) === "same");
+    const doubtful = sure ?? existing.find((d) => samePhoneVerdict(d, req, ip) === "unsure");
     if (doubtful) {
-      await alertUnsurePhone(contact, doubtful);
+      // Уверенное совпадение — тихо, как будто ничего не произошло; только
+      // сомнительное идёт владельцу сводкой.
+      if (!sure) await alertUnsurePhone(contact, doubtful);
       const device = await prisma.device.update({
         where: { id: doubtful.id },
         data: { lastSeenAt: new Date(), lastIp: ip, lastCity: country ?? doubtful.lastCity, offlineKeyExpiresAt },
@@ -510,8 +513,7 @@ export async function registerDevice(
     return {
       ok: false,
       reason: "device_limit",
-      message:
-        "Курс уже открыт на другом телефоне. Если это ваш новый телефон, перенесите доступ: старый телефон перестанет открывать уроки",
+      message: "Курс открыт на другом телефоне. Чтобы перенести на этот телефон, нажмите «Перенести», вам придёт код в WhatsApp",
     };
   }
 
@@ -551,8 +553,9 @@ export async function registerDevice(
  *    блокируем, а пускаем на то же устройство и сообщаем владельцу;
  *  - всё остальное — "different".
  */
-export type PhoneVerdict = "different" | "unsure";
-const UNSURE_NET_WINDOW_MS = 30 * 60_000;
+export type PhoneVerdict = "same" | "unsure" | "different";
+/** Тот же сегмент сети и заход не старше этого — один и тот же телефон. */
+const SAME_NET_WINDOW_MS = 6 * 3_600_000;
 
 function osFamily(ua: string | null | undefined): string {
   const u = ua ?? "";
@@ -587,11 +590,19 @@ export function samePhoneVerdict(
   if (osFamily(known.userAgent) !== osFamily(ua)) return "different";
   const a = androidModel(known.userAgent);
   const b = androidModel(ua);
-  if (a && b) return a === b ? "unsure" : "different";
   const net = subnetOf(ip);
   const sameNet = net !== null && net === subnetOf(known.lastIp);
-  const fresh = Date.now() - known.lastSeenAt.getTime() < UNSURE_NET_WINDOW_MS;
-  return sameNet && fresh ? "unsure" : "different";
+  if (a && b) {
+    if (a !== b) return "different";
+    // Та же модель: в той же сети — тот же телефон; в другой (Wi-Fi и
+    // мобильный интернет) — вероятно тот же, но сообщаем владельцу.
+    return sameNet ? "same" : "unsure";
+  }
+  // Модель неизвестна (iPhone, Android с урезанным User-Agent): та же ОС и
+  // та же сеть недавно — тот же телефон; иначе отпечаток аппарата уже не
+  // совпал, и это другой телефон.
+  const fresh = Date.now() - known.lastSeenAt.getTime() < SAME_NET_WINDOW_MS;
+  return sameNet && fresh ? "same" : "different";
 }
 
 async function alertUnsurePhone(contact: Contact, device: Device): Promise<void> {

@@ -1,3 +1,4 @@
+import { approveTransferByOwner } from "./course/phoneTransfer.js";
 import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { answerCallback, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds } from "./telegram.js";
 import { buildReport, offsetMs, truncate } from "./dailyReport.js";
@@ -295,6 +296,15 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
   if (query.id && chatId && /^mn:l[tls]:/.test(query.data ?? "")) {
     await answerCallback(botToken, query.id, "");
     await handleLinkStep(botToken, chatId, query.data ?? "").catch((err) => logError("telegramMenu:siteLink", err));
+    return;
+  }
+  const approve = /^mn:tr:([0-9a-f-]{36})$/.exec(query.data ?? "");
+  if (approve && query.id && chatId) {
+    const done = await approveTransferByOwner(approve[1]).catch((err) => {
+      logError("telegramMenu:approveTransfer", err);
+      return false;
+    });
+    await answerCallback(botToken, query.id, done ? "Перенос разрешён, ей написали" : "Не получилось");
     return;
   }
   const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");

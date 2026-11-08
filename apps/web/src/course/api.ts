@@ -331,6 +331,22 @@ export function pairDevice(pair: string): Promise<{ ok: boolean; contactId: stri
   return request("/pair", { method: "POST", body: JSON.stringify({ pair }) }, true);
 }
 
+export type TransferStatus = "sent" | "cooldown" | "owner_asked" | "send_failed";
+
+/** «Перенести на этот телефон»: код подтверждения уйдёт в чат покупательницы. */
+export function requestTransfer(token: string): Promise<{ status: TransferStatus }> {
+  return request("/transfer/request", { method: "POST", body: JSON.stringify({ token }) }, true);
+}
+
+/** Ввод кода: сервер аннулирует старый телефон и открывает этот. */
+export function confirmTransfer(token: string, code: string): Promise<{ ok: boolean }> {
+  return request(
+    "/transfer/confirm",
+    { method: "POST", body: JSON.stringify({ token, code, fingerprint: browserFingerprint() }) },
+    true,
+  );
+}
+
 export function loadCourse(): Promise<CourseView> {
   // Предпросмотр владельца — своя дверь только для чтения (course/preview.ts).
   if (isPreview()) return request(`/preview/me?lang=${previewLang()}`);

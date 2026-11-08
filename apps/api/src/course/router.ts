@@ -1,4 +1,7 @@
 import { Router, type Request, type Response } from "express";
+import { claimPlayback } from "./playbackLock.js";
+import { requestTransferCode, verifyTransferCode } from "./phoneTransfer.js";
+import { transferToNewPhone } from "./access.js";
 import { z } from "zod";
 import { env } from "../env.js";
 import { prisma, logError } from "../db.js";
@@ -146,6 +149,48 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
     }
     return deny(res, result);
   }
+  res.json({ ok: true, contactId: result.contact.id });
+});
+
+/** Контакт по коду из ссылки — для переноса на новый телефон. */
+async function contactForLinkToken(token: string) {
+  const claims = verifyMagicLink(token);
+  if (!claims?.jti || claims.contactId || claims.purchaseId) return null;
+  return prisma.contact.findUnique({ where: { accessTokenId: claims.jti } });
+}
+
+/** «Перенести на этот телефон»: код подтверждения уходит в чат покупательницы. */
+courseRouter.post(`${API_BASE}/transfer/request`, async (req: Request, res: Response) => {
+  const parsed = z.object({ token: z.string().min(10) }).safeParse(req.body);
+  const contact = parsed.success ? await contactForLinkToken(parsed.data.token) : null;
+  if (!contact) {
+    res.status(404).json({ error: "Ссылка недействительна или устарела", reason: "not_found" });
+    return;
+  }
+  const status = await requestTransferCode(contact);
+  res.json({ status });
+});
+
+/** Ввод кода: старый телефон аннулируется, этот открывается. */
+courseRouter.post(`${API_BASE}/transfer/confirm`, async (req: Request, res: Response) => {
+  const parsed = z
+    .object({ token: z.string().min(10), code: z.string().regex(/^\d{6}$/), fingerprint: z.string().max(200).optional() })
+    .safeParse(req.body);
+  const contact = parsed.success ? await contactForLinkToken(parsed.data.token) : null;
+  if (!parsed.success || !contact) {
+    res.status(400).json({ error: "Нужен код из 6 цифр", reason: "bad_code" });
+    return;
+  }
+  if (!verifyTransferCode(contact.id, parsed.data.code)) {
+    res.status(400).json({ error: "Код не подошёл или устарел", reason: "bad_code" });
+    return;
+  }
+  if ((await transferToNewPhone(contact)) === "limit") {
+    res.status(429).json({ error: "Перенос в этом месяце уже был", reason: "device_limit" });
+    return;
+  }
+  const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint, false);
+  if (!result.ok) return deny(res, result);
   res.json({ ok: true, contactId: result.contact.id });
 });
 
@@ -520,9 +565,19 @@ courseRouter.get(`${API_BASE}/lessons/:id/variant/:name`, async (req: Request, r
  * него бесполезны: переданные другому человеку файлы не откроются, а если
  * доступ отозвали, офлайн-копия умрёт сама, когда истечёт выданный ранее срок.
  */
+const PLAYING_ELSEWHERE = {
+  error: "Курс открыт на другом телефоне. С одного телефона можно смотреть только на нём одном",
+  reason: "playing_elsewhere",
+};
+
 courseRouter.get(`${API_BASE}/lessons/:id/key`, async (req: Request, res: Response) => {
   const access = await currentAccess(req);
   if (!access.ok) return deny(res, access);
+  // Одновременно с двух телефонов не играем; вкладки одного телефона делят замок.
+  if (!claimPlayback(access.contact.id, access.device.id)) {
+    res.status(409).json(PLAYING_ELSEWHERE);
+    return;
+  }
   // Право на офлайн истекло — ключ не отдаём. Именно эта проверка делает
   // тридцатидневный срок настоящим, а не декоративным.
   if (!offlineAllowed(access.device)) {
@@ -584,6 +639,10 @@ courseRouter.get(`${API_BASE}/lessons/:id/offline`, async (req: Request, res: Re
 courseRouter.post(`${API_BASE}/lessons/:id/progress`, async (req: Request, res: Response) => {
   const access = await currentAccess(req);
   if (!access.ok) return deny(res, access);
+  if (!claimPlayback(access.contact.id, access.device.id)) {
+    res.status(409).json(PLAYING_ELSEWHERE);
+    return;
+  }
   const parsed = z
     .object({ positionSec: z.number().int().min(0).max(60 * 60 * 12), percent: z.number().int().min(0).max(100) })
     .safeParse(req.body);

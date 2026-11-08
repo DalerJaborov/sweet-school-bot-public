@@ -14,7 +14,8 @@ export async function sendTelegramMessage(
   botToken: string,
   chatId: string,
   text: string,
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  replyMarkup?: { inline_keyboard: { text: string; callback_data: string }[][] }
 ): Promise<number | null> {
   const res = await fetch(`${API}/bot${botToken}/sendMessage`, {
     method: "POST",
@@ -22,6 +23,7 @@ export async function sendTelegramMessage(
     body: JSON.stringify({
       chat_id: chatId,
       text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } } : {}),
     }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
