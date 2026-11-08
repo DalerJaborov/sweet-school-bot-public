@@ -31,6 +31,7 @@ type Tab =
   | "recipes"
   | "receipts"
   | "questions"
+  | "attention"
   | "clients"
   | "money"
   | "texts"
@@ -72,10 +73,10 @@ const SECONDARY: NavItem[] = [
   { id: "settings", label: "Настройки", icon: Icons.settings },
 ];
 
-const TASK_TABS: Tab[] = ["receipts", "questions"];
+const TASK_TABS: Tab[] = ["receipts", "questions", "attention"];
 
 /** Разделы, которые умеет открывать ⌘K (apps/api/src/search.ts → SECTIONS). */
-const ALL_TABS = new Set<Tab>([...PRIMARY.map((p) => p.id), ...SECONDARY.map((s) => s.id), "questions", "recipes"]);
+const ALL_TABS = new Set<Tab>([...PRIMARY.map((p) => p.id), ...SECONDARY.map((s) => s.id), "questions", "attention", "recipes"]);
 function isTab(id: string): id is Tab {
   return ALL_TABS.has(id as Tab);
 }
@@ -89,7 +90,7 @@ export function App() {
   /** Открытая карточка ученицы — поверх вкладки «Ученицы» (StudentPage). */
   const [studentId, setStudentId] = useState<string | null>(null);
   /** Бейдж на «Задачах» — чеки в ожидании + вопросы без ответа. */
-  const [counts, setCounts] = useState({ receipts: 0, questions: 0 });
+  const [counts, setCounts] = useState({ receipts: 0, questions: 0, attention: 0 });
   // Check the server's auth mode before trusting any previously stored session.
   const [checkingSession, setCheckingSession] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
@@ -119,8 +120,12 @@ export function App() {
   // когда человек что-то сделал и вернулся, а не по таймеру.
   useEffect(() => {
     if (!authed) return;
-    api<Pick<Today, "pendingReceipts" | "unansweredQuestions">>("/admin/today")
-      .then((d) => setCounts({ receipts: d.pendingReceipts, questions: d.unansweredQuestions }))
+    Promise.all([
+      api<Pick<Today, "pendingReceipts" | "unansweredQuestions">>("/admin/today"),
+      // Чаты WhatsApp, где бот не ответил: сбой этого запроса не гасит остальные цифры.
+      api<{ chats: unknown[] }>("/admin/v1/conversations/attention").then((a) => a.chats.length).catch(() => 0),
+    ])
+      .then(([d, attention]) => setCounts({ receipts: d.pendingReceipts, questions: d.unansweredQuestions, attention }))
       // Сетевая ошибка не должна тихо обнулять бейдж — последнее известное
       // число надёжнее нуля, который выглядит как «всё ок».
       .catch((e) => console.error("task counts", e));
@@ -178,7 +183,7 @@ export function App() {
 
   const inSecondary = SECONDARY.some((s) => s.id === tab);
   const inTasks = TASK_TABS.includes(tab);
-  const taskBadge = counts.receipts + counts.questions;
+  const taskBadge = counts.receipts + counts.questions + counts.attention;
   const isActive = (id: Tab) => (id === "receipts" ? inTasks : tab === id);
 
   return (
@@ -230,7 +235,7 @@ export function App() {
         </div>
 
         {tab === "home" && <DashboardPage onGo={(t) => (t === "recipes" ? openReview(null) : void goTo(t))} onOpenStudent={openStudent} />}
-        {inTasks && <TasksPage view={tab as TasksView} counts={counts} onView={(v) => void goTo(v)} />}
+        {inTasks && <TasksPage view={tab as TasksView} counts={counts} onView={(v) => void goTo(v)} onChange={() => setCounts((c) => ({ ...c, attention: Math.max(0, c.attention - 1) }))} />}
         {tab === "clients" && studentId && <StudentPage contactId={studentId} onBack={() => setStudentId(null)} />}
         {tab === "clients" && !studentId && <ClientsPage onOpenStudent={openStudent} />}
         {tab === "money" && <MoneyPage />}
