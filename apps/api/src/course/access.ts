@@ -34,6 +34,14 @@ const SESSION_TTL_DAYS = 365;
 export const OFFLINE_KEY_DAYS = 30;
 /** Как часто отмечаем устройство «живым» в базе (см. currentAccess). */
 const TOUCH_INTERVAL_MS = 10 * 60_000;
+/**
+ * Окно «тот же телефон в другом браузере» (аудит пути ученицы 08.11.2026).
+ * Переход из встроенного браузера Instagram/Telegram в Safari/Chrome занимает
+ * минуты; позже совпадение модели, экрана и часового пояса — это скорее
+ * подруга с таким же iPhone в Душанбе. Больше TOUCH_INTERVAL_MS с запасом:
+ * lastSeenAt активного устройства обновляется раз в 10 минут.
+ */
+export const SAME_PHONE_WINDOW_MS = 30 * 60_000;
 
 const SESSION_COOKIE = "ssb_course";
 /** Метка устройства, выданная СЕРВЕРОМ. См. registerDevice: именно она, а не
@@ -204,7 +212,9 @@ export type AccessResult =
     }
   | {
       ok: false;
-      reason: "not_found" | "revoked" | "device_limit" | "blocked" | "no_session" | "offline_expired";
+      /** link_expired — код ссылки наш и действующий, но старше LINK_TTL_DAYS:
+       *  ученицу можно узнать и прислать ей новую (см. router /relink). */
+      reason: "not_found" | "link_expired" | "revoked" | "device_limit" | "blocked" | "no_session" | "offline_expired";
       message: string;
     };
 
@@ -234,19 +244,22 @@ export async function openByLink(
   res: Response,
   token: string,
   clientHint?: string,
-  replaceOldest = false
+  replaceOldest = false,
 ): Promise<AccessResult> {
   const claims = verifyMagicLink(token);
   if (!claims) {
-    return { ok: false, reason: "not_found", message: "Ссылка недействительна или устарела" };
+    return sessionOr(req, { ok: false, reason: "not_found", message: "Ссылка недействительна или устарела" });
   }
   const resolved = await resolveOwner(claims);
-  if (!resolved) return { ok: false, reason: "not_found", message: "Курс не найден" };
+  if (!resolved) return sessionOr(req, { ok: false, reason: "not_found", message: "Курс не найден" });
   const { contact, expectedJti } = resolved;
   // jti сверяем, чтобы старая ссылка перестала работать после перевыдачи
   // (например, доступ отозвали и вернули — прежняя ссылка не должна ожить).
   if (expectedJti && expectedJti !== claims.jti) {
-    return { ok: false, reason: "not_found", message: "Ссылка устарела — попросите новую" };
+    return sessionOr(req, { ok: false, reason: "not_found", message: "Ссылка устарела — попросите новую" });
+  }
+  if (resolved.expired) {
+    return sessionOr(req, { ok: false, reason: "link_expired", message: "Ссылка устарела" });
   }
   const purchases = await activePurchases(contact.id);
   if (purchases.length === 0) {
@@ -277,21 +290,56 @@ export async function openByLink(
 }
 
 /**
+ * СТАРАЯ ССЫЛКА ПРИ ЖИВОЙ СЕССИИ (аудит пути ученицы 08.11.2026).
+ *
+ * Ссылка живёт LINK_TTL_DAYS, а браузер помнит вход SESSION_TTL_DAYS. Ученица
+ * через месяц снова нажимает ссылку из директа — и раньше получала «Ссылка
+ * недействительна», хотя её кабинет в этом же браузере открыт. Ссылка — только
+ * ключ ВХОДА; если вход уже есть, ключ не нужен. Поэтому при отказе ссылки
+ * смотрим сессию: жива — пускаем в кабинет (новой куки не выдаём, устройство не
+ * регистрируем); закрыта по существу (отозвано, устройство заблокировано) —
+ * честно говорим это; сессии нет — исходный отказ ссылки.
+ *
+ * Сессия чужого человека с этой ссылкой ничего не открывает чужого: в кабинете
+ * будут уроки владелицы СЕССИИ, а не ссылки.
+ */
+async function sessionOr(req: Request, refusal: Exclude<AccessResult, { ok: true }>): Promise<AccessResult> {
+  if (!readCookie(req, SESSION_COOKIE)) return refusal;
+  const session = await currentAccess(req);
+  if (session.ok || session.reason === "revoked" || session.reason === "blocked") return session;
+  return refusal;
+}
+
+/** Код ссылки старше LINK_TTL_DAYS? Одно правило для входа и для повторной
+ *  отправки ссылки (delivery.ts, manualEnrollment.ts) — раньше каждый считал
+ *  срок сам. `minLeftMs` — сколько жизни должно остаться, чтобы ссылку ещё
+ *  можно было переслать, а не выдать новую. */
+export function linkExpired(issuedAt: Date | null | undefined, minLeftMs = 0, now = Date.now()): boolean {
+  if (!issuedAt) return true;
+  return now - issuedAt.getTime() > LINK_TTL_DAYS * 86_400_000 - minLeftMs;
+}
+
+/** Повторно отправлять ссылку, которой жить меньше суток, нельзя: ученица
+ *  откроет её завтра и упрётся в «ссылка устарела». Лучше выдать свежую. */
+export const LINK_RESEND_MIN_LEFT_MS = 86_400_000;
+
+/**
  * Кому принадлежит токен. Новые несут contactId; старые — purchaseId, по
  * которому находим человека. jti для сверки берём там же, где он хранился при
  * выдаче: у новых — на контакте, у старых — на покупке.
  */
-async function resolveOwner(
-  claims: { contactId?: string; purchaseId?: string; jti?: string }
-): Promise<{ contact: Contact; expectedJti: string | null } | null> {
+async function resolveOwner(claims: {
+  contactId?: string;
+  purchaseId?: string;
+  jti?: string;
+}): Promise<{ contact: Contact; expectedJti: string | null; expired?: boolean } | null> {
   // Короткий код: контакт — тот, у кого этот код записан как действующий.
-  // Код старше LINK_TTL_DAYS не пускает: как и JWT со сроком.
+  // Код старше LINK_TTL_DAYS не пускает (expired) — но человека мы узнали, и
+  // экран может предложить прислать новую ссылку вместо тупика.
   if (!claims.contactId && !claims.purchaseId && claims.jti && looksLikeShortCode(claims.jti)) {
     const contact = await prisma.contact.findUnique({ where: { accessTokenId: claims.jti } });
     if (!contact) return null;
-    const issued = contact.accessIssuedAt?.getTime() ?? 0;
-    if (Date.now() - issued > LINK_TTL_DAYS * 86_400_000) return null;
-    return { contact, expectedJti: contact.accessTokenId };
+    return { contact, expectedJti: contact.accessTokenId, expired: linkExpired(contact.accessIssuedAt) };
   }
   if (claims.contactId) {
     const contact = await prisma.contact.findUnique({ where: { id: claims.contactId } });
@@ -307,6 +355,22 @@ async function resolveOwner(
     return contact ? { contact, expectedJti: contact.accessTokenId ?? purchase.accessTokenId } : null;
   }
   return null;
+}
+
+/**
+ * Чья это просроченная ссылка — для кнопки «Получить новую ссылку».
+ *
+ * Только короткий код, который у человека ВСЁ ЕЩЁ записан как последний
+ * выданный: перевыданная (заменённая) ссылка никого не находит — ей и
+ * положено не работать. Возвращаем контакт, но не ссылку: новую ссылку
+ * получает переписка человека, а не тот, кто держит старую (её могли
+ * переслать подруге).
+ */
+export async function ownerOfExpiredLink(token: string): Promise<Contact | null> {
+  if (!looksLikeShortCode(token)) return null;
+  const contact = await prisma.contact.findUnique({ where: { accessTokenId: token } });
+  if (!contact || contact.accessTokenId !== token) return null;
+  return linkExpired(contact.accessIssuedAt) ? contact : null;
 }
 
 /** Действующие покупки человека, от ранней к поздней — якорная первая. */
@@ -328,6 +392,47 @@ export function purchaseFor(purchases: Purchase[], courseId: string | null | und
  * безопасности 03.09.2026). Запас 3, как в схеме: браузер внутри Instagram
  * считается отдельным устройством.
  */
+/** Кто освободил, заблокировал или вернул место (журнал AccessEvent). */
+export type DeviceActor = "owner" | "student" | "bot";
+export type DeviceAction = "released" | "blocked" | "unblocked";
+
+/** «iPhone · TJ» — подпись для журнала, без IP и строки браузера. */
+function deviceDetail(device: Pick<Device, "userAgent" | "lastCity">): string {
+  return [describeDevice(device.userAgent), device.lastCity].filter(Boolean).join(" · ");
+}
+
+/** Запись в журнал действий с устройствами. Журнал — сведение, а не условие:
+ *  сбой записи не должен откатывать уже сделанное освобождение места. */
+export async function recordAccessEvent(
+  device: Pick<Device, "id" | "contactId" | "userAgent" | "lastCity">,
+  action: DeviceAction,
+  actor: DeviceActor,
+): Promise<void> {
+  if (!device.contactId) return;
+  await prisma.accessEvent
+    .create({ data: { contactId: device.contactId, deviceId: device.id, action, actor, detail: deviceDetail(device) } })
+    .catch((err) => logError("course:accessEvent", err));
+}
+
+/**
+ * ОСВОБОДИТЬ МЕСТО — ЕДИНСТВЕННАЯ ДВЕРЬ УДАЛЕНИЯ УСТРОЙСТВА (08.11.2026).
+ *
+ * Место освобождают трое: ученица («это мой новый телефон»), бот
+ * (самовосстановление в recovery.ts) и владелец (кнопка в карточке ученицы).
+ * Раньше каждый звал prisma.device.delete сам, и следа не оставалось — спор
+ * «куда делось моё устройство» решался по памяти. Теперь удаление идёт только
+ * здесь и всегда пишет журнал; обход ловит тест deviceReleaseDoor.test.ts.
+ *
+ * Что видит освобождённый браузер: его сессия указывает на удалённое
+ * устройство и перестаёт пускать; скачанные уроки гаснут при выходе в сеть.
+ * Чтобы смотреть снова, нужна ссылка — и она займёт свободное место.
+ */
+export async function releaseDevice(device: Device, actor: DeviceActor): Promise<void> {
+  await prisma.device.delete({ where: { id: device.id } });
+  await recordAccessEvent(device, "released", actor);
+  logInfo("course:deviceRelease", `контакт ${device.contactId}: место освобождено (${actor}), устройство ${device.id}`);
+}
+
 /** Сколько раз в месяц ученица сама может заменить старое устройство. */
 export const MAX_DEVICE_SWAPS_PER_MONTH = 2;
 const SWAP_WINDOW_MS = 30 * 86_400_000;
@@ -350,19 +455,22 @@ export async function swapOldestDevice(contact: Contact): Promise<boolean> {
     orderBy: { lastSeenAt: "asc" },
   });
   if (!oldest) return false;
-  await prisma.device.delete({ where: { id: oldest.id } });
+  await releaseDevice(oldest, "student");
   await prisma.contact.update({
     where: { id: contact.id },
     data: { deviceSwaps: recent + 1, deviceSwapAt: new Date() },
   });
-  logInfo("course:deviceSwap", `контакт ${contact.id}: заменено устройство ${oldest.id} (${recent + 1}-я замена за месяц)`);
+  logInfo(
+    "course:deviceSwap",
+    `контакт ${contact.id}: заменено устройство ${oldest.id} (${recent + 1}-я замена за месяц)`,
+  );
   return true;
 }
 
 /** Устройства человека для экрана «какое заменить» — без секретов. */
-export async function listDevicesFor(contactId: string): Promise<
-  { id: string; label: string; city: string | null; lastSeenAt: Date; blocked: boolean }[]
-> {
+export async function listDevicesFor(
+  contactId: string,
+): Promise<{ id: string; label: string; city: string | null; lastSeenAt: Date; blocked: boolean }[]> {
   const devices = await prisma.device.findMany({ where: { contactId }, orderBy: { lastSeenAt: "asc" } });
   return devices.map((d) => ({
     id: d.id,
@@ -405,7 +513,7 @@ export async function registerDevice(
   contact: Contact,
   purchases: Purchase[],
   clientHint?: string,
-  replaceOldest = false
+  replaceOldest = false,
 ): Promise<AccessResult> {
   const purchase = purchases[0];
   const fingerprint = deviceFingerprint(req, clientHint);
@@ -443,11 +551,21 @@ export async function registerDevice(
    * три места одним телефоном и ноутбуком и упёрся в лимит. Отпечаток аппарата
    * (экран, ядра, платформа — без строки браузера) у обоих браузеров одинаков,
    * и внутри ОДНОГО человека этого достаточно, чтобы считать их одним
-   * устройством: чужому это дверь не открывает, а своей ученице не мешает.
-   * Метка этого устройства уедет в куку нового браузера ниже.
+   * устройством. Метка этого устройства уедет в куку нового браузера ниже.
+   *
+   * ТОЛЬКО В ОКНЕ SAME_PHONE_WINDOW_MS (аудит 08.11.2026). Без окна подруга с
+   * iPhone той же модели в том же часовом поясе в любой день проходила как «то
+   * же устройство»: лимит не срабатывал, а она получала метку чужого
+   * устройства. Переход между браузерами одного телефона — дело минут, поэтому
+   * узнаём по модели только устройство, которое было в сети последние 30
+   * минут; иначе это новое устройство и обычный лимит. Своей ученице с новым
+   * телефоном остаётся замена самой (MAX_DEVICE_SWAPS_PER_MONTH).
    */
   if (!known) {
-    known = await prisma.device.findFirst({ where: { contactId: contact.id, fingerprint } });
+    known = await prisma.device.findFirst({
+      where: { contactId: contact.id, fingerprint, lastSeenAt: { gte: new Date(Date.now() - SAME_PHONE_WINDOW_MS) } },
+      orderBy: { lastSeenAt: "desc" },
+    });
   }
 
   if (known) {
@@ -529,7 +647,7 @@ async function maybeAlertGeoAnomaly(contact: Contact, device: Device, country: s
     botToken,
     chatId,
     `👀 Курс ${who} открыли из ${device.lastCity} и ${country} почти одновременно.\n` +
-      `Похоже, ссылку передали. Отобрать доступ можно в панели, раздел «Клиенты».`
+      `Похоже, ссылку передали. Отобрать доступ можно в панели, раздел «Клиенты».`,
   ).catch((err) => logError("course:geoAlert", err));
 }
 
@@ -549,14 +667,18 @@ async function maybeAlertGeoAnomaly(contact: Contact, device: Device, country: s
 type PairClaims = { kind: "course-pair"; contactId: string; deviceId: string; sv: string };
 
 function secretStamp(secret: string | null): string {
-  return crypto.createHash("sha256").update(secret ?? "").digest("hex").slice(0, 16);
+  return crypto
+    .createHash("sha256")
+    .update(secret ?? "")
+    .digest("hex")
+    .slice(0, 16);
 }
 
 export function issuePairToken(contactId: string, device: Device): string {
   return jwt.sign(
     { kind: "course-pair", contactId, deviceId: device.id, sv: secretStamp(device.secret) } satisfies PairClaims,
     courseTokenSecret(),
-    { expiresIn: "365d" }
+    { expiresIn: "365d" },
   );
 }
 
@@ -578,7 +700,8 @@ export async function pairDevice(req: Request, res: Response, token: string): Pr
   if (secretStamp(device.secret) !== claims.sv) {
     return { ok: false, reason: "not_found", message: "Устройство было отвязано — откройте ссылку из переписки" };
   }
-  if (device.blockedAt) return { ok: false, reason: "blocked", message: device.blockedReason || "Устройство заблокировано" };
+  if (device.blockedAt)
+    return { ok: false, reason: "blocked", message: device.blockedReason || "Устройство заблокировано" };
   const purchases = await activePurchases(contact.id);
   if (purchases.length === 0) return { ok: false, reason: "revoked", message: "Доступ к курсу закрыт" };
 
@@ -655,6 +778,7 @@ export async function currentAccess(req: Request): Promise<AccessResult> {
 export function statusFor(reason: Exclude<AccessResult, { ok: true }>["reason"]): number {
   if (reason === "no_session") return 401;
   if (reason === "device_limit") return 429;
+  if (reason === "link_expired") return 410;
   if (reason === "revoked" || reason === "blocked" || reason === "offline_expired") return 403;
   return 404;
 }
