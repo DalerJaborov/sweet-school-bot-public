@@ -10,6 +10,9 @@ import { getSetting, setSetting } from "../db.js";
 
 export const SETTING_KEYS = [
   "freeLessonEnabled",
+  // Библиотека видео для клиентов (ai/videoLibrary.ts): рубильник (по умолчанию выключен) и JSON-список.
+  "videoLibraryEnabled",
+  "videoLibrary",
   "freeLessonId",
   "igToken",
   "appSecret",
