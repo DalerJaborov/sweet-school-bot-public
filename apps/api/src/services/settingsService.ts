@@ -169,6 +169,8 @@ export const SETTING_KEYS = [
   // Озвучка голосом Ширин (ai/voiceClone.ts): рубильник, потолок трат в месяц (USD)
   // и цена за 1000 знаков (USD; цену прислал владелец, на официальной странице не проверена).
   "voiceCloneEnabled",
+  // Отвечать ли голосом на короткие тёплые сообщения (ai/voiceReply.ts); по умолчанию выключено.
+  "voiceReplyEnabled",
   "voiceMonthlyCapUsd",
   "voicePricePer1kUsd",
 ] as const;

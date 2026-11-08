@@ -8,6 +8,7 @@ import { sendToContact } from "./messaging/send.js";
 import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, withContactMessaging } from "./messaging/automation.js";
 import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
+import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
 import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
@@ -464,7 +465,12 @@ export async function aiReply(
         // Несколько коротких сообщений вместо одного полотна — см. splitReplyParts.
         // Паузу между ними держит sendText сам (человеческий темп набора; на
         // сайте паузы нет — см. messaging/send.ts).
-        for (const part of splitReplyParts(replyText)) {
+        const parts = splitReplyParts(replyText);
+        // Короткий тёплый ответ может уйти голосом (рубильник voiceReplyEnabled, по
+        // умолчанию выключен; правило и границы - ai/voiceReply.ts). Любая ошибка - текстом.
+        const sentAsVoice =
+          parts.length === 1 && (await trySendVoiceReply(contact, parts[0], attachments.some((a) => a.kind === "audio")));
+        for (const part of sentAsVoice ? [] : parts) {
           const mid = await sendToContact(contact, part);
           await recordOutgoingMessage(contact.id, part, mid);
         }

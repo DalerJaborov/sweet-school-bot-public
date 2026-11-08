@@ -16,3 +16,6 @@
 - LIBRARY rows are excluded from style-learning examples. Bridge rejects audio + text in one send.
 - Voice-vs-text rule for the bot (who answers by voice) is NOT implemented: waiting for the owner's approval of the rule.
 - Open: model/language measurement (Tajik, accent) needs an API key available locally; the key lives on the server only. Clone consent: the owner relayed the sister's consent; ask her to confirm in Telegram, then record date/wording here.
+
+## Voice-or-text rule (ai/voiceReply.ts), switch `voiceReplyEnabled` OFF by default
+Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 after the client's own voice note). Always text: links, any numbers/prices/money words, card/requisites, multi-line, long. Never two voice replies in a row (previous OUT message starts with the microphone mark). Any synthesis error (cap, network) falls back to text. Needs ElevenLabs key + `voiceCloneEnabled=true` too.

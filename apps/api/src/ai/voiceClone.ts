@@ -21,7 +21,10 @@ import { toOpusOgg } from "./audioConvert.js";
 export const MAX_VOICE_TEXT = 700;
 
 export class VoiceCloneError extends Error {
-  constructor(message: string, readonly status = 400) {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
     super(message);
   }
 }
@@ -78,7 +81,7 @@ async function chargeOrRefuse(chars: number, now = new Date()): Promise<void> {
   if (costAfter > cap) {
     await notifyOwnerDirect(
       `Озвучка остановлена: потолок $${cap} в месяц достигнут (потрачено ~$${((spent / 1000) * price).toFixed(2)}). Поднять можно в настройках (voiceMonthlyCapUsd).`,
-      { dedupeKey: `voice-cap-${monthKey(now)}`, cooldownMs: 24 * 3600_000 }
+      { dedupeKey: `voice-cap-${monthKey(now)}`, cooldownMs: 24 * 3600_000 },
     );
     throw new VoiceCloneError("Месячный потолок трат на озвучку достигнут", 429);
   }
@@ -99,13 +102,16 @@ export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
   const text = rawText.trim();
   if (!text) throw new VoiceCloneError("Пустой текст");
   if (text.length > MAX_VOICE_TEXT) throw new VoiceCloneError(`Слишком длинно: максимум ${MAX_VOICE_TEXT} знаков`);
-  if (!voiceConfigured()) throw new VoiceCloneError("Голос Ширин не настроен: нет ключа ElevenLabs или номера голоса", 503);
-  if ((await getSetting("voiceCloneEnabled")) !== "true") throw new VoiceCloneError("Озвучка выключена в настройках", 403);
+  if (!voiceConfigured())
+    throw new VoiceCloneError("Голос Ширин не настроен: нет ключа ElevenLabs или номера голоса", 503);
+  if ((await getSetting("voiceCloneEnabled")) !== "true")
+    throw new VoiceCloneError("Озвучка выключена в настройках", 403);
   if (!env.publicBaseUrl) throw new VoiceCloneError("Не задан PUBLIC_BASE_URL", 500);
 
   const key = voiceCacheKey(text);
   for (const ext of ["ogg", "mp3"]) {
-    if (fs.existsSync(path.join(MEDIA_DIR, `tts-${key}.${ext}`))) return { url: `${env.publicBaseUrl}/media/tts-${key}.${ext}`, cached: true };
+    if (fs.existsSync(path.join(MEDIA_DIR, `tts-${key}.${ext}`)))
+      return { url: `${env.publicBaseUrl}/media/tts-${key}.${ext}`, cached: true };
   }
 
   await chargeOrRefuse(text.length);
@@ -121,8 +127,10 @@ export async function synthesizeSpeech(rawText: string): Promise<Buffer> {
   const text = rawText.trim();
   if (!text) throw new VoiceCloneError("Пустой текст");
   if (text.length > MAX_VOICE_TEXT) throw new VoiceCloneError(`Слишком длинно: максимум ${MAX_VOICE_TEXT} знаков`);
-  if (!voiceConfigured()) throw new VoiceCloneError("Голос Ширин не настроен: нет ключа ElevenLabs или номера голоса", 503);
-  if ((await getSetting("voiceCloneEnabled")) !== "true") throw new VoiceCloneError("Озвучка выключена в настройках", 403);
+  if (!voiceConfigured())
+    throw new VoiceCloneError("Голос Ширин не настроен: нет ключа ElevenLabs или номера голоса", 503);
+  if ((await getSetting("voiceCloneEnabled")) !== "true")
+    throw new VoiceCloneError("Озвучка выключена в настройках", 403);
 
   const res = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(env.elevenLabsVoiceId)}?output_format=mp3_44100_128`,
@@ -135,14 +143,15 @@ export async function synthesizeSpeech(rawText: string): Promise<Buffer> {
         voice_settings: VOICE_SETTINGS,
       }),
       signal: AbortSignal.timeout(60_000),
-    }
+    },
   );
   if (!res.ok) {
     // Тело ответа не пишем в ошибку целиком: там может быть эхо запроса.
     throw new VoiceCloneError(`ElevenLabs ответил ${res.status}`, 502);
   }
   const audio = Buffer.from(await res.arrayBuffer());
-  if (audio.length < 1000 || audio.length > 8 * 1024 * 1024) throw new VoiceCloneError("ElevenLabs вернул неожиданный файл", 502);
+  if (audio.length < 1000 || audio.length > 8 * 1024 * 1024)
+    throw new VoiceCloneError("ElevenLabs вернул неожиданный файл", 502);
   logInfo("voiceClone", `озвучено ${text.length} знаков, файл ${audio.length} байт`);
   return audio;
 }
