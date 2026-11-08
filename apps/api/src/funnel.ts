@@ -1,6 +1,7 @@
 import { prisma, logError, recordOutgoingMessage, getSetting } from "./db.js";
 import { sendPrivateReply, replyToComment, deleteComment, metaChannelOf, mediaPermalink, type QuickButton, type Channel, type MetaChannel } from "./instagram.js";
 import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
+import { humanizeForContact } from "./messaging/humanize.js";
 import { isBotFrozen, withMessagingPermission, withContactMessaging, contactAutomationBlocked } from "./messaging/automation.js";
 import { silenceIfFollowedByBusiness } from "./profiles.js";
 import { instagramShortcode } from "./ownMedia.js";
@@ -96,7 +97,10 @@ async function sendStep(
   privateReplyCommentId?: string
 ): Promise<void> {
   const buttons = parseStepButtons(step);
-  const text = (await renderFunnelText(step.text)).trim();
+  // Ответ на комментарий идёт мимо sendToContact, поэтому правка «по-человечески»
+  // (тире, особые буквы по стилю клиента) — здесь же, и в историю пишется то, что ушло.
+  const rendered = (await renderFunnelText(step.text)).trim();
+  const text = rendered ? await humanizeForContact(delivery.contactId, rendered) : rendered;
   let mid: string | null = null;
 
   // Шаг может быть ЧИСТЫМ вложением — фото меню или видео без подписи, как это
@@ -287,7 +291,7 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
   if (claimed.count === 0) {
     if (delivery.state === "ACTIVE") return true; // The original tap is still scheduled/running.
     const text = contact.preferredLanguage === "tg"
-      ? "Ин тугма дигар фаъол нест. Лутфан саволатонро нависед ё тугмаи паёми охиринро интихоб кунед."
+      ? "Ин тугма дигар кор намекунад. Саволатонро нависен ё тугмаи охиринро пахш кунен."
       : "Эта кнопка больше не активна. Напишите ваш вопрос или выберите кнопку в последнем сообщении.";
     const mid = await withMessagingPermission("funnel", () => sendToContact(contact, text));
     await recordOutgoingMessage(contact.id, text, mid);

@@ -10,6 +10,7 @@
  */
 
 import type { ClientLanguage } from "./clientLanguage.js";
+import { comparableBotText } from "./humanText.js";
 
 export type GuardKind =
   | "probing"
@@ -434,12 +435,12 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
   },
   asks_bot: {
     ru: "Нет, я помощница Ширин",
-    tg: "Не, ман ёрдамчии Ширин ҳастам",
+    tg: "Не, ман ёрдамчии Ширин",
     en: "No, I'm Shirin's assistant",
   },
   offtopic: {
     ru: "Это не ко мне, я только по курсам Ширин",
-    tg: "Ин мавзуи мо нест, ман танҳо оид ба курсҳои Ширин мегӯям",
+    tg: "Ин ба мо дахл надорад, ман факат дар бораи курсхои Ширин чавоб медихам",
     en: "I only help with Shirin's courses",
   },
   task_request: {
@@ -448,8 +449,8 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
     en: "Sorry, I can't help with that",
   },
   no_such_course: {
-    ru: "К сожалению нет — у нас только кондитерские курсы",
-    tg: "Мутаассифона не, мо танҳо курси кондитерӣ дорем",
+    ru: "Нет, у нас только кондитерские курсы",
+    tg: "Не, мо факат курси кондитери дорем",
     en: "Sorry, we only have pastry courses",
   },
   /**
@@ -463,21 +464,21 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
    */
   order_request: {
     ru: "К сожалению, заказы на торты и десерты мы не принимаем",
-    tg: "Мутаассифона, мо фармоиши торту ширинӣ намегирем",
-    en: "Sorry, we don't take cake or dessert orders — we only teach",
+    tg: "Бубахшед, мо торт ва ширини ба заказ намегирем",
+    en: "Sorry, we don't take cake or dessert orders, we only teach",
   },
   /**
    * Обещание, которое мы обязаны сдержать: следом уходит уведомление владельцу, и
    * бот замолкает — иначе «сейчас ответит» окажется ложью, а это хуже молчания.
    */
   wants_human: {
-    ru: "Хорошо — сейчас Ширин сама вам ответит",
-    tg: "Хуб, хозир Ширин худаш ба шумо чавоб медиханд",
-    en: "Sure — Shirin will reply to you herself shortly",
+    ru: "Хорошо, сейчас Ширин сама вам ответит",
+    tg: "Хуб, хозир Ширин худаш чавоб медиханд",
+    en: "Sure, Shirin will reply to you herself shortly",
   },
   recipe_question: {
-    ru: "По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы",
-    tg: "Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед",
+    ru: "По рецептам у нас чат в телеграм-группе, напишите туда, там отвечаем на все вопросы",
+    tg: "Саволхои рецептро дар чати группаи телеграм нависен, хамон чо чавоб медихем",
     en: "Recipe questions go to our Telegram group chat — please write there",
   },
 };
@@ -511,28 +512,64 @@ const RECIPE_FOR_GUEST: Record<ClientLanguage, string> = {
   en: "Sorry, I can't help with recipes",
 };
 
+/** Ученице с уроками на сайте — не в группу, а кнопка «Вопрос» в уроке. */
+const RECIPE_FOR_WEB_STUDENT: Record<ClientLanguage, string> = {
+  ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос», Ширин увидит, о каком рецепте речь",
+  tg: "Дарсатона дар кабинет кушоен ва «Савол»-ро пахш кунен, Ширин мебинад, ки дар бораи кадом рецепт",
+  en: "Open your lesson and choose Question so Shirin can see which recipe you mean",
+};
+
 /**
  * @param isStudent человек оплатил курс — только ему можно звать в закрытый чат.
  */
 export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStudent = false, deliveryMode: "web" | "telegram" | "both" = "telegram"): string {
   if (kind === "recipe_question" && !isStudent) return RECIPE_FOR_GUEST[language];
-  if (kind === "recipe_question" && deliveryMode !== "telegram") return {
-    ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
-    tg: "Дарси худро дар кабинети шахсӣ кушоед ва «Савол»-ро пахш кунед — Ширин мебинад, ки савол дар бораи кадом дастур аст",
-    en: "Open your lesson and choose Question so Shirin can see which recipe you mean",
-  }[language];
+  if (kind === "recipe_question" && deliveryMode !== "telegram") return RECIPE_FOR_WEB_STUDENT[language];
   return REPLIES[kind][language];
 }
 
+/**
+ * ПРЕЖНИЕ ТЕКСТЫ ШАБЛОНОВ (до 08.11.2026). Они уже лежат в истории переписок, и
+ * счётчик «сколько раз уже сказали» обязан их видеть, иначе после выкладки ученица
+ * снова получит ответ про рецепты, который ей уже давали. Отличия только в тире и
+ * особых буквах ловит сравнение после фильтра (comparableBotText); здесь — тексты,
+ * где поменялись сами слова.
+ */
+const LEGACY_REPLIES: Partial<Record<SpeakingKind, string[]>> = {
+  asks_bot: ["Не, ман ёрдамчии Ширин ҳастам"],
+  offtopic: ["Ин мавзуи мо нест, ман танҳо оид ба курсҳои Ширин мегӯям"],
+  no_such_course: ["К сожалению нет — у нас только кондитерские курсы", "Мутаассифона не, мо танҳо курси кондитерӣ дорем"],
+  order_request: ["Мутаассифона, мо фармоиши торту ширинӣ намегирем", "Sorry, we don't take cake or dessert orders — we only teach"],
+  wants_human: ["Хорошо — сейчас Ширин сама вам ответит", "Хуб, хозир Ширин худаш ба шумо чавоб медиханд", "Sure — Shirin will reply to you herself shortly"],
+  recipe_question: [
+    "По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы",
+    "Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед",
+    "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
+    "Дарси худро дар кабинети шахсӣ кушоед ва «Савол»-ро пахш кунед — Ширин мебинад, ки савол дар бораи кадом дастур аст",
+  ],
+};
+
+/** Все варианты шаблона вида (нынешние и прежние) в виде для сравнения. */
+function templatesOf(kind: SpeakingKind): string[] {
+  const own = [...Object.values(REPLIES[kind]), ...(LEGACY_REPLIES[kind] ?? [])];
+  // Гостевой и «сайтовый» варианты ответа про рецепты — тоже наш шаблон: без них счётчик
+  // «сколько раз уже сказали» не увидит их, и бот повторит одно и то же.
+  if (kind === "recipe_question") own.push(...Object.values(RECIPE_FOR_GUEST), ...Object.values(RECIPE_FOR_WEB_STUDENT));
+  return own;
+}
+
+const COMPARABLE_TEMPLATES = new Map<SpeakingKind, Set<string>>(
+  (Object.keys(REPLIES) as SpeakingKind[]).map((k) => [k, new Set(templatesOf(k).map(comparableBotText))]),
+);
+
 /** Наш ли это шаблонный ответ — считаем по самой переписке, без отдельного
- *  счётчика в базе. С `kind` — только шаблон этого вида. */
+ *  счётчика в базе. С `kind` — только шаблон этого вида. Сравнение после фильтра
+ *  отправки: в истории лежит то, что увидел клиент (без тире, буквы по его стилю). */
 export function isGuardReply(text: string, kind?: SpeakingKind): boolean {
-  const trimmed = text.trim();
-  const groups = kind ? [REPLIES[kind]] : Object.values(REPLIES);
-  // Гостевой вариант ответа про рецепты — тоже наш шаблон: без него счётчик
-  // «сколько раз уже сказали» не увидит его и бот повторит одно и то же.
-  if (kind === undefined || kind === "recipe_question") groups.push(RECIPE_FOR_GUEST);
-  return groups.some((byLang) => Object.values(byLang).some((r) => r === trimmed));
+  const value = comparableBotText(text);
+  if (!value) return false;
+  const kinds = kind ? [kind] : [...COMPARABLE_TEMPLATES.keys()];
+  return kinds.some((k) => COMPARABLE_TEMPLATES.get(k)?.has(value));
 }
 
 /**

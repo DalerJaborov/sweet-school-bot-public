@@ -101,7 +101,9 @@ describe("maybeRestoreAccess: код из ссылки", () => {
     await maybeRestoreAccess(writer, `Ассалому алейкум! Пайванди дарсҳои ман кушода намешавад. Рамзи ман: ${CODE}`);
     const text = String(sendText.mock.calls[0][1]);
     expect(text).toContain("Ширин");
-    expect(text).toMatch(/[ӯқҳғӣ]/);
+    // Таджикский разговорный, особые буквы по стилю клиента (клиент пишет без них).
+    expect(text).toMatch(/Фахмидам|дарсхо/);
+    expect(text).not.toMatch(/[—–]/);
     expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 

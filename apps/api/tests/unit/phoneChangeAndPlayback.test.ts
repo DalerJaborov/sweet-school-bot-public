@@ -236,7 +236,7 @@ describe("смена телефона через бота", () => {
     const tg = { ...contact, preferredLanguage: "tg" } as unknown as Contact;
     db.model("contact").findUnique.mockResolvedValue(tg);
     await handlePhoneChange(tg, "телефонамро иваз кардам", "tg");
-    expect(String(sendText.mock.calls[0][1])).toContain("Дастрасиро ба телефони нав гузарондам");
+    expect(String(sendText.mock.calls[0][1])).toContain("Дастрасиро ба телефони нав гузарондам. Ана ссылкаи нав");
   });
 });
 

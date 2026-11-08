@@ -107,8 +107,8 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
     expect(s.warnings.join(" ")).toMatch(/дата уточняется/);
     expect(s.preview.course50).toEqual({ ru: "Арт-десерты — 50 сомони", tg: "Арт-десертҳо — 50 сомонӣ" });
     expect(s.preview.bundle.ru).toBe("оба курса вместе — 100 сомони");
-    expect(s.preview.offline.ru).toContain("Дата следующего набора уточняется");
-    expect(s.preview.offline.tg).toContain("аниқ мешавад");
+    expect(s.preview.offline.ru).toContain("Дата следующего курса пока уточняется");
+    expect(s.preview.offline.tg).toContain("хануз маълум нест");
     expect(s.preview.offline.source).toBe("fields");
   });
 
@@ -141,10 +141,10 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
     // Подхват ботом — те же функции, что работают в бою, без ожидания кэша.
     expect((await getSalesTexts()).priceLineRu).toContain("Арт-десерты — 55 сомони");
     const card = await offlineCourseCard("ru");
-    expect(card).toContain("Начало: 1 декабря");
-    expect(card).toContain("Каждый день с 10:00 до 16:30");
+    expect(card).toContain("Следующий курс начинается 1 декабря");
+    expect(card).toContain("каждый день с 10:00 до 16:30");
     expect(card).toContain("В группе всего 8 мест");
-    expect(await offlineCourseCard("tg")).toContain("Оғоз: 1 декабр");
+    expect(await offlineCourseCard("tg")).toContain("Курси ояндамон 1 декабр сар мешавад");
     expect(await courseDateLabel("ru")).toBe("1 декабря");
     expect(await offlineFactsForModel()).toContain("начало 1 декабря");
     expect(await renderFunnelText("Старт {дата}, в {время}")).toBe("Старт 1 декабря, в 10:00–16:30");
