@@ -29,6 +29,11 @@ export const SETTING_KEYS = [
   // (funnel.ts: комментарии, директ-триггеры, разносчик отложенных шагов) и
   // ответ на комментарии (aiCommentRepliesEnabled выше) НЕ гасятся этим флагом.
   "botFrozen",
+  // «Офлайн: передано Ширин» (владелец 08.11.2026, ai/offlineHandoff.ts): после
+  // карточки офлайн-курса бот с этим человеком молчит, пока тот не напишет про
+  // онлайн. По умолчанию ВКЛЮЧЕНО; "false" — прежний порядок (консультант
+  // продолжает отвечать и просит имя и номер).
+  "offlineHandoffEnabled",
   "aiPrompt",
   "aiModel",
   // Голосовая модель читалась кодом (ai.ts), но в этом списке её не было — то есть
@@ -110,6 +115,8 @@ export const SETTING_KEYS = [
   "priceCourse50",
   "priceCourse70",
   "priceBundle",
+  "receiptToleranceDown",
+  "receiptToleranceUp",
   // Реквизиты, условие сертификата, язык уроков, «что после оплаты» — RU и TG.
   // Бот (правила 4, 17–21 в ai/prompts.ts) читает их на каждом ходе через
   // services/salesTextsService.ts; пусто — сегодняшний текст по умолчанию.
@@ -235,6 +242,8 @@ export const OFFER_SETTING_KEYS = [
   "priceCourse50",
   "priceCourse70",
   "priceBundle",
+  "receiptToleranceDown",
+  "receiptToleranceUp",
   "offlineCoursePrice",
   "offlineCourseStartDate",
   "offlineCourseHours",

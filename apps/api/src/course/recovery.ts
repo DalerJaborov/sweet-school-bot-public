@@ -3,6 +3,7 @@ import { deviceLimitFor, deviceCountFor, releaseDevice, ownerOfExpiredLink } fro
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
+import { ACCEPTED_WHERE } from "../receiptAccepted.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact, Purchase } from "@prisma/client";
@@ -63,26 +64,26 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
     foreign:
       "Поняла вас. Это другой чат, поэтому ссылку здесь сама выдать не могу. Передала Ширин: " +
       "она проверит покупку и откроет доступ.",
-    sent: "Вот новая ссылка на ваши уроки 🌸 Откройте её на том телефоне, где будете смотреть:\n",
+    sent: "Вот новая ссылка на ваши уроки. Откройте её на том телефоне, где будете смотреть:\n",
     pending:
-      "Вижу вашу покупку 🌸 Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
+      "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
       "она откроет доступ вручную, это недолго.",
-    revoked: "По вашей оплате есть вопрос, доступ пока закрыт 🙏 Ширин посмотрит и напишет вам сама.",
+    revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Ширин посмотрит и напишет вам сама.",
   },
   tg: {
     foreign:
       "Фаҳмидам. Ин чати дигар аст, барои ҳамин линкро худам дода наметавонам. Ба Ширин расондам: " +
       "ӯ харидро месанҷад ва дастрасиро мекушояд.",
-    sent: "Мана линки нави дарсҳоятон 🌸 Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
+    sent: "Мана линки нави дарсҳоятон. Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
     pending:
-      "Хариди шуморо дидам 🌸 Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
+      "Хариди шуморо дидам. Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
       "ӯ дастрасиро худаш мекушояд, дер намешавад.",
-    revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида 🙏 Ширин месанҷад ва худаш менависад.",
+    revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида. Ширин месанҷад ва худаш менависад.",
   },
   en: {
     foreign:
       "This is a different chat, so I cannot issue the link here. I passed this to Shirin, she will check the purchase and open access.",
-    sent: "Here is a fresh link to your lessons 🌸 Open it on the phone you will watch on:\n",
+    sent: "Here is a fresh link to your lessons. Open it on the phone you will watch on:\n",
     pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
     revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
   },
@@ -348,7 +349,7 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
 /** Есть ли в данных след реальной оплаты. */
 async function hasPaymentProof(contactId: string): Promise<boolean> {
   const approved = await prisma.receiptCheck.count({
-    where: { contactId, OR: [{ ownerDecision: "APPROVED" }, { linkSent: true }] },
+    where: { contactId, OR: ACCEPTED_WHERE },
   });
   if (approved > 0) return true;
   // Владелец мог выдать курс руками, без чека — это тоже законный путь.
@@ -425,7 +426,7 @@ async function tellOwner(
   // суточное глушение не действует. От двойного нажатия защищает relinkBySiteToken.
   if (opts.always && botToken && chatId) {
     const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
-    await sendTelegramMessage(botToken, chatId, `🔑 ${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`)
+    await sendTelegramMessage(botToken, chatId, `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`)
       .catch((err) => logError("recovery:tellOwner", err));
     return;
   }
@@ -436,8 +437,7 @@ async function tellOwner(
   await sendTelegramMessage(
     botToken,
     chatId,
-    `🔑 ${who}: ${what}
-Курсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
+    `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
   ).catch((err) => logError("recovery:tellOwner", err));
 }
 
@@ -476,7 +476,7 @@ async function handleForeignCode(contact: Contact, owner: Contact, text: string)
         : "покупка действует; если это она, выдайте доступ командой /ссылка на ник покупателя";
   await sendOwnerAlert(
     `recovery-code:${owner.id}:${contact.id}`,
-    `🔑 Просят ссылку по коду из ссылки, но пишут с ДРУГОГО чата.\nПокупатель: ${buyer}\nКурсы: ${courses || "нет"}\n` +
+    `Просят ссылку по коду из ссылки, но пишут с ДРУГОГО чата.\nПокупатель: ${buyer}\nКурсы: ${courses || "нет"}\n` +
       `Пишет: ${writer}\n${verdict}\nБот ссылку сам НЕ выдавал.`,
   );
   logInfo("course:recovery", `код другого контакта: пишет ${contact.id}, покупатель ${owner.id}`);

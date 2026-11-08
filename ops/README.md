@@ -59,6 +59,26 @@ curl -s -o /dev/null -w "%{http_code}
 
 Если любой из адресов дал 502 — сразу `docker compose restart web`.
 
+### WhatsApp: контейнер `whatsapp` не трогаем без причины
+
+Сессия WhatsApp лежит в постоянном томе `sweet-school-bot_whatsapp-data` (в контейнере `/data`:
+`/data/auth/session-school` — вход, `/data/state/state.json` — состояние). Обычное
+`docker compose up -d` её не стирает, но привязка по коду/QR потом нужна заново, если вход слетел.
+
+- Менялись только `api` / `web` — выкатывать так, **без** `whatsapp`:
+  `docker compose build api && docker compose up -d api && docker compose up -d --force-recreate web`
+  (не `docker compose up -d` без имён и не `--force-recreate` для всех).
+- Пересоздавать `whatsapp` только если менялось `services/whatsapp-bridge`. После этого проверить
+  статус моста в панели: «WhatsApp подключён», state=ready, enabled=true.
+- Застряли замки Chromium (`SingletonLock` и т.п.): мост сам удаляет `Singleton*` при каждом
+  запуске клиента. Руками, если нужно: `docker compose exec whatsapp sh -c 'rm -f /data/auth/session-school/Singleton*'`,
+  затем в панели «Настройки → WhatsApp → Подключить» (или POST `/start` на мост).
+- **Никогда** не переименовывать и не удалять `/data/auth` без отдельного «да» владельца: это и есть вход
+  в WhatsApp, потеря = повторная привязка телефоном. Перед любой правкой тома — копия:
+  `docker run --rm -v sweet-school-bot_whatsapp-data:/d -v /backups/school:/b alpine tar czf /b/whatsapp-data-$(date +%F-%H%M).tgz -C /d .`
+- Если вход всё же слетел, бот сам напишет владельцу «WhatsApp отключился, нужна повторная привязка» через
+  10 минут (и покажет строку в «Сегодня → Что-то работает не так»); не чаще раза в 6 часов.
+
 Две из трёх ошибок при выкладке 03.09.2026 не проявлялись ни в тестах, ни в
 типах — только в логе первого реального запуска.
 

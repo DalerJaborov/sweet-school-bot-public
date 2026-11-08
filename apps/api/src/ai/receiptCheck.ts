@@ -34,6 +34,8 @@ export type ReceiptVerdict = {
   tamperingSuspected: boolean;
   /** Explicit OCR match of the visible recipient account/phone; absence is not a match. */
   recipientMatches?: boolean;
+  /** Номер операции/транзакции с чека, если читается. */
+  transactionId?: string | null;
 };
 
 /** Разбор чека — единственный ход, где отказ модели стоит денег: человек уже
@@ -104,9 +106,12 @@ export function buildInstruction(
     "лёгком сомнении; при малейшей неуверенности — false. Это поле никогда не должно САМО отклонять настоящую " +
     "оплату — оно только просит человека посмотреть внимательнее. " +
     "Если дата И время перевода не видны полностью — receiptAt=null. Нельзя подставлять сегодняшнее число или полночь вместо отсутствующего времени. " +
+    "Нечитаемая или обрезанная дата — НЕ повод ставить suspicious: если перевод завершён («успешно», «выполнен», " +
+    "«отправлен», есть номер транзакции), номер получателя наш и сумма видна — это valid, а receiptAt просто null. " +
+    "Два скриншота одного перевода (подтверждение и экран проверки получателя) — нормально, оценивай каждый сам по себе. " +
     "Ответь СТРОГО JSON без пояснений вокруг: " +
     '{"kind":"valid"|"suspicious"|"not_receipt"|"pre_transfer","confidence":0-100,"amount":число или null,"currency":"TJS"|"RUB"|"USD"|"EUR"|"KZT"|"TRY"|null,' +
-    '"receiptAt":"2026-08-21T14:30:00" или null,"tamperingSuspected":true|false,"recipientMatches":true|false,"reason":"короткая причина по-русски"}'
+    '"receiptAt":"2026-08-21T14:30:00" или null,"tamperingSuspected":true|false,"recipientMatches":true|false,"transactionId":"номер операции с чека или null","reason":"короткая причина по-русски"}'
   );
 }
 
@@ -124,6 +129,7 @@ export function parseVerdict(raw: string, offsetHours: number = DEFAULT_OFFSET_H
       receiptAt: parsedDate,
       tamperingSuspected: data.tamperingSuspected === true,
       recipientMatches: data.recipientMatches === true,
+      transactionId: typeof (data as { transactionId?: unknown }).transactionId === "string" ? ((data as { transactionId: string }).transactionId.trim().slice(0, 64) || null) : null,
       reason: typeof data.reason === "string" ? data.reason.slice(0, 300) : "",
     };
   } catch {
@@ -151,7 +157,7 @@ export async function checkReceipt(imagePart: MediaPart, model: string, apiKeys:
           thinkingConfig: thinkingConfigFor(m),
           // +20 от прежних 200: одно новое булево поле в ответе, вписывается в
           // тот же бюджет с запасом — не второй вызов, просто чуть шире потолок.
-          maxOutputTokens: 220,
+          maxOutputTokens: 260,
           responseMimeType: "application/json",
         },
       }),
