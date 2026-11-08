@@ -33,6 +33,7 @@ const bridge = new Bridge({
   stateDir: process.env.SCHOOL_WHATSAPP_STATE_DIR || '/data/state',
   makeQr: qr => QRCode.toDataURL(qr, { errorCorrectionLevel: 'M', margin: 2, width: 320 }),
   mediaFromUrl,
+  testNumbers: (process.env.SCHOOL_WHATSAPP_TEST_NUMBERS || '').split(',').map(x => x.trim()).filter(Boolean),
   pacing: {}, // anti-ban defaults from bridge.cjs: random gaps, typing state, per-chat/hour/day caps
   createClient: () => new Client({
     authStrategy: new LocalAuth({ clientId: 'school', dataPath: process.env.SCHOOL_WHATSAPP_AUTH_DIR || '/data/auth' }),

@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — генератор на чистом ESM без типов; в тесте важен результат, не сигнатуры.
-import { loadContent, renderSite, localHref, md, resolveSsiFallback, usesOfferFacts } from "../../scripts/build-site-pages.mjs";
+import {
+  loadContent,
+  renderSite,
+  localHref,
+  md,
+  resolveSsiFallback,
+  usesOfferFacts,
+} from "../../scripts/build-site-pages.mjs";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -66,7 +73,7 @@ describe("Статичные страницы сайта", () => {
 
   it("картинки: фото десерта с прелоадом и AVIF, своё og:image на каждой странице и языке", () => {
     const body = files.get("site.html")!;
-    const hero = content.media.desserts['Чизкейк «Дубайский шоколад»'];
+    const hero = content.media.desserts["Чизкейк «Дубайский шоколад»"];
     expect(body).toContain(`rel="preload" as="image" href="${hero.avif || hero.src}"`);
     expect(body).toContain(`src="${hero.src}"`);
     expect(body).toContain(`width="${hero.width}" height="${hero.height}"`);
@@ -79,7 +86,7 @@ describe("Статичные страницы сайта", () => {
         .replace(/\.html$/, "")
         .replace(/^(site|index)$/, "home");
       expect(page).toContain(
-        `<meta property="og:image" content="https://shirinsweets.online/img/covers/og-${key}-${tg ? "tg" : "ru"}.jpg?v=20261108-brand" />`,
+        `<meta property="og:image" content="https://shirinsweets.online/img/covers/og-${key}-${tg ? "tg" : "ru"}.jpg?v=20261109-logo" />`,
       );
       expect(page).toContain('<meta name="twitter:card" content="summary_large_image" />');
     }
@@ -129,17 +136,35 @@ describe("Статичные страницы сайта", () => {
   });
 
   it("noindex страницы исключены из sitemap", () => {
-    const withHidden = { ...content, pages: content.pages.map((p: { slug: string }) => ({ ...p, noindex: p.slug === "faq" })) };
+    const withHidden = {
+      ...content,
+      pages: content.pages.map((p: { slug: string }) => ({ ...p, noindex: p.slug === "faq" })),
+    };
     const sitemap = renderSite(withHidden).get("public/sitemap.xml")!;
     expect(sitemap).not.toContain("/faq");
     expect((sitemap.match(/<loc>/g) ?? []).length).toBe(16);
   });
 
   it("compact pages do not preload an unused hero photograph", () => {
-    for (const slug of ["online-kurs", "faq"]) {
+    for (const slug of ["faq"]) {
       const body = files.get(`${slug}.html`)!;
       expect(body).not.toContain('rel="preload" as="image"');
     }
+  });
+
+  it("страницы курсов: видео-петля в герое, 10 фото уроков, галерея офлайна, кнопка под сеткой", () => {
+    for (const slug of ["online-kurs", "art-desserty", "kursy-konditera-dushanbe"]) {
+      const body = files.get(`${slug}.html`)!;
+      expect(body).toMatch(/<video class="hero-video"[^>]*autoplay muted loop playsinline/);
+      expect(body).toMatch(/\/img\/hero\/video-[a-z]+\.mp4/);
+      expect(body).toContain("section-cta");
+    }
+    const art = files.get("art-desserty.html")!;
+    expect((art.match(/<figure class="dessert-photo">/g) ?? []).length).toBe(10);
+    expect(art).not.toContain("dessert-name");
+    const offline = files.get("kursy-konditera-dushanbe.html")!;
+    expect(offline).toContain('id="desserty"');
+    expect((offline.match(/<figure class="dessert-photo/g) ?? []).length).toBe(21);
   });
 
   it("оплата вручную, реальная программа арт-десертов и актуальные часы", () => {
@@ -170,7 +195,8 @@ describe("Статичные страницы сайта", () => {
 describe("Факты очного курса — из панели через SSI (08.11.2026)", () => {
   const nginx = fs.readFileSync(path.resolve(__dirname, "../../nginx.conf"), "utf8");
   const ssiRoute = new RegExp(nginx.match(/location ~ (\^\/\(site\\\.html[^ ]+\$) \{\n\s+ssi on;/)![1]);
-  const route = (file: string) => (file.endsWith("index.html") || file === "site.html" ? `/${file}` : `/${file.replace(/\.html$/, "")}`);
+  const route = (file: string) =>
+    file.endsWith("index.html") || file === "site.html" ? `/${file}` : `/${file.replace(/\.html$/, "")}`;
 
   it("каждая страница с {{offline.*}} отдаётся Nginx с ssi on", () => {
     const pages = raw.filter(([, b]) => usesOfferFacts(b)).map(([f]) => f);
@@ -189,7 +215,9 @@ describe("Факты очного курса — из панели через SS
     expect(plain).toMatch(/<title>[^<]*700 сомони/);
     expect(plain).toContain("с 13:40 до 16:30");
     expect(plain).toContain("Программа: 21 десерт за 8 дней");
-    expect(resolveSsiFallback(files.get("tg/kursy-konditera-dushanbe.html")!)).toMatch(/name="description" content="[^"]*700 сомонӣ/);
+    expect(resolveSsiFallback(files.get("tg/kursy-konditera-dushanbe.html")!)).toMatch(
+      /name="description" content="[^"]*700 сомонӣ/,
+    );
   });
 });
 
@@ -201,10 +229,47 @@ describe("Адрес очного курса — одно поле панели 
       expect(body, file).toContain(`offer-fact?key=contact.street&lang=${lang}`);
       expect(body, file).toContain("offer-fact?key=contact.mapsQuery");
       const plain = resolveSsiFallback(body);
-      expect(plain, file).toContain(lang === "tg" ? "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177" : "Душанбе, ориентир Воданасос, Рудаки 177");
-      expect(plain, file).toContain(`https://maps.google.com/?q=${encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177")}`);
+      expect(plain, file).toContain(
+        lang === "tg" ? "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177" : "Душанбе, ориентир Воданасос, Рудаки 177",
+      );
+      expect(plain, file).toContain(
+        `https://maps.google.com/?q=${encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177")}`,
+      );
       const ld = plain.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1];
-      expect(JSON.stringify(JSON.parse(ld))).toMatch(/"streetAddress":"(ориентир Воданасос, Рудаки 177|назди Воданасос, кӯчаи Рӯдакӣ 177)"/);
+      expect(JSON.stringify(JSON.parse(ld))).toMatch(
+        /"streetAddress":"(ориентир Воданасос, Рудаки 177|назди Воданасос, кӯчаи Рӯдакӣ 177)"/,
+      );
+    }
+  });
+
+  it("hero crossfades 5 real dessert photos: first is LCP, the rest lazy and decorative; reduced motion stays static", () => {
+    const body = files.get("ru/index.html")!;
+    const start = body.indexOf('<div class="hero-photo hero-slides"');
+    const slot = body.slice(start, body.indexOf("</section>", start));
+    expect(start).toBeGreaterThan(0);
+    expect(slot).toContain('data-slides="5"');
+    expect(slot.split("<img ").length - 1).toBe(5);
+    expect(slot.split('fetchpriority="high"').length - 1).toBe(1);
+    expect(slot.split('loading="lazy"').length - 1).toBe(4);
+    expect(
+      slot.split('class="hero-slide-wrap"').length - 1 + slot.split('class="hero-slide-wrap" ').length - 1,
+    ).toBeGreaterThanOrEqual(0);
+    expect(slot.split('aria-hidden="true"').length - 1).toBeGreaterThanOrEqual(4);
+    const css = fs.readFileSync("src/site/site.css", "utf8");
+    const rm = css.slice(css.indexOf("prefers-reduced-motion: reduce", css.indexOf(".hero-slides")));
+    expect(rm.slice(0, 260)).toContain(".hero-slide-wrap { display: none; }");
+  });
+
+  it("online-course program shows all 21 desserts as a grid, in Russian on both languages", () => {
+    const { site } = content;
+    for (const key of ["online-kurs.html", "tg/online-kurs.html"]) {
+      const body = files.get(key)!;
+      const start = body.indexOf('<div class="dessert-all">');
+      expect(start).toBeGreaterThan(0);
+      const grid = body.slice(start, body.indexOf("</section>", start));
+      expect(grid.split("<figure ").length - 1).toBe(21);
+      expect(body).not.toContain('class="dessert-scroll"');
+      for (const d of site.desserts) expect(grid).toContain(d.ru.replace(/"/g, "&quot;").replace(/«/g, "«"));
     }
   });
 });

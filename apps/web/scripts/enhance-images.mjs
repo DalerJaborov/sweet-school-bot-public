@@ -61,6 +61,8 @@ const AVIF = { quality: 55, effort: 5 };
 /** Группы: пропорция кадра и ключ в media.json. */
 const GROUPS = {
   desserts: { aspect: [1, 1], position: sharp.strategy.attention },
+  // Кадры из 10 видеоуроков «Арт-десертов» (программа курса), плитка 1:1.
+  art: { aspect: [1, 1], position: sharp.strategy.attention },
   // Инструменты сняты у неоновой вывески: «интересная область» для attention —
   // сама вывеска, а предмет всегда внизу кадра. Поэтому кроп прижат к низу.
   tools: { aspect: [4, 3], position: "south" },
@@ -83,24 +85,85 @@ function vignette(width, height) {
   return Buffer.from(svg);
 }
 
-/** Базовая коррекция до ресайза — одна для всех выходных размеров. */
-function grade(input) {
-  return sharp(input)
-    .rotate()
-    .normalise({ lower: 1, upper: 99 })
-    .modulate({ saturation: 1.08 })
+/**
+ * Явный квадратный кроп для вертикальных кадров из видеоуроков (720×1280):
+ * доля высоты кадра, на которой лежит ЦЕНТР десерта. Так десерт всегда в центре
+ * плитки, а водяной знак генератора в нижнем углу и пустой пол в кадр не попадают.
+ * Остальные источники (уже квадратные/4:5) режутся по attention как раньше.
+ */
+const CROP_CENTER_Y = {
+  "afganskaya-pahlava": 0.46,
+  "anna-pavlova": 0.45,
+  "bananovoe-pirozhnoe": 0.7,
+  "chizkejk-tviks": 0.6,
+  ekler: 0.47,
+  "pirozhnoe-oreo": 0.55,
+  "rulet-merenga": 0.52,
+  "tort-karamelnyj": 0.56,
+  "tvorozhnyj-pirog": 0.53,
+};
+
+/** Цели единой «студийной» картинки: средняя яркость, насыщенность, белые. */
+const TARGET_LUMA = 0.5;
+const TARGET_SAT = 0.4;
+const WARM = [1.03, 1.0, 0.95];
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Замер кадра по маленькой копии: яркость, насыщенность, цвет «белых» (тарелка, доска). */
+async function measure(buf) {
+  const { data } = await sharp(buf).resize(96, 96, { fit: "inside" }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  let luma = 0, sat = 0, n = 0, hr = 0, hg = 0, hb = 0, hn = 0;
+  for (let i = 0; i < data.length; i += 3) {
+    const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    luma += y; sat += mx === 0 ? 0 : (mx - mn) / mx; n++;
+    if (y > 0.72 && mx - mn < 0.18) { hr += r; hg += g; hb += b; hn++; }
+  }
+  return { luma: luma / n, sat: sat / n, white: hn > n * 0.03 ? [hr / hn, hg / hn, hb / hn] : null };
+}
+
+/**
+ * Базовая коррекция до ресайза — одна для всех выходных размеров.
+ * Адаптивная: каждый кадр подтягивается к общей цели, поэтому все 21 десерт
+ * выглядят однородно, а тёмный/зелёный/блёклый кадр не требует ручной подгонки.
+ *   1. rotate + кроп (см. CROP_CENTER_Y);
+ *   2. баланс белого по тарелке/доске (на 70 %), затем тёплый сдвиг бренда;
+ *   3. авто-уровни 1–99 %;
+ *   4. гамма по яркости кадра (светлее тёмные, не выжигая светлые);
+ *   5. насыщенность к цели 0.40, с пределами 0.95–1.28 (фисташковый уже яркий);
+ *   (CLAHE пробовал — на сжатых видеокадрах даёт грязные артефакты, не использовать.)
+ */
+async function grade(srcFile, name) {
+  const { data: rotated, info } = await sharp(srcFile).rotate().toBuffer({ resolveWithObject: true });
+  let buf = rotated;
+  const cy = CROP_CENTER_Y[name];
+  if (cy !== undefined && info.height > info.width) {
+    const top = clamp(Math.round(cy * info.height - info.width / 2), 0, info.height - info.width);
+    buf = await sharp(rotated).extract({ left: 0, top, width: info.width, height: info.width }).toBuffer();
+  }
+  const m = await measure(buf);
+  const wb = m.white
+    ? [clamp(m.white[1] / m.white[0], 0.9, 1.12), 1, clamp(m.white[1] / m.white[2], 0.9, 1.12)].map((g) => 1 + (g - 1) * 0.7)
+    : [1, 1, 1];
+  const gamma = clamp(Math.log(TARGET_LUMA) / Math.log(clamp(m.luma, 0.2, 0.8)), 1.0, 1.6);
+  const saturation = clamp(TARGET_SAT / Math.max(m.sat, 0.05), 0.95, 1.28);
+  return sharp(buf)
     .recomb([
-      [1.03, 0, 0],
-      [0, 1.0, 0],
-      [0, 0, 0.96],
-    ]);
+      [wb[0] * WARM[0], 0, 0],
+      [0, wb[1] * WARM[1], 0],
+      [0, 0, wb[2] * WARM[2]],
+    ])
+    .normalise({ lower: 1, upper: 99 })
+    .gamma(gamma)
+    .modulate({ saturation });
 }
 
 async function renderVariant(graded, width, height, position) {
   const base = await graded
     .clone()
     .resize(width, height, { fit: "cover", position, kernel: "lanczos3" })
-    .sharpen({ sigma: 0.8, m1: 0.6, m2: 0.4 })
+    .sharpen({ sigma: 1.0, m1: 0.8, m2: 0.5 })
     .toBuffer();
   return sharp(base).composite([{ input: vignette(width, height), blend: "over" }]);
 }
@@ -135,7 +198,7 @@ async function processOne(group, srcFile) {
   if (isFresh(srcFile, outs)) return { name, width: fullW, height: fullH, changed: false };
 
   fs.mkdirSync(path.dirname(outs.full.webp), { recursive: true });
-  const graded = grade(srcFile);
+  const graded = await grade(srcFile, name);
   const full = await renderVariant(graded, fullW, fullH, position);
   const sm = await renderVariant(graded, smW, smH, position);
   await Promise.all([
@@ -173,6 +236,7 @@ function updateMediaJson(results) {
     }
   };
   for (const entry of Object.values(media.desserts ?? {})) patch(entry);
+  for (const entry of Object.values(media.artLessons ?? {})) patch(entry);
   for (const entry of media.tools ?? []) patch(entry);
   for (const entry of Object.values(media.heroPages ?? {})) patch(entry);
   if (touched > 0) fs.writeFileSync(MEDIA_JSON, `${JSON.stringify(media, null, 2)}\n`, "utf8");

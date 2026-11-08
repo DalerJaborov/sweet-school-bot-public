@@ -1,7 +1,7 @@
 {
   "origin": "https://shirinsweets.online",
   "brand": "Shirin Sweets",
-  "logo": "/icons/icon-512.png",
+  "logo": "/icons/icon-512.png?v=20261109-logo",
   "ogImage": "/img/covers/og-home-ru.jpg",
   "themeColor": "#c9376b",
   "contacts": {
@@ -255,7 +255,7 @@
       "footerRights": "Shirin Sweets, Душанбе. Ҳамаи ҳуқуқҳо ҳифз шудаанд.",
       "footerPanel": "Вуруд барои Ширин",
       "notFoundTitle": "Чунин саҳифа нест",
-      "notFoundText": "Шояд пайванд кӯҳна шудааст. Интихоб кунед, ба куҷо равед:",
+      "notFoundText": "Шояд ссылка кӯҳна шудааст. Интихоб кунед, ба куҷо равед:",
       "days": "рӯз",
       "hours": "дарсҳо",
       "dessertsHome": "намуди ширинӣ — ҳамаашро мебаред"

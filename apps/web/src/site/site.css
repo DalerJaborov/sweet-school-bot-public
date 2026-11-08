@@ -2028,3 +2028,79 @@ section[id] { scroll-margin-top: 96px; }
 @media (min-width: 900px) { .lesson-samples { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
 
 .about-figure::before { display: none; }
+
+/* Brand logo (traced from the owner's original): flat-colored lettering via mask, cream on dark theme. */
+.logo-word {
+  display: block;
+  height: 50px;
+  aspect-ratio: 276 / 111;
+  background: #9c0004;
+  -webkit-mask: url("/img/brand/shirin-wordmark.svg") center / contain no-repeat;
+  mask: url("/img/brand/shirin-wordmark.svg") center / contain no-repeat;
+}
+:root[data-theme="dark"] .logo-word { background: #f4debf; }
+.footer-logo { display: block; width: 112px; height: 112px; border-radius: 20px; margin-bottom: 12px; }
+@media (max-width: 420px) {
+  .logo-word { height: 38px; }
+}
+
+/* Hero slideshow: fast crossfade of real dessert photos, pure CSS. Slot ratio is fixed, so no layout shift. */
+.hero-slides { --period: 2.8s; overflow: hidden; border-radius: var(--r-4); }
+.hero-slides > picture, .hero-slides > img { animation: hero-first calc(var(--period) * var(--slides)) infinite; }
+.hero-slide-wrap { position: absolute; inset: 0; z-index: 2; opacity: 0; animation: hero-next calc(var(--period) * var(--slides)) infinite; animation-delay: calc(var(--period) * var(--i)); animation-fill-mode: backwards; }
+.hero-slide-wrap picture, .hero-slide-wrap img { display: block; width: 100%; height: 100%; object-fit: cover; }
+@keyframes hero-first { 0%, 18% { opacity: 1; } 24%, 94% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes hero-next { 0% { opacity: 0; } 6%, 18% { opacity: 1; } 24%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .hero-slides > picture, .hero-slides > img { animation: none; }
+  .hero-slide-wrap { display: none; }
+}
+
+/* Online-course program: all 21 desserts at once as a grid (no horizontal scroll). */
+.dessert-all { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.dessert-all .dessert-photo { width: auto; max-width: none; }
+.dessert-all .dessert-photo figcaption { font-size: 12px; line-height: 1.25; overflow-wrap: anywhere; }
+.dessert-name .ico { flex-direction: column; gap: 8px; padding: 8px; text-align: center; font-size: 13px; }
+.dessert-name .ico b { font-size: 12.5px; line-height: 1.25; font-weight: 600; overflow-wrap: break-word; }
+.dessert-name .ico svg { width: 22px; height: 22px; color: var(--c-accent); }
+@media (min-width: 720px) {
+  .dessert-all { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+  .dessert-all .dessert-photo figcaption { font-size: 13px; }
+  .dessert-name .ico b { font-size: 14px; }
+}
+
+/* Видео-петля в слоте героя: поверх постера, прозрачна до первого кадра (класс ставит main.tsx). */
+.hero-photo.has-video { overflow: hidden; border-radius: var(--r-4); }
+.hero-video {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--r-4);
+  opacity: 0;
+  transition: opacity 0.7s ease;
+  pointer-events: none;
+}
+.hero-video.is-playing { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .hero-video { display: none; } }
+
+/* Кнопка покупки под сеткой десертов */
+.section-cta { margin-top: 28px; justify-content: center; }
+.cta-band .trust-row { justify-content: center; color: var(--c-muted); font-weight: 500; }
+
+/* Мало плиток (10 уроков «Арт-десертов»): крупнее, по 2 на телефоне и по 5 на ПК */
+.dessert-all.is-big { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.dessert-all.is-big .dessert-photo figcaption { font-size: 14px; font-weight: 600; }
+@media (min-width: 720px) {
+  .dessert-all.is-big { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 18px; }
+  .dessert-all.is-big .dessert-photo figcaption { font-size: 14px; }
+}
+
+/* Телефон: навигация по странице — одна строка с прокруткой, чтобы герой с видео был на первом экране */
+@media (max-width: 719px) {
+  .page-contents { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-top: 8px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  .page-contents::-webkit-scrollbar { display: none; }
+  .page-contents a { flex: 0 0 auto; min-height: 44px; white-space: nowrap; }
+}
