@@ -38,29 +38,27 @@ export async function voiceEnabled(): Promise<boolean> {
 }
 
 /** Версия пост-обработки звука: меняем при смене фильтра, чтобы кеш не отдавал старое звучание. */
-const VOICE_POST = "clean-v1";
-// Настройки, которые владелец выбрал на слух 08.11.2026 (eleven_v3 с метками эмоций, скорость 1.2).
-const VOICE_SETTINGS = { stability: 0.35, similarity_boost: 0.95, style: 0.5, speed: 1.2, use_speaker_boost: true };
+const VOICE_POST = "v3-final-1";
+// Настройки выбраны владельцем на слух 08.11.2026: 6 из 6 проб были неотличимы от живой речи (eleven_v3, одна метка в начале).
+const VOICE_SETTINGS = { stability: 0.5, similarity_boost: 0.95, style: 0.4, speed: 1.2, use_speaker_boost: true };
+/** Закреплённая случайность: одинаковый текст звучит одинаково. */
+const VOICE_SEED = 4242;
 
 /**
- * Метки эмоций eleven_v3 (на других моделях их прочитали бы вслух, поэтому только для v3).
- * Как у живого человека: радость, любопытство, вздох, усмешка, тепло. Грустных меток нет (решение владельца).
- * Метка выбирается по тексту куска (одинаковый текст = одинаковая метка, кеш не ломается).
+ * Метка эмоции eleven_v3 (на других моделях её прочитали бы вслух, поэтому только для v3).
+ * Ровно ОДНА метка и только в начале ПЕРВОГО куска: проба с тремя метками и меткой посреди фразы
+ * звучала чужим голосом (владелец 08.11.2026). Только весёлые/любопытные: грустных, вдохов и усмешек нет.
+ * Метка выбирается по тексту (одинаковый текст = одинаковая метка, кеш не ломается).
  */
 const OPEN_TAGS = ["[happy]", "[curious]"];
-const MID_TAGS = ["[exhales]", "[chuckles]", "[curious]", "[excited]"];
-const CLOSE_TAGS = ["[warmly]", "[happy]"];
 function pick(list: string[], text: string): string {
   let h = 0;
   for (const ch of text) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
   return list[h % list.length];
 }
-export function decorateForV3(chunk: string, index: number, total: number, model = env.elevenLabsModel): string {
-  if (model !== "eleven_v3") return chunk;
-  if (total === 1) return `${pick(OPEN_TAGS, chunk)} ${chunk}`;
-  if (index === 0) return `${pick(OPEN_TAGS, chunk)} ${chunk}`;
-  if (index === total - 1) return `${pick(CLOSE_TAGS, chunk)} ${chunk}`;
-  return `${pick(MID_TAGS, chunk)} ${chunk}`;
+export function decorateForV3(chunk: string, index: number, _total: number, model = env.elevenLabsModel): string {
+  if (model !== "eleven_v3" || index !== 0) return chunk;
+  return `${pick(OPEN_TAGS, chunk)} ${chunk}`;
 }
 
 const MEDIA_DIR = "/data/uploads";
@@ -214,6 +212,7 @@ export async function synthesizeSpeech(rawText: string): Promise<Buffer> {
       body: JSON.stringify({
         text,
         model_id: env.elevenLabsModel,
+        seed: VOICE_SEED,
         voice_settings: VOICE_SETTINGS,
       }),
       signal: AbortSignal.timeout(60_000),

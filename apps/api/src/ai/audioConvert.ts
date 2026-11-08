@@ -7,6 +7,9 @@ import { spawn } from "node:child_process";
  * Перекодируем через ffmpeg (он уже стоит на сервере для видео уроков); если ffmpeg
  * недоступен или упал — возвращаем null, и вызывающий оставляет исходный файл.
  */
+/** Только темп 1.30 (1.2 из ElevenLabs x 1.0833) и выравнивание громкости. Никаких шумов и фильтров (решение владельца). */
+export const VOICE_FILTER = "atempo=1.0833,loudnorm=I=-16:TP=-1.5:LRA=9";
+
 export function toOpusOgg(input: Buffer, timeoutMs = 30_000): Promise<Buffer | null> {
   return new Promise((resolve) => {
     let done = false;
@@ -16,7 +19,7 @@ export function toOpusOgg(input: Buffer, timeoutMs = 30_000): Promise<Buffer | n
       resolve(value);
     };
     try {
-      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1"], {
+      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-af", VOICE_FILTER, "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1"], {
         stdio: ["pipe", "pipe", "ignore"],
       });
       const chunks: Buffer[] = [];

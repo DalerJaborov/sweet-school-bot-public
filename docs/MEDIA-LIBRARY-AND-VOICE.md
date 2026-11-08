@@ -39,3 +39,6 @@ Revocation also: purge the /media cache at the CDN (files are served `immutable`
 - Post-processing (ffmpeg, `HUMANIZE_FILTER`): high/low-pass like a phone mic, light compression, very quiet pink-noise room tone. Bump `VOICE_POST` in `voiceClone.ts` when changing it (invalidates cache).
 - Default model `eleven_v4_turbo` (set `ELEVENLABS_MODEL` to change). v4 vs v4 Turbo emotional range: NO DATA in docs - judge by ear.
 - Not done: real laugh/breath clips from Shirin's recordings spliced between chunks; v3 audio tags ([laughs]) for emotion.
+
+## Final voice settings (owner-approved by ear, 2026-11-08)
+`eleven_v3`, stability 0.5, similarity 0.95, style 0.4, speed 1.2 (+ tempo 1.0833 in ffmpeg = 1.30), fixed seed 4242, exactly one emotion tag at the start of the first chunk ([happy] or [curious]); no noise, no EQ, only loudness normalisation and re-encode to ogg/opus. Several tags / a tag mid-sentence / long dry informational text / strong denoise made it sound robotic or like another voice. Voice clone in use: instant clone made from the owner-supplied voice notes (voice id is set in the server .env, not in git).
