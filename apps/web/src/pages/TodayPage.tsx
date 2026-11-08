@@ -3,6 +3,7 @@ import { ConversationSheet } from "../components/ConversationSheet";
 import { Icons } from "../components/Brand";
 import { EmptyState, OfflineState } from "../components/EmptyState";
 import { Skeleton } from "../components/Skeleton";
+import { AccessLinkSheet } from "../components/AccessLinkSheet";
 import { money, timeAgo } from "../format";
 import { useShowEscalations } from "../panel/prefs";
 import { activeCards, type Attention, type TodayCardId, type WaitingClient } from "../panel/useAttention";
@@ -28,6 +29,7 @@ export function TodayPage(props: {
   onOpenStudent: (contactId: string) => void;
 }) {
   const { data, error, simple, onRetry, onGo, onOpenStudent } = props;
+  const [linkOpen, setLinkOpen] = useState(false);
 
   return (
     <section className="card today" aria-labelledby="today-title">
@@ -55,6 +57,13 @@ export function TodayPage(props: {
           <Cards data={data} simple={simple} onGo={onGo} onOpenStudent={onOpenStudent} />
         </>
       )}
+
+      <div className="today-tools">
+        <button type="button" className="btn ghost wide today-action" onClick={() => setLinkOpen(true)}>
+          Выдать ссылку на уроки
+        </button>
+      </div>
+      <AccessLinkSheet open={linkOpen} onClose={() => setLinkOpen(false)} />
     </section>
   );
 }

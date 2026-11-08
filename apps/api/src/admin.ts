@@ -19,6 +19,7 @@ import { textsRouter } from "./textsRoutes.js";
 import { mediaLibraryRouter } from "./mediaLibrary.js";
 import { offerRouter } from "./offerRoutes.js";
 import { waitingRouter } from "./waiting.js";
+import { ownerLinkRouter } from "./course/ownerLinkRoutes.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
 import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
@@ -1363,6 +1364,8 @@ adminRouter.use(offerRouter);
 // Главный экран «Сегодня» — очередь дел и утренние числа (today.ts).
 adminRouter.use(todayRouter);
 adminRouter.use(waitingRouter);
+// «Выдать ссылку» на экране «Сегодня» (course/ownerLink.ts).
+adminRouter.use(ownerLinkRouter);
 // Воронка, выручка по каналам, карточка ученицы (metrics.ts). Внутри
 // adminRouter, а не в index.ts, — иначе /admin/metrics/* обошёл бы проверку
 // пароля выше.

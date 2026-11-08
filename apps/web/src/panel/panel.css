@@ -67,6 +67,32 @@
   font-weight: 700;
   text-decoration: none;
 }
+.today-tools {
+  margin-top: 18px;
+}
+.access-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.access-people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.access-person {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+.access-person .hint {
+  margin: 0;
+}
 .today-people {
   list-style: none;
   margin: 0;
