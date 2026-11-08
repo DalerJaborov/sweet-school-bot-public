@@ -1,6 +1,5 @@
-import { prisma, getSetting, logError } from "./db.js";
+import { prisma, getSetting } from "./db.js";
 import { offsetMs } from "./dailyReport.js";
-import { notifyOwnerDirect } from "./systemAlerts.js";
 
 /**
  * СТОРОЖ ВХОДЯЩИХ: «БОТ ЗАМОЛЧАЛ» — САМЫЙ ТИХИЙ ИЗ ОТКАЗОВ.
@@ -17,20 +16,18 @@ import { notifyOwnerDirect } from "./systemAlerts.js";
  * в логе. Этот файл — чтобы в следующий раз заметил бот.
  *
  * Правило простое: в рабочее время (09:00–22:00 по Душанбе) входящих не было
- * дольше `inboundSilenceHours` (по умолчанию 4) — тревога владельцу и 503 в
- * /health. Ночью не считаем: тишина в три часа ночи это норма, а не поломка.
+ * дольше `inboundSilenceHours` (по умолчанию 4) — состояние «тишина» в панели
+ * и /health. Сообщение в Telegram НЕ отправляется никому (решение владельца
+ * 08.11.2026: шум). Ночью не считаем: тишина в три часа ночи это норма, а не поломка.
  */
 
 const DEFAULT_SILENCE_HOURS = 4;
-/** Повторная тревога не раньше чем через столько — чтобы не долбить каждый час. */
-const ALERT_COOLDOWN_MS = 6 * 3_600_000;
 const WORK_START_HOUR = 9;
 const WORK_END_HOUR = 22;
 
 type State = { silentHours: number; alerting: boolean };
 
 let state: State = { silentHours: 0, alerting: false };
-let lastAlertAt = 0;
 
 export function inboundSilenceState(): State {
   return state;
@@ -73,24 +70,9 @@ export async function checkInboundSilence(now = new Date()): Promise<void> {
   const threshold = await thresholdHours();
   const alerting = workingHours && silentHours >= threshold;
   state = { silentHours: Math.round(silentHours * 10) / 10, alerting };
-
-  if (!alerting) {
-    // Ожили — следующая настоящая тишина должна бить тревогу сразу.
-    lastAlertAt = 0;
-    return;
-  }
-  if (now.getTime() - lastAlertAt < ALERT_COOLDOWN_MS) return;
-  lastAlertAt = now.getTime();
-
-  await notifyOwnerDirect(
-    `🔇 Входящих сообщений нет уже ${Math.floor(silentHours)} ч в рабочее время.\n` +
-      `Обычно это значит, что Instagram перестал присылать сообщения боту: истёк маркер доступа, ` +
-      `слетела подписка в Meta или сменился секрет приложения. Проверьте «Настройки» и напишите боту с другого аккаунта.`
-  ).catch((err) => logError("inboundWatch:alert", err));
 }
 
 /** Только для тестов. */
 export function resetInboundWatch(): void {
   state = { silentHours: 0, alerting: false };
-  lastAlertAt = 0;
 }
