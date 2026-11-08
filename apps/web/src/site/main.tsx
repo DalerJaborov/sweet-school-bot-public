@@ -42,8 +42,11 @@ document
       video.remove();
       return;
     }
-    video.addEventListener("playing", () => video.classList.add("is-playing"), { once: true });
-    void video.play().catch(() => video.remove());
+    const show = () => video.classList.add("is-playing");
+    video.addEventListener("playing", show, { once: true });
+    // Видео могло начать играть до загрузки этого скрипта — событие уже прошло.
+    if (!video.paused && video.readyState >= 3) show();
+    video.play().then(show, () => video.remove());
   });
 })();
 
