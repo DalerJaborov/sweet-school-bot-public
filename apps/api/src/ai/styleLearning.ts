@@ -167,7 +167,8 @@ export async function buildStyleBlock(clientText = ""): Promise<string> {
   if ((await getSetting("styleLearningEnabled")) === "false") return "";
 
   const rawPool = await prisma.styleExample.findMany({
-    where: { enabled: true },
+    // Библиотека медиа - это файлы с ключевыми словами, а не живые ответы Ширин: в образцы манеры не годятся.
+    where: { enabled: true, source: { not: "LIBRARY" } },
     orderBy: [{ ledToSale: "desc" }, { createdAt: "desc" }],
     take: CANDIDATE_POOL,
   });
