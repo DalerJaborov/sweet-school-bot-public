@@ -28,15 +28,19 @@ export type CourseChoice = Course | "BOTH";
  */
 const REJECT_TEXT: Record<ClientLanguage, string> = {
   tg:
-    "Пардо, пардохт ҳоло тасдиқ нашуд 🙏 Лутфан як бори дигар тафтиш кунед ва чеки дурустро " +
+    "Пардо, пардохт ҳоло тасдиқ нашуд. Лутфан як бори дигар тафтиш кунед ва чеки дурустро " +
     "равон кунед (метавонед аз таърихи бонк гиред). Ё занг занед: 905 355 355",
   ru:
-    "Извините, оплату пока не удалось подтвердить 🙏 Проверьте, пожалуйста, ещё раз и пришлите " +
+    "Извините, оплату пока не удалось подтвердить. Проверьте, пожалуйста, ещё раз и пришлите " +
     "правильный чек (можно взять из истории банка). Или позвоните: 905 355 355",
   en:
-    "Sorry, we couldn't confirm the payment yet 🙏 Please double-check and send the correct receipt " +
+    "Sorry, we couldn't confirm the payment yet. Please double-check and send the correct receipt " +
     "(you can take it from your bank history). Or call: 905 355 355",
 };
+
+/** Признаки того, что клиентку уже просили прислать чек/другой скриншот. */
+const ASKED_FOR_RECEIPT =
+  /ещё один|пришлите.*чек|правильный чек|не удалось подтвердить|сурати дигар|чекро ҳамин|чеки дуруст|скриншоти чек|send.*(another|receipt)|correct receipt/iu;
 
 export type ReceiptDecisionResult =
   | { ok: true; status: "rejected"; message: string }
@@ -89,6 +93,24 @@ export async function decideReceipt(
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
+    // «Пришлите чек» не чаще одного раза за разговор: если бот уже просил другой
+    // чек (или ответил, что номер чужой) в последние сутки, повторять просьбу
+    // шаблоном не нужно - решение владельца записываем без второго сообщения.
+    const recentOut = await prisma.message.findMany({
+      where: { contactId: receipt.contactId, direction: "OUT", text: { not: null }, createdAt: { gte: new Date(Date.now() - 24 * 3_600_000) } },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { text: true },
+    });
+    const alreadyAsked = (recentOut ?? []).some((m) => ASKED_FOR_RECEIPT.test(m.text ?? ""));
+    if (alreadyAsked) {
+      if (opts.reason?.trim()) {
+        await prisma.receiptCheck
+          .update({ where: { id: receiptId }, data: { reason: `${receipt.reason} (отклонено: ${opts.reason.trim()})` } })
+          .catch((err) => logError("receiptDecision:rejectReason", err));
+      }
+      return { ok: true, status: "rejected", message: "Отклонено. Клиентке не писали: чек уже просили недавно" };
+    }
     const rejectText = REJECT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
     // Запись в историю — даже если отправка не удалась (как и раньше): владелец
     // должен видеть в переписке, что отказ был. Для сайта sendToContact сам

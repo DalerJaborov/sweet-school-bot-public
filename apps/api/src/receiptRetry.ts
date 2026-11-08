@@ -208,7 +208,7 @@ async function giveUp(id: string, contactId: string, why: string): Promise<void>
   if (recipients.length === 0) return;
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const { sendTelegramMessage } = await import("./telegram.js");
-  const text = `⚠️ Чек не удалось проверить (${why}).\nЧеловек: ${contact?.username ? "@" + contact.username : contact?.igUserId}\nПосмотрите во вкладке «Чеки».`;
+  const text = `Чек не удалось проверить (${why}).\nЧеловек: ${contact?.username ? "@" + contact.username : contact?.igUserId}\nПосмотрите во вкладке «Чеки».`;
   for (const chatId of recipients) {
     await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("receiptRetry:notify", err));
   }

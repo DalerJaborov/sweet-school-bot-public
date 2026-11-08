@@ -13,6 +13,7 @@ import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
+import { accessAlreadyHandedOut } from "../course/handedOut.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -20,8 +21,8 @@ const RECEIPT_CONFIDENCE_THRESHOLD = 50;
  *  решение владельца 25.08.2026 веч.: сначала дать клиенту шанс самому
  *  разобраться, а не сразу звать владельца на каждый нечёткий чек. */
 const ALT_SCREENSHOT_TEXT: Record<ClientLanguage, string> = {
-  ru: "Чек не совсем понятно читается 🙏 Пришлите, пожалуйста, ещё один — можно из истории банка или под другим углом, так быстрее разберёмся.",
-  tg: "Чек чандон возеҳ дида намешавад 🙏 Лутфан сурати дигар фиристед — метавонед аз таърихи бонк гиред ё аз кунҷи дигар суратгирӣ кунед.",
+  ru: "Чек не совсем понятно читается. Пришлите, пожалуйста, ещё один — можно из истории банка или под другим углом, так быстрее разберёмся.",
+  tg: "Чек чандон возеҳ дида намешавад. Лутфан сурати дигар фиристед — метавонед аз таърихи бонк гиред ё аз кунҷи дигар суратгирӣ кунед.",
   en: "Hi! The receipt isn't fully readable — could you send another one? From your bank history or a different angle works too.",
 };
 
@@ -67,9 +68,9 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
  *  открыла доступ). Раньше 70 сомони дважды открывали ВТОРОЙ курс как новую покупку. */
 const DUPLICATE_WINDOW_MS = 48 * 3_600_000;
 const DUPLICATE_PAYMENT_TEXT: Record<ClientLanguage, string> = {
-  ru: "Этот перевод мы уже приняли — ссылка на уроки выше в этом чате 🙂 Если это другая оплата, напишите, разберёмся.",
-  tg: "Ин интиқолро аллакай қабул кардем — ссылка ба дарсҳо болотар дар ҳамин чат аст 🙂 Агар ин пардохти дигар бошад, нависед, мефаҳмем.",
-  en: "We've already accepted this transfer — the lesson link is above in this chat 🙂 If this is a different payment, let us know.",
+  ru: "Этот перевод мы уже приняли — ссылка на уроки выше в этом чате. Если это другая оплата, напишите, разберёмся.",
+  tg: "Ин интиқолро аллакай қабул кардем — ссылка ба дарсҳо болотар дар ҳамин чат аст. Агар ин пардохти дигар бошад, нависед, мефаҳмем.",
+  en: "We've already accepted this transfer — the lesson link is above in this chat. If this is a different payment, let us know.",
 };
 
 /**
@@ -179,7 +180,7 @@ async function askOwner(
 
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   const caption =
-    `💳 Чек требует проверки\nОт: ${who}\n` +
+    `Чек требует проверки\nОт: ${who}\n` +
     `Сумма: ${verdict.amount != null ? `${Math.round(verdict.amount * 100) / 100} сомони` : "не разобрана"}\n` +
     (verdict.receiptAt ? `Дата на чеке: ${verdict.receiptAt.toLocaleString("ru-RU")}\n` : "") +
     `Что смущает: ${doubts.length > 0 ? doubts.join("; ") : "требуется взгляд человека"}` +
@@ -211,6 +212,26 @@ export async function handleReceiptVerdict(
   existingId?: string
 ): Promise<void> {
   if (await isBotFrozen()) return;
+  // ОТЛОЖЕННАЯ ПЕРЕПРОВЕРКА ПОСЛЕ РУЧНОЙ ВЫДАЧИ (08.11.2026): чек ждал в очереди,
+  // Ширин тем временем выдала доступ сама - молчим, тревогу закрываем. Один
+  // платёж - одна выдача.
+  if (existingId) {
+    const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
+    if (queued && (await accessAlreadyHandedOut(contact.id, queued.createdAt))) {
+      await prisma.receiptCheck.update({
+        where: { id: existingId },
+        data: {
+          kind: "duplicate",
+          confidence: verdict.confidence,
+          reason: `${verdict.reason} (доступ уже выдан вручную - автоматика не сработала)`,
+          amount: verdict.amount != null ? Math.round(verdict.amount) : null,
+          ownerDecision: "HANDLED",
+          decidedAt: new Date(),
+        },
+      });
+      return;
+    }
+  }
   const previous = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
   if (previous?.contactId === contact.id && previous.awaitingDeliveryChoice) {
     await askDeliveryChoice(contact);

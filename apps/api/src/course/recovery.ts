@@ -59,21 +59,21 @@ const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.
 
 const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string }> = {
   ru: {
-    sent: "Вот новая ссылка на ваши уроки 🌸 Откройте её на том телефоне, где будете смотреть:\n",
+    sent: "Вот новая ссылка на ваши уроки. Откройте её на том телефоне, где будете смотреть:\n",
     pending:
-      "Вижу вашу покупку 🌸 Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
+      "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
       "она откроет доступ вручную, это недолго.",
-    revoked: "По вашей оплате есть вопрос, доступ пока закрыт 🙏 Ширин посмотрит и напишет вам сама.",
+    revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Ширин посмотрит и напишет вам сама.",
   },
   tg: {
-    sent: "Мана линки нави дарсҳоятон 🌸 Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
+    sent: "Мана линки нави дарсҳоятон. Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
     pending:
-      "Хариди шуморо дидам 🌸 Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
+      "Хариди шуморо дидам. Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
       "ӯ дастрасиро худаш мекушояд, дер намешавад.",
-    revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида 🙏 Ширин месанҷад ва худаш менависад.",
+    revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида. Ширин месанҷад ва худаш менависад.",
   },
   en: {
-    sent: "Here is a fresh link to your lessons 🌸 Open it on the phone you will watch on:\n",
+    sent: "Here is a fresh link to your lessons. Open it on the phone you will watch on:\n",
     pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
     revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
   },
@@ -403,7 +403,7 @@ async function tellOwner(
   // суточное глушение не действует. От двойного нажатия защищает relinkBySiteToken.
   if (opts.always && botToken && chatId) {
     const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
-    await sendTelegramMessage(botToken, chatId, `🔑 ${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`)
+    await sendTelegramMessage(botToken, chatId, `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`)
       .catch((err) => logError("recovery:tellOwner", err));
     return;
   }
@@ -414,6 +414,6 @@ async function tellOwner(
   await sendTelegramMessage(
     botToken,
     chatId,
-    `🔑 ${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
+    `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
   ).catch((err) => logError("recovery:tellOwner", err));
 }
