@@ -1979,6 +1979,23 @@ a {
 .free-lesson input { min-height: 48px; width: 100%; border: 1px solid var(--c-line); border-radius: var(--r-1); background: var(--c-bg); color: var(--c-ink); padding: 12px; font: inherit; }
 .free-lesson img, .free-lesson video { width: 100%; border-radius: var(--r-2); height: auto; }
 .free-recipe { white-space: pre-wrap; margin-block: 16px; }
+.free-ended { margin-top: 12px; font-weight: 600; }
+.free-ended a { color: inherit; text-decoration: underline; }
+.showcase { grid-column: 1 / -1; }
+.showcase-grid { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media(min-width: 640px) { .showcase-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media(min-width: 960px) { .showcase-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.showcase-card { width: 100%; display: grid; gap: 6px; text-align: left; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.showcase-cover { position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--r-2); background: var(--c-line); }
+.showcase-cover img { width: 100%; height: 100%; object-fit: cover; display: block; filter: saturate(.85) brightness(.82); }
+.showcase-badge { position: absolute; right: 8px; top: 8px; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; }
+.showcase-card:hover .showcase-cover img, .showcase-card:focus-visible .showcase-cover img { filter: none; }
+.showcase-card:focus-visible { outline: 3px solid var(--c-ink); outline-offset: 3px; border-radius: var(--r-2); }
+.showcase-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.6); overflow-y: auto; }
+.showcase-dialog { position: relative; width: min(520px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 20px; display: grid; gap: 10px; background: var(--c-bg); color: var(--c-ink); }
+.showcase-close { position: absolute; right: 10px; top: 6px; z-index: 1; width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 28px; line-height: 1; cursor: pointer; }
+.showcase-ingredients { margin: 0; padding-left: 20px; columns: 2; column-gap: 24px; }
+@media(max-width: 420px) { .showcase-ingredients { columns: 1; } }
 @media(min-width: 860px) { .free-lesson { grid-template-columns: 1fr 1fr; padding: 32px; } }
 
 .feature-icon, .facts .ico, .dessert-grid .ico, .contact .ico { color: var(--c-muted); background: var(--c-bg); }

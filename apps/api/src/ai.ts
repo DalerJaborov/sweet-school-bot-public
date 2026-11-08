@@ -8,6 +8,7 @@ import { sendToContact } from "./messaging/send.js";
 import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, withContactMessaging } from "./messaging/automation.js";
 import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
+import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
 import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
@@ -37,6 +38,7 @@ import { buildInsightsBlock } from "./nightlyLearning.js";
 import { buildObjectionsBlock } from "./ai/objectionLibrary.js";
 import { maybeRestoreAccess } from "./course/recovery.js";
 import { maybeWarmEmoji } from "./voice.js";
+import { splitHumanLike, splitOptionsFor } from "./ai/replySplit.js";
 import { passesRelevanceGate } from "./ai/relevanceGate.js";
 import { reactInsteadOfReply } from "./ai/reactions.js";
 import type { Contact } from "@prisma/client";
@@ -332,10 +334,11 @@ export async function aiReply(
     (await alreadyOwnedBlock(contact, text)) +
     (await coldLeadNudge(contact, text)) +
     (await offlineSignupBlock(contact, text)) +
+    (await freeLessonBlock()) +
     webChannelBlock(contact) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).
-  let model = (await getSetting("aiModel")) || "gemini-3.7-flash";
+  let model = (await getSetting("aiModel")) || "gemini-3.6-flash";
   let timeout = TIMEOUT_MS;
   // Есть голосовое — переключаемся на сильную модель целиком: она же пишет и
   // ответ, иначе разбор и ответ разъедутся по смыслу.
@@ -470,14 +473,22 @@ export async function aiReply(
       }
       if (replyText) replyText = cleanAutomatedReply(replyText);
       // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
-      if (replyText && !replyText.includes("---")) replyText = maybeWarmEmoji(replyText);
+      if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
+        replyText = maybeWarmEmoji(replyText);
+      }
     }
     if (replyText) {
       try {
         // Несколько коротких сообщений вместо одного полотна — см. splitReplyParts.
         // Паузу между ними держит sendText сам (человеческий темп набора; на
         // сайте паузы нет — см. messaging/send.ts).
-        for (const part of splitReplyParts(replyText)) {
+        const splitOpts = splitOptionsFor(contact.channel, {
+          instagram: await getSetting("replySplitInstagram"),
+          whatsapp: await getSetting("replySplitWhatsapp"),
+          web: await getSetting("replySplitWeb"),
+          maxParts: await getSetting("replySplitMaxParts"),
+        });
+        for (const part of splitHumanLike(replyText, splitOpts)) {
           const mid = await sendToContact(contact, part);
           await recordOutgoingMessage(contact.id, part, mid);
         }
@@ -585,7 +596,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
   // Комментарий — это всегда текст, голосовых под роликами не бывает: модель
   // обычная, время обычное.
   const prompt = (await buildSystemPrompt()) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
-  const model = (await getSetting("aiModel")) || "gemini-3.7-flash";
+  const model = (await getSetting("aiModel")) || "gemini-3.6-flash";
 
   const startedAt = Date.now();
   const result = await generateWithFallback(

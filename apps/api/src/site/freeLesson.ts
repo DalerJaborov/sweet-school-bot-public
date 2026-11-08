@@ -173,3 +173,66 @@ freeLessonRouter.get(`${FREE_BASE}/lessons/:id/key`, guard, (_req, res) => {
   }
   res.type("application/octet-stream").send(Buffer.from(key, "base64"));
 });
+
+/**
+ * ЗАКРЫТАЯ ВИТРИНА под бесплатным уроком: остальные уроки того же курса — только то, что можно
+ * показать, не продав курс: порядок, название, обложка и ингредиенты БЕЗ количеств. Видео, ключ,
+ * манифест, граммы, текст рецепта и фото рецептов отсюда физически не уходят (в select их нет).
+ * Доступ — только по cookie бесплатного урока: нет урока → 404 (ничего не раскрываем), нет cookie → 401.
+ */
+const NUMERIC_TAIL = /[\s,:–—-]*\d[\d\s.,/–-]*\s*(г|гр|грамм\p{L}*|кг|мл|л|шт|дона|қошуқ|gr?|ml|kg)?\.?\s*$/iu;
+const AMOUNT_UNIT = /\d[\d.,/–-]*\s*(?:г|гр|грамм\p{L}*|кг|мл|л|шт|дона|қошуқ|gr?|ml|kg)(?![\p{L}\d])/giu;
+export function ingredientNames(recipeData: string | null): string[] {
+  const card = recipeData ? parseRecipeCard(recipeData) : null;
+  if (!card) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const group of card.components) {
+    for (const item of group.items) {
+      const name = item.ingredient.replace(AMOUNT_UNIT, "").replace(NUMERIC_TAIL, "").replace(/\s{2,}/g, " ").trim();
+      if (name.length < 2 || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+async function showcaseLessons(free: { id: string; moduleId: string }) {
+  const mod = await prisma.module.findUnique({ where: { id: free.moduleId }, select: { courseId: true } });
+  if (!mod) return [];
+  return prisma.lesson.findMany({
+    where: { id: { not: free.id }, deletedAt: null, status: "READY", hlsPath: { not: null }, module: { courseId: mod.courseId } },
+    orderBy: [{ module: { order: "asc" } }, { order: "asc" }],
+    select: { id: true, title: true, order: true, coverPath: true, posterPath: true, recipeData: true },
+  });
+}
+
+async function showcaseGuard(req: Request, res: Response, next: NextFunction) {
+  const lesson = await availableFreeLesson();
+  if (!lesson) { res.status(404).json({ error: "unavailable" }); return; }
+  if (!validFreeGrant(grantCookie(req), lesson.id)) { res.status(401).json({ error: "unauthorized" }); return; }
+  res.locals.freeLesson = lesson;
+  next();
+}
+freeLessonRouter.get(`${FREE_BASE}/more`, showcaseGuard, async (_req, res) => {
+  const rows = await showcaseLessons(res.locals.freeLesson);
+  res.json({
+    lessons: rows.map((r, i) => ({
+      id: r.id,
+      title: r.title,
+      order: i + 1,
+      coverUrl: (r.coverPath ?? r.posterPath) ? `${FREE_BASE}/more/${r.id}/cover` : null,
+      ingredients: ingredientNames(r.recipeData),
+    })),
+  });
+});
+freeLessonRouter.get(`${FREE_BASE}/more/:id/cover`, showcaseGuard, async (req, res) => {
+  const row = (await showcaseLessons(res.locals.freeLesson)).find((r) => r.id === req.params.id);
+  const key = row?.coverPath ?? row?.posterPath;
+  const cfg = key ? await storageConfig() : null;
+  const data = cfg && key ? await getObject(cfg, key) : null;
+  if (!data) { res.sendStatus(404); return; }
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.type(key!.endsWith(".png") ? "image/png" : key!.endsWith(".webp") ? "image/webp" : "image/jpeg").send(data);
+});
