@@ -117,3 +117,17 @@ describe("кеш и потолок трат озвучки", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("decorateForV3 — метки эмоций только для eleven_v3, разнообразные и не грустные", () => {
+  it("v3 ставит метку, не-v3 оставляет текст как есть, грустных меток нет, выбор стабилен", async () => {
+    const { decorateForV3 } = await import("../../src/ai/voiceClone.js");
+    const out = decorateForV3("Салом!", 0, 3, "eleven_v3");
+    expect(out).toMatch(/^\[(happy|curious)\] Салом!$/);
+    expect(decorateForV3("Салом!", 0, 3, "eleven_v3")).toBe(out);
+    expect(decorateForV3("Пишите.", 2, 3, "eleven_v3")).toMatch(/^\[(warmly|happy)\] /);
+    expect(decorateForV3("Середина.", 1, 3, "eleven_v3")).toMatch(/^\[(exhales|chuckles|curious|excited)\] /);
+    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo")).toBe("Салом!");
+    const all = ["a", "b", "c", "d", "e", "f"].flatMap((x) => [0, 1, 2].map((i) => decorateForV3(x, i, 3, "eleven_v3")));
+    expect(all.some((x) => /\[(sad|crying|sighs)\]/.test(x))).toBe(false);
+  });
+});

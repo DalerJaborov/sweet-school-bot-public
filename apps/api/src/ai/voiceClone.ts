@@ -39,10 +39,33 @@ export async function voiceEnabled(): Promise<boolean> {
 
 /** Версия пост-обработки звука: меняем при смене фильтра, чтобы кеш не отдавал старое звучание. */
 const VOICE_POST = "clean-v1";
-const VOICE_SETTINGS = { stability: 0.45, similarity_boost: 0.85, style: 0.3, use_speaker_boost: true };
+// Настройки, которые владелец выбрал на слух 08.11.2026 (eleven_v3 с метками эмоций, скорость 1.2).
+const VOICE_SETTINGS = { stability: 0.35, similarity_boost: 0.95, style: 0.5, speed: 1.2, use_speaker_boost: true };
+
+/**
+ * Метки эмоций eleven_v3 (на других моделях их прочитали бы вслух, поэтому только для v3).
+ * Как у живого человека: радость, любопытство, вздох, усмешка, тепло. Грустных меток нет (решение владельца).
+ * Метка выбирается по тексту куска (одинаковый текст = одинаковая метка, кеш не ломается).
+ */
+const OPEN_TAGS = ["[happy]", "[curious]"];
+const MID_TAGS = ["[exhales]", "[chuckles]", "[curious]", "[excited]"];
+const CLOSE_TAGS = ["[warmly]", "[happy]"];
+function pick(list: string[], text: string): string {
+  let h = 0;
+  for (const ch of text) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
+  return list[h % list.length];
+}
+export function decorateForV3(chunk: string, index: number, total: number, model = env.elevenLabsModel): string {
+  if (model !== "eleven_v3") return chunk;
+  if (total === 1) return `${pick(OPEN_TAGS, chunk)} ${chunk}`;
+  if (index === 0) return `${pick(OPEN_TAGS, chunk)} ${chunk}`;
+  if (index === total - 1) return `${pick(CLOSE_TAGS, chunk)} ${chunk}`;
+  return `${pick(MID_TAGS, chunk)} ${chunk}`;
+}
+
 const MEDIA_DIR = "/data/uploads";
 export const DEFAULT_MONTHLY_CAP_USD = 20;
-/** Цена, присланная владельцем (ElevenLabs Business, v4: $0.08 за 1000 знаков; не проверена на официальной странице). Меняется настройкой voicePricePer1kUsd. */
+/** Цена, присланная владельцем (ElevenLabs Business: $0.08 за 1000 знаков для v3/v4; не проверена на официальной странице). Меняется настройкой voicePricePer1kUsd. */
 export const DEFAULT_PRICE_PER_1K_USD = 0.08;
 
 /** Один кусок голосом - примерно до 9-10 секунд речи (~150 знаков), всего не больше 4 кусков. */

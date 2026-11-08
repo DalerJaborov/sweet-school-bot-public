@@ -12,6 +12,7 @@ vi.mock("../../src/messaging/send.js", () => ({ sendAttachmentToContact: (...a: 
 vi.mock("../../src/ai/voiceClone.js", () => ({
   voiceEnabled: vi.fn(async () => true),
   splitForVoice: () => ["Салом, рафиқ.", "Хуш омадед."],
+  decorateForV3: (c: string) => c,
   synthesizeToFile: vi.fn(async (t: string) => ({ url: `https://x/${t}.ogg`, cached: false })),
 }));
 
