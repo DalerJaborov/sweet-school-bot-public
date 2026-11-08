@@ -47,6 +47,7 @@ class Bridge {
     this.state = 'disconnected';
     this.contactsReady = false;
     this.qrDataUrl = null;
+    this.pairingCode = null; // код привязки «по номеру телефона» (вместо QR), живёт ~3 минуты
     this.lastError = null;
     this.accountId = null;
     this.liveSince = this.now();
@@ -87,7 +88,7 @@ class Bridge {
     const account = this.accountId ? this.data.accounts[this.accountId] : null;
     const digits = this.accountId?.split('@')[0] ?? '';
     return {
-      state: this.state, qrDataUrl: this.qrDataUrl, accountId: this.accountId,
+      state: this.state, qrDataUrl: this.qrDataUrl, pairingCode: this.pairingCode, accountId: this.accountId,
       accountMasked: digits ? `••••${digits.slice(-4)}` : null,
       contactsReady: this.contactsReady, blockedCount: account ? new Set(Object.keys(account.blocked).map(alias => (account.aliases[alias] || [alias]).find(id => id.endsWith('@c.us')) || alias)).size : 0,
       enabled: !!account?.enabled && this.state === 'ready' && this.contactsReady,
@@ -106,12 +107,13 @@ class Bridge {
     this.state = 'starting'; this.contactsReady = false; this.lastError = null;
     const client = this.createClient();
     this.client = client;
+    client.on('code', code => { if (this.client === client) { this.pairingCode = String(code); this.state = 'pairing'; this.contactsReady = false; } });
     client.on('qr', qr => { void this.makeQr(qr).then(data => {
       if (this.client === client) { this.qrDataUrl = data; this.state = 'pairing'; this.contactsReady = false; }
     }).catch(e => this.report(e)); });
     client.on('ready', () => { void this.onReady(client).catch(e => { this.report(e); this.state = 'paused'; this.contactsReady = false; }); });
     client.on('auth_failure', () => { this.state = 'auth_failure'; this.contactsReady = false; this.qrDataUrl = null; this.lastError = 'WhatsApp authorization failed'; });
-    client.on('disconnected', () => { this.state = 'disconnected'; this.contactsReady = false; this.qrDataUrl = null; });
+    client.on('disconnected', () => { this.state = 'disconnected'; this.contactsReady = false; this.qrDataUrl = null; this.pairingCode = null; });
     // message_create also includes outgoing phone messages; a single handler avoids duplicate events.
     client.on('message_create', message => {
       if (this.client !== client) return;
