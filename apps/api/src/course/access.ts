@@ -384,14 +384,6 @@ export function purchaseFor(purchases: Purchase[], courseId: string | null | und
   return purchases.find((p) => p.courseId === courseId) ?? null;
 }
 
-/**
- * Лимит устройств покупки. ОДНО место на всю систему: recovery.ts раньше
- * считал по-своему (запас 3 против 2 здесь, и без заблокированных) — и
- * самовосстановление доступа не освобождало место, а бот бодро отвечал «вот
- * новая ссылка», по которой ученица упиралась в тот же отказ (разбор
- * безопасности 03.09.2026). Запас 3, как в схеме: браузер внутри Instagram
- * считается отдельным устройством.
- */
 /** Кто освободил, заблокировал или вернул место (журнал AccessEvent). */
 export type DeviceActor = "owner" | "student" | "bot";
 export type DeviceAction = "released" | "blocked" | "unblocked";
@@ -428,9 +420,21 @@ export async function recordAccessEvent(
  * Чтобы смотреть снова, нужна ссылка — и она займёт свободное место.
  */
 export async function releaseDevice(device: Device, actor: DeviceActor): Promise<void> {
+  // Заблокированное устройство не освобождаем (ревью PR 59): удаление снимает
+  // и блокировку — тот, кого заблокировали, снова вошёл бы по ссылке. Сначала
+  // «Разблокировать» осознанно, потом освобождать. Замена и бот и так берут
+  // только незаблокированные; здесь — защита по умолчанию для всех входов.
+  if (device.blockedAt) throw new DeviceBlockedError();
   await prisma.device.delete({ where: { id: device.id } });
   await recordAccessEvent(device, "released", actor);
   logInfo("course:deviceRelease", `контакт ${device.contactId}: место освобождено (${actor}), устройство ${device.id}`);
+}
+
+/** Освобождать заблокированное устройство нельзя — см. releaseDevice. */
+export class DeviceBlockedError extends Error {
+  constructor() {
+    super("Устройство заблокировано — сначала разблокируйте его");
+  }
 }
 
 /** Сколько раз в месяц ученица сама может заменить старое устройство. */
@@ -490,6 +494,21 @@ export function describeDevice(ua: string | null): string {
   return "Устройство";
 }
 
+/**
+ * Лимит устройств человека. ОДНО место на всю систему: recovery.ts раньше
+ * считал по-своему (3 против 2 здесь, и без заблокированных) — и
+ * самовосстановление доступа не освобождало место, а бот бодро отвечал «вот
+ * новая ссылка», по которой ученица упиралась в тот же отказ (разбор
+ * безопасности 03.09.2026).
+ *
+ * Сколько мест на деле: 2 (Course.deviceLimit). История: курс создан с 2,
+ * миграция 20260903065259 подняла до 3 (встроенный браузер Instagram считался
+ * отдельным устройством), 20260903200000 вернула 2 — браузеры одного телефона
+ * теперь одно устройство (см. SAME_PHONE_WINDOW_MS). Новые курсы получают 2:
+ * Prisma подставляет @default(2) из схемы сама (проверено 08.11.2026), хотя
+ * DEFAULT столбца в базе после той миграции остался 3. Правки лимита в панели
+ * нет. 3 ниже — запас для старых покупок без привязки к курсу каталога.
+ */
 export async function deviceLimitFor(contactId: string): Promise<number> {
   const purchases = await prisma.purchase.findMany({
     where: { contactId, revokedAt: null, courseId: { not: null } },

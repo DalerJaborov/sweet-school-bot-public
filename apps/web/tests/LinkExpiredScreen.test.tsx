@@ -68,6 +68,12 @@ describe("LinkExpiredScreen", () => {
     expect(screen.getByRole("link", { name: t.writeUs })).toBeTruthy();
   });
 
+  it("купила на сайте, сервер «передали Ширин» — кнопка ведёт в WhatsApp хозяйки, не в пустой чат сайта", () => {
+    render(<LinkExpiredScreen t={t} state={state({ result: { outcome: "escalated", channel: "WEB" } })} onRequest={() => undefined} />);
+    expect(screen.getByRole("heading", { name: t.linkEscalatedTitle })).toBeTruthy();
+    expect(screen.getByRole("link", { name: t.writeUs }).getAttribute("href")).toBe(school.whatsapp);
+  });
+
   it("по-таджикски — все слова свои", () => {
     const tg = dict("tg");
     render(<LinkExpiredScreen t={tg} state={state()} onRequest={() => undefined} />);
@@ -78,7 +84,10 @@ describe("LinkExpiredScreen", () => {
 
 describe("chatUrl", () => {
   it("купившая на сайте — в чат сайта; WhatsApp — свой канал; иначе Instagram", () => {
-    expect(chatUrl(school, "WEB", null)).toBe("/");
+    // Купившая через чат сайта: НЕ в чат сайта (в новом браузере он пуст), а к хозяйке.
+    expect(chatUrl(school, "WEB", null)).toBe(school.whatsapp);
+    expect(chatUrl(school, "WEB", null)).not.toBe("/");
+    expect(chatUrl({ ...school, whatsapp: null }, "WEB", null)).toBe(school.instagram);
     expect(chatUrl(school, "WHATSAPP", null)).toBe(school.whatsapp);
     expect(chatUrl(school, "INSTAGRAM", null)).toBe(school.instagram);
     expect(chatUrl({ ...school, instagram: null }, "INSTAGRAM", null)).toBe(school.whatsapp);

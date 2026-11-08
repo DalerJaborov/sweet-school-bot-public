@@ -115,6 +115,7 @@ class Bridge {
     // message_create also includes outgoing phone messages; a single handler avoids duplicate events.
     client.on('message_create', message => {
       if (this.client !== client) return;
+      this.trace('message_create', message);
       void this.onMessage(message).catch(error => { this.report(error); this.contactsReady = false; this.state = 'paused'; });
     });
     this.starting = client.initialize().catch(error => { this.report(error); this.state = 'disconnected'; }).finally(() => { this.starting = null; });
@@ -244,6 +245,14 @@ class Bridge {
     return this.status();
   }
 
+  /** Диагностика без личных данных: тип, направление, последние 4 цифры чата и причина отбрасывания (08.11.2026, «сообщение не доходит»). */
+  trace(reason, message) {
+    try {
+      const chat = String((message.fromMe ? message.to : message.from) || '');
+      console.log(`[wa-trace] ${reason} type=${message.type} fromMe=${!!message.fromMe} chat=*${chat.replace(/@.*$/, '').slice(-4)} ready=${this.contactsReady} state=${this.state} enabled=${this.accountId ? !!this.account().enabled : 'n/a'}`);
+    } catch { /* диагностика не должна ломать приём */ }
+  }
+
   async onMessage(message) {
     const accountId = this.accountId;
     const messageId = idOf(message.id);
@@ -251,7 +260,7 @@ class Bridge {
     const timestamp = Number(message.timestamp) * 1000;
     if (!messageId || !directId(chatId) || !Number.isFinite(timestamp)
       || timestamp < Math.floor(this.liveSince / 1000) * 1000 || timestamp > this.now() + 60_000
-      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) return;
+      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) { this.trace('drop:early(ts/status/ready)', message); return; }
     if (message.fromMe) {
       // A library send emits its own echo before its promise returns on some versions.
       const active = this.sending.get(chatId);
@@ -260,13 +269,13 @@ class Bridge {
     }
     const status = await this.contactStatus(chatId);
     if (this.accountId !== accountId) return;
-    if (status.blocked || !status.identityResolved) return; // Do not retain personal conversations.
+    if (status.blocked || !status.identityResolved) { this.trace(`drop:blocked=${status.blocked} resolved=${status.identityResolved}`, message); return; } // Do not retain personal conversations.
     const account = this.account();
     if (account.events[messageId]) return;
     if (message.fromMe) {
       for (const alias of status.aliases) account.takeovers[alias] = this.now();
       this.save();
-    } else if (!account.enabled || this.state !== 'ready') return;
+    } else if (!account.enabled || this.state !== 'ready') { this.trace('drop:paused', message); return; }
     if (!message.fromMe && !['chat', 'image', 'audio', 'ptt', 'document', 'video'].includes(message.type)) return;
     const event = {
       id: messageId, messageId, accountId: this.accountId,
@@ -277,6 +286,7 @@ class Bridge {
     if (!message.fromMe && message.hasMedia) event.mediaPending = true;
     // Persist the incoming envelope before any network download. A restart keeps
     // the question and marks interrupted media explicitly instead of losing it.
+    this.trace('accepted', message);
     this.appendEvent(event);
     if (!message.fromMe && message.hasMedia) {
       const advertisedSize = Number(message._data?.size ?? message._data?.fileSize);
