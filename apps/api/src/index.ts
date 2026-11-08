@@ -39,6 +39,7 @@ import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
 import { runDiskMaintenance } from "./diskInfo.js";
 import { checkIgToken } from "./igTokenWatch.js";
+import { checkWhatsappConnection } from "./whatsapp/watch.js";
 import { checkFbToken } from "./fbTokenWatch.js";
 import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
@@ -290,6 +291,11 @@ const secretTick = () =>
 setTimeout(secretTick, 3 * 60_000);
 setInterval(secretTick, 60 * 60_000);
 setInterval(() => pollMissedComments().catch((err) => logError("commentBackfill", err)), 10 * 60_000);
+
+// СВЯЗЬ С WHATSAPP (whatsapp/watch.ts): раз в минуту спрашиваем мост; плохо дольше 10 минут —
+// строка в панели и одно сообщение владельцу.
+setTimeout(() => void checkWhatsappConnection().catch((err) => logError("whatsappWatch", err)), 3 * 60_000);
+setInterval(() => void checkWhatsappConnection().catch((err) => logError("whatsappWatch", err)), 60_000);
 
 // СТОРОЖ ВХОДЯЩИХ (inboundWatch.ts): Instagram перестал присылать сообщения —
 // внутри всё зелёное, а школа молча теряет заявки. Раз в час, в рабочее время.

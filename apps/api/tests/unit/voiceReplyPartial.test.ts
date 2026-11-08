@@ -31,7 +31,7 @@ describe("частичная отправка голосовых", () => {
   it("оба куска ушли: одна запись в историю", async () => {
     send.mockReset().mockResolvedValue("mid");
     record.mockClear();
-    expect(await trySendVoiceReply(contact, "Здравствуйте, рада вас видеть", false)).toBe(true);
+    expect(await trySendVoiceReply(contact, "Здравствуйте, рада вас видеть", false)).toBe("");
     expect(send).toHaveBeenCalledTimes(2);
     expect(record).toHaveBeenCalledTimes(1);
   });
@@ -42,7 +42,7 @@ describe("Meta отказала в аудио до первой отправки
     const { MetaDeliveryError } = await import("../../src/messaging/metaErrors.js");
     send.mockReset().mockRejectedValueOnce(new MetaDeliveryError("PERMANENT" as never, 400));
     record.mockClear();
-    expect(await trySendVoiceReply({ id: "c1", igUserId: "u", channel: "INSTAGRAM" }, "Здравствуйте, рада вас видеть", false)).toBe(false);
+    expect(await trySendVoiceReply({ id: "c1", igUserId: "u", channel: "INSTAGRAM" }, "Здравствуйте, рада вас видеть", false)).toBeNull();
     expect(record).not.toHaveBeenCalled();
   });
   it("неопределённый исход - ошибка наружу, текстом не дублируем", async () => {

@@ -22,8 +22,8 @@ import { decorateForV3, splitForVoice, synthesizeToFile, voiceEnabled } from "./
 /** Каналы, где голос разрешён, и формат файла: WhatsApp - ogg/opus, Instagram и Messenger - aac. Сайт (WEB) - только текст. */
 const VOICE_FORMAT_BY_CHANNEL: Record<string, "ogg" | "aac" | undefined> = { WHATSAPP: "ogg", INSTAGRAM: "aac", MESSENGER: "aac" };
 export const VOICE_MARK = "🎤 ";
-const MAX_WARM = 160;
-const MAX_AFTER_CLIENT_VOICE = 240;
+const MAX_WARM = 260;
+const MAX_AFTER_CLIENT_VOICE = 340;
 
 // Голос разрешаем, только если НЕТ ничего похожего на адрес, число или деньги (ревью 08.11.2026:
 // прежние узкие шаблоны пропускали t.me/..., «пять тысяч», таджикское «ҳазор»).
@@ -32,45 +32,83 @@ const HAS_DIGIT = /\d|[٠-٩]/u;
 const HAS_MONEY_WORDS =
   /тысяч|сотн|\bсто\b|двест|тристо|миллион|сомон|рубл|доллар|₽|\$|цен[аыуе]|стоим|стоит|скидк|процент|тахфиф|оплат|платёж|платеж|платит|предоплат|перевод|перевест|карт[аыуеой]|реквизит|\bсч[её]т|нарх|нарҳ|ҳазор|\bсад\b|пардохт|корт|ҳисоб|гузарон|\bпул\b|usd|tjs/iu;
 
+/** Текст для озвучки: без эмодзи и переносов строк. */
+export function speakable(text: string): string {
+  return text.replace(/[\p{Extended_Pictographic}‍️\u{1F3FB}-\u{1F3FF}]/gu, "").replace(/\s+/g, " ").trim();
+}
+
 export function chooseVoiceOrText(
   text: string,
   ctx: { channel: string; clientSentVoice: boolean; lastReplyWasVoice: boolean },
 ): "voice" | "text" {
   if (!VOICE_FORMAT_BY_CHANNEL[ctx.channel] || ctx.lastReplyWasVoice) return "text";
-  const t = text.trim();
-  if (!t || t.includes("\n")) return "text";
+  // Переносы строк и эмодзи для голоса не помеха: склеиваем в одну фразу (эмодзи озвучка не читает).
+  const t = speakable(text);
+  if (!t) return "text";
   if (HAS_LINK.test(t) || HAS_DIGIT.test(t) || HAS_MONEY_WORDS.test(t)) return "text";
   const limit = ctx.clientSentVoice ? MAX_AFTER_CLIENT_VOICE : MAX_WARM;
   return t.length <= limit ? "voice" : "text";
 }
 
-/** Пробует ответить голосом; true — ответ ушёл голосом, false — отвечать текстом как обычно. */
+type VoiceCtx = { channel: string; clientSentVoice: boolean; lastReplyWasVoice: boolean };
+
+/**
+ * Что сказать голосом и что оставить текстом. Если весь ответ подходит под правило - всё голосом.
+ * Если клиент САМ прислал голосовое, а в ответе есть цифры/деньги/ссылки - голосом уходят предложения без них,
+ * а предложения с цифрами остаются текстом (владелец 08.11.2026: «три раза отправил голосовое, а он отвечает текстом»).
+ */
+export function planVoice(text: string, ctx: VoiceCtx): { voice: string; rest: string } | null {
+  if (chooseVoiceOrText(text, ctx) === "voice") return { voice: speakable(text), rest: "" };
+  if (!ctx.clientSentVoice || !VOICE_FORMAT_BY_CHANNEL[ctx.channel] || ctx.lastReplyWasVoice) return null;
+  const sentences = text.split(/(?<=[.!?…])\s+|\n+/u).map((x) => x.trim()).filter(Boolean);
+  const free: VoiceCtx = { ...ctx, lastReplyWasVoice: false };
+  const voiced: string[] = [];
+  const rest: string[] = [];
+  let length = 0;
+  for (const sentence of sentences) {
+    const ok = chooseVoiceOrText(sentence, free) === "voice";
+    if (ok && length + sentence.length + 1 <= MAX_AFTER_CLIENT_VOICE) {
+      voiced.push(sentence);
+      length += sentence.length + 1;
+    } else rest.push(sentence);
+  }
+  const voice = speakable(voiced.join(" "));
+  if (voice.length < 12) return null;
+  return { voice, rest: rest.join("\n") };
+}
+
+/**
+ * Пробует ответить голосом. null - голосом ничего не ушло, отправляйте весь ответ текстом.
+ * Строка - остаток, который надо отправить текстом (пустая строка - весь ответ ушёл голосом).
+ */
 export async function trySendVoiceReply(
   contact: { id: string; igUserId: string; channel: string },
   text: string,
   clientSentVoice: boolean,
-): Promise<boolean> {
+): Promise<string | null> {
   let urls: string[];
+  let plan: { voice: string; rest: string };
   try {
-    if ((await getSetting("voiceReplyEnabled")) !== "true" || !(await voiceEnabled())) return false;
+    if ((await getSetting("voiceReplyEnabled")) !== "true" || !(await voiceEnabled())) return null;
     const last = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "OUT" },
       orderBy: { createdAt: "desc" },
     });
-    const choice = chooseVoiceOrText(text, {
+    const planned = planVoice(text, {
       channel: contact.channel,
       clientSentVoice,
       lastReplyWasVoice: Boolean(last?.text?.startsWith(VOICE_MARK)),
     });
-    if (choice !== "voice") return false;
-    const chunks = splitForVoice(text);
-    if (!chunks) return false;
+    if (!planned) return null;
+    plan = planned;
+    const chunks = splitForVoice(plan.voice);
+    if (!chunks) return null;
     // Куски озвучиваются параллельно (у каждого свой кеш), но уходят строго по очереди.
     urls = (await Promise.all(chunks.map((chunk, i) => synthesizeToFile(decorateForV3(chunk, i, chunks.length), VOICE_FORMAT_BY_CHANNEL[contact.channel] ?? "ogg")))).map((r) => r.url);
   } catch (err) {
     // До отправки ничего не ушло - безопасно ответить текстом.
     logError("voiceReply", err);
-    return false;
+    return null;
   }
   // После вызова моста исход мог остаться неизвестным: текстом НЕ дублируем,
   // ошибку отдаём вызывающему (мост запрещает автоповтор при неопределённом исходе).
@@ -86,14 +124,14 @@ export async function trySendVoiceReply(
     // Meta чётко отказала в аудио ещё до первой отправки (например формат не принят): ничего не ушло, отвечаем текстом.
     if (sent === 0 && err instanceof MetaDeliveryError && err.kind !== "AMBIGUOUS" && err.status === 400) {
       logError("voiceReply:metaRejected", err);
-      return false;
+      return null;
     }
     // Часть голосовых уже у клиента: запоминаем, что ушло, чтобы история и панель не считали, что бот молчал.
     if (sent > 0) {
-      await recordOutgoingMessage(contact.id, `${VOICE_MARK}(ушло ${sent} из ${urls.length}) ${text.trim()}`, mid).catch((e) => logError("voiceReply:record", e));
+      await recordOutgoingMessage(contact.id, `${VOICE_MARK}(ушло ${sent} из ${urls.length}) ${plan.voice}`, mid).catch((e) => logError("voiceReply:record", e));
     }
     throw err;
   }
-  await recordOutgoingMessage(contact.id, `${VOICE_MARK}${text.trim()}`, mid);
-  return true;
+  await recordOutgoingMessage(contact.id, `${VOICE_MARK}${plan.voice}`, mid);
+  return plan.rest;
 }
