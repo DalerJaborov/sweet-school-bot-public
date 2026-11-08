@@ -58,24 +58,24 @@ function durationLabel(min: number, lang: Lang): string {
 
 const text = {
   ru: {
-    currency: "сомони", buy: "Оформить в WhatsApp", contact: "Спросить в WhatsApp",
+    currency: "сомони", buy: "Купить курс", contact: "Спросить в WhatsApp",
     empty: "Курсы сейчас недоступны. Уточните программу и цену в WhatsApp.",
     unavailable: "Не удалось загрузить курсы. Уточните программу и цену в WhatsApp.",
     bundle: "Оба курса вместе", forever: "навсегда", certificate: "сертификат",
     purchase: "Как купить курс",
-    steps: ["Выберите курс и напишите Ширин в WhatsApp.", "Уточните сумму и способ оплаты у Ширин перед переводом.", "После ручной проверки оплаты Ширин поможет открыть ваши уроки."],
-    note: "Здесь нет автоматического приёма чеков. Заказ и доступ подтверждает человек в WhatsApp; мгновенный ответ не гарантируется.",
+    steps: ["Выберите курс — откроется чат.", "Уточните сумму и реквизиты в чате, затем прикрепите чек.", "После подтверждения оплаты получите ссылку на свои уроки."],
+    note: "Нечёткий или спорный чек проверит Ширин. Если чат недоступен, можно написать нам в WhatsApp.",
     order: (name: string, amount: string) => `Здравствуйте! Хочу купить ${name}. На сайте указана цена ${amount}. Подтвердите, пожалуйста, состав, сумму, способ оплаты и как я получу доступ к урокам.`,
     ask: "Здравствуйте! Хочу уточнить программу и цену онлайн-курса.",
   },
   tg: {
-    currency: "сомонӣ", buy: "Фармоиш дар WhatsApp", contact: "Дар WhatsApp пурсидан",
+    currency: "сомонӣ", buy: "Курсро харидан", contact: "Дар WhatsApp пурсидан",
     empty: "Курсҳо ҳоло дастрас нестанд. Барнома ва нархро дар WhatsApp пурсед.",
     unavailable: "Курсҳо бор нашуданд. Барнома ва нархро дар WhatsApp пурсед.",
     bundle: "Ҳар ду курс якҷоя", forever: "барои ҳамеша", certificate: "сертификат",
     purchase: "Курсро чӣ тавр харидан мумкин аст",
-    steps: ["Курсро интихоб кунед ва ба Ширин дар WhatsApp нависед.", "Пеш аз интиқол маблағ ва тарзи пардохтро бо Ширин аниқ кунед.", "Пас аз санҷиши пардохт Ширин барои кушодани дарсҳо кӯмак мекунад."],
-    note: "Дар ин ҷо чекҳо ба таври автоматӣ қабул намешаванд. Фармоиш ва дастрасиро шахс дар WhatsApp тасдиқ мекунад; ҷавоби фаврӣ кафолат дода намешавад.",
+    steps: ["Курсро интихоб кунед — чат кушода мешавад.", "Маблағ ва маълумоти пардохтро дар чат аниқ карда, чекро фиристед.", "Пас аз тасдиқи пардохт пайванди дарсҳоятонро мегиред."],
+    note: "Чеки норавшан ё шубҳанокро Ширин месанҷад. Агар чат дастнорас бошад, ба мо дар WhatsApp нависед.",
     order: (name: string, amount: string) => `Ассалому алейкум! Мехоҳам ${name}-ро харам. Нарх дар сайт ${amount} аст. Лутфан таркиб, маблағ, тарзи пардохт ва чӣ тавр ба дарсҳо дастрасӣ мегирам, тасдиқ кунед.`,
     ask: "Ассалому алейкум! Мехоҳам барнома ва нархи курси онлайнро аниқ кунам.",
   },
@@ -90,7 +90,7 @@ export function renderCatalogFragment(catalog: Catalog, lang: Lang, only?: "COUR
   const t = text[lang];
   const courses = only ? catalog.courses.filter((c) => c.code === only) : catalog.courses;
   const amount = (price: number, currency = "TJS") => `${price} ${currency === "TJS" ? t.currency : currency}`;
-  const button = (name: string, price: number, currency = "TJS") => `<a class="btn" aria-label="${esc(lang === "tg" ? `Курси «${name}»-ро дар WhatsApp харидан` : `Купить курс «${name}» в WhatsApp`)}" href="${esc(whatsapp(catalog.contacts.whatsapp, t.order(name, amount(price, currency))))}">${t.buy}</a>`;
+  const button = (name: string, price: number, currency = "TJS") => `<a class="btn" data-chat="${esc(t.order(name, amount(price, currency)))}" aria-label="${esc(lang === "tg" ? `Курси «${name}»-ро харидан` : `Купить курс «${name}»`)}" href="${esc(whatsapp(catalog.contacts.whatsapp, t.order(name, amount(price, currency))))}">${t.buy}</a>`;
   if (!courses.length) return `<div data-server-catalog="ready" lang="${lang}" class="notice"><p>${t.empty}</p><a class="btn" href="${esc(whatsapp(catalog.contacts.whatsapp, t.ask))}">${t.contact}</a></div>`;
   const bundle = !only && courses.length >= 2 ? catalog.bundle : null;
   const cards = courses.map((c) => {

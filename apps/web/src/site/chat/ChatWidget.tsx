@@ -155,13 +155,18 @@ export default function ChatWidget({ t, lang, prefill, onClose }: Props) {
   // Фокус в поле при открытии; ловушка фокуса; Esc. Контракт со sticky-баром:
   // пока чат открыт, документ несёт data-chat-open="1".
   useEffect(() => {
-    inputRef.current?.focus();
+    panelRef.current?.focus();
     const prevOverflow = document.body.style.overflow;
     if (window.matchMedia?.("(max-width: 719px)").matches) document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prevOverflow;
     };
   }, []);
+
+  // Move focus only if the visitor has not already chosen another control.
+  useEffect(() => {
+    if (ready && document.activeElement === panelRef.current) inputRef.current?.focus();
+  }, [ready]);
 
   // iOS: клавиатура сдвигает visualViewport, а не меняет размер окна —
   // держим панель (и поле ввода) над клавиатурой через ту же метрику.
@@ -190,7 +195,7 @@ export default function ChatWidget({ t, lang, prefill, onClose }: Props) {
     if (e.key !== "Tab" || !panelRef.current) return;
     const focusable = Array.from(
       panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), a[href], textarea, input:not([type="file"]), [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), a[href], textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
       ),
     );
     if (focusable.length === 0) return;
@@ -252,8 +257,8 @@ export default function ChatWidget({ t, lang, prefill, onClose }: Props) {
       setPending(isPending);
       if (isPending) typingSinceRef.current = Date.now();
       setTyping(isPending);
-      setText("");
-      setImage(null);
+      if (override === undefined) setText(current => current === text ? "" : current);
+      setImage(current => current === image ? null : current);
       inputRef.current?.focus();
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
@@ -284,6 +289,7 @@ export default function ChatWidget({ t, lang, prefill, onClose }: Props) {
       <div
         ref={panelRef}
         className="chat-panel"
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="ssb-chat-title"

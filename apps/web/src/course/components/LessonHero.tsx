@@ -1,34 +1,19 @@
+import { lessonPhoto } from "../lessonPhoto";
 import { useState } from "react";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import type { LessonView } from "../api";
 import { formatDuration, type Dict } from "../i18n";
 import { shareOrOpenImage } from "../shareImage";
 
-/**
- * ГЕРОЙСКИЙ ЭКРАН УРОКА — до первого воспроизведения (визуальная система
- * 04.09.2026, scratchpad/visual-ideas.md §4): тизер без звука в скруглённой
- * рамке 9:16 (60vh) с малиновым свечением; тап или кнопка «Начать · N мин»
- * переводит на настоящий Player (см. Lesson.tsx). Если тизера нет — статичная
- * story-обложка, и так по цепочке фолбэков ниже.
- *
- * НОМЕР И НАЗВАНИЕ уже впечатаны сервером в саму картинку story/cover (см.
- * storage/coverArt.ts), а название вдобавок видно в шапке экрана урока —
- * поэтому здесь их не рисуем повторно, только то, чего на картинке нет:
- * тизер-видео и кнопку начать/поделиться.
- *
- * ОДИН ТАП ДЛЯ ПРОДОЛЖЕНИЯ. Lesson.tsx показывает этот экран только для
- * свежего открытия урока (startAt === 0); при «Продолжить с 12:30» с карточки
- * урока он пропускается — иначе восстановление позиции стоило бы лишнего
- * тапа, а это принцип, который уже защищает LessonCard.
- */
+/** First-play preview uses the actual lesson photo. Existing branded story
+ * artwork remains available for sharing; resuming a lesson skips this screen. */
 export function LessonHero({ t, lesson, onStart }: { t: Dict; lesson: LessonView; onStart: () => void }) {
   const [sharing, setSharing] = useState(false);
   const reduceMotion = useReducedMotion();
 
   // Тот же порядок фолбэков, что у карточки урока в сетке: сторис → обложка →
-  // постер транскода → ничего (плейсхолдер), но самый вертикальный формат
-  // (storyUrl) — первым: он и задуман под этот 9:16 экран.
-  const cover = lesson.storyUrl ?? lesson.coverUrl ?? lesson.posterUrl ?? null;
+  // Titles are accessible HTML; the image does not need baked-in decoration.
+  const cover = lessonPhoto(lesson);
   const hasTeaser = Boolean(lesson.teaserUrl);
   const ctaLabel = t.heroStartCta(formatDuration(lesson.durationSec, t));
 

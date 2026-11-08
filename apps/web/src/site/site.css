@@ -2011,3 +2011,19 @@ section[id] { scroll-margin-top: 96px; }
 @media (min-width: 900px) { .lesson-samples { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
 
 .about-figure::before { display: none; }
+
+/* Direct contacts stay one tap away; buying remains in the school chat. */
+.header-contact { display: none; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; color: var(--c-ink); border-radius: var(--r-1); }
+.header-contact svg, .contact-popover svg { width: 22px; height: 22px; flex: none; }
+@media (min-width: 720px) { .header-contact { display: inline-flex; } }
+.sticky-contacts { position: relative; flex: 1; }
+.sticky-contacts summary { list-style: none; cursor: pointer; }
+.sticky-contacts summary::-webkit-details-marker { display: none; }
+.contact-popover { position: absolute; bottom: calc(100% + 12px); right: 0; width: min(280px, calc(100vw - 32px)); padding: 8px; background: var(--c-surface); color: var(--c-ink); border: 1px solid var(--c-line); border-radius: var(--r-2); box-shadow: var(--e-2); }
+.contact-popover a { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px; border-radius: var(--r-1); color: inherit; text-decoration: none; }
+.contact-popover a:focus-visible { outline: 2px solid var(--c-focus); }
+@media (hover: hover) and (pointer: fine) { .contact-popover a:hover { background: var(--c-bg); } }
+.lang-pill { min-height: 44px; }
+@media (pointer: coarse) { .field input, .field textarea, .free-lesson input { font-size: 16px; } }
+
+.bundle-card .course-body p { color: var(--c-ink); }

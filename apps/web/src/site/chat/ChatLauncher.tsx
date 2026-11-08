@@ -46,6 +46,7 @@ export function ChatLauncher({ t, lang }: { t: Dict; lang: Lang }) {
   const [open, setOpen] = useState(readOpen);
   const [prefill, setPrefill] = useState<string | undefined>(undefined);
   const [unread, setUnread] = useState(false);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const fabRef = useRef<HTMLButtonElement>(null);
 
   // Контракт с sticky-баром.
@@ -60,6 +61,7 @@ export function ChatLauncher({ t, lang }: { t: Dict; lang: Lang }) {
   useEffect(
     () =>
       onChatOpen(({ prefill }) => {
+        returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         setPrefill(prefill);
         setOpen(true);
         writeOpen(true);
@@ -94,7 +96,10 @@ export function ChatLauncher({ t, lang }: { t: Dict; lang: Lang }) {
     setOpen(false);
     setPrefill(undefined);
     writeOpen(false);
-    requestAnimationFrame(() => fabRef.current?.focus());
+    requestAnimationFrame(() => {
+      const previous = returnFocusRef.current;
+      (previous?.isConnected ? previous : fabRef.current)?.focus();
+    });
   }, []);
 
   return (
@@ -108,6 +113,7 @@ export function ChatLauncher({ t, lang }: { t: Dict; lang: Lang }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => {
+          returnFocusRef.current = fabRef.current;
           setOpen(true);
           writeOpen(true);
         }}
@@ -125,8 +131,8 @@ export function ChatLauncher({ t, lang }: { t: Dict; lang: Lang }) {
               width: 12,
               height: 12,
               borderRadius: "50%",
-              background: "#c9376b",
-              border: "2px solid #fff",
+              background: "var(--c-accent)",
+              border: "2px solid var(--c-surface)",
             }}
           />
         )}

@@ -182,6 +182,7 @@ function renderHeader(site, page, lang, ctx) {
     </a>
     <nav class="site-nav" aria-label="${esc(ui.menu)}">${navLinks()}</nav>
     <div class="header-tools">
+      <a class="header-contact" href="#school-contacts" aria-label="${lang === 'tg' ? 'Тамос' : 'Контакты'}">${ICONS.phone}</a>
       <button type="button" class="theme-toggle" data-theme-toggle aria-label="${lang === 'tg' ? 'Мавзӯи торик' : 'Тёмная тема'}" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></svg></button>
       <div class="lang-switch" role="group" aria-label="${esc(ui.langLabel)}">${langSwitch}</div>
       <a class="btn btn-ghost header-cta" href="/course">${esc(ui.ctaLessons)}</a>
@@ -208,7 +209,7 @@ function renderFooter(site, lang, ctx) {
     .join("");
   const year = ctx.now.getFullYear();
   return `
-<footer class="site-footer">
+<footer class="site-footer" id="school-contacts">
   <div class="wrap">
     <div>
       <p><strong>${esc(site.brand)}</strong> · ${esc(ui.tagline)}</p>
@@ -816,7 +817,7 @@ function pageContents(page, lang) {
 
 export function renderPage(site, page, lang, now = new Date(), media = null, offlineProgramme = null) {
   const ui = site.ui[lang];
-  const ctx = { site, page, ui, now, media, offlineProgramme, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
+  const ctx = { site, page, lang, ui, now, media, offlineProgramme, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
   let pageSections = page.sections;
   if (["online-kurs", "art-desserty"].includes(page.slug) && media?.lessonSamples?.length) {
     const at = Math.max(1, pageSections.findIndex((section) => section.type === "menu") + 1);
@@ -879,7 +880,15 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
 function renderStickyCta(site, ui, ctx) {
   return `<div class="sticky-cta" role="region" aria-label="${esc(ui.ctaBuy)}">
     <a class="btn btn-lg" href="${esc(ctx.wa)}" data-chat="${esc(ui.ctaBuyPrefill)}">${esc(ui.ctaBuy)}</a>
-    <a class="btn btn-lg btn-ghost" href="${esc(site.contacts.whatsapp)}" rel="noopener">${esc(ui.ctaWhatsapp)}</a>
+    <details class="sticky-contacts">
+      <summary class="btn btn-lg btn-ghost">${ctx.lang === 'tg' ? 'Тамос' : 'Контакты'}</summary>
+      <nav class="contact-popover" aria-label="${ctx.lang === 'tg' ? 'Тамос' : 'Контакты'}">
+        <a href="tel:${esc(site.contacts.phone)}">${ICONS.phone}<span>${esc(site.contacts.phoneDisplay)}</span></a>
+        <a href="${esc(site.contacts.whatsapp)}" rel="noopener">${ICONS.whatsapp}<span>WhatsApp</span></a>
+        <a href="${esc(site.contacts.telegram)}" rel="noopener">${ICONS.telegram}<span>Telegram</span></a>
+        <a href="${esc(site.contacts.instagram)}" rel="noopener">${ICONS.instagram}<span>Instagram</span></a>
+      </nav>
+    </details>
   </div>`;
 }
 

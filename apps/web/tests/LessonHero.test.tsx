@@ -65,7 +65,7 @@ describe("LessonHero", () => {
     const { container } = render(
       <LessonHero t={t} lesson={lesson({ coverUrl: "https://x/cover.jpg", posterUrl: "https://x/poster.jpg" })} onStart={() => undefined} />,
     );
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://x/cover.jpg");
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://x/poster.jpg");
   });
 
   it("ни storyUrl, ни coverUrl — падает на posterUrl", () => {

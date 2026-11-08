@@ -1,3 +1,4 @@
+import { lessonPhoto } from "../lessonPhoto";
 import type { LessonView } from "../api";
 import { useReducedMotion } from "../hooks/useReducedMotion";
 import { formatDuration, formatTime, type Dict } from "../i18n";
@@ -75,7 +76,7 @@ export function LessonCard({
   // Без сети постер берём из телефона (SW отдаст его из IndexedDB) — coverUrl
   // там не лежит, поэтому онлайн-обложка используется только онлайн.
   const posterFallback = !online && saved?.poster ? offlineUrls.poster(lesson.id) : lesson.posterUrl;
-  const cover = online ? (lesson.coverUrl ?? posterFallback) : posterFallback;
+  const cover = online ? lessonPhoto(lesson) : posterFallback;
   const showTeaser = isNext && Boolean(lesson.teaserUrl) && !unavailable;
   const numberLabel = String(number).padStart(2, "0");
 

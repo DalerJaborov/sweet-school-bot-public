@@ -175,14 +175,14 @@ describe("LessonCard", () => {
     expect(screen.queryByText(t.nextLesson)).toBeNull();
   });
 
-  it("coverUrl предпочтён posterUrl онлайн, но офлайн-постер побеждает без сети", () => {
+  it("исходное фото предпочтено старой обложке, офлайн-постер сохранён", () => {
     const withCover = lesson({ coverUrl: "https://x/cover.jpg", posterUrl: "https://x/poster.jpg" });
     const { container, rerender } = render(
       <ul>
         <LessonCard t={t} lesson={withCover} number={1} online onOpen={() => undefined} />
       </ul>,
     );
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://x/cover.jpg");
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://x/poster.jpg");
 
     rerender(
       <ul>
