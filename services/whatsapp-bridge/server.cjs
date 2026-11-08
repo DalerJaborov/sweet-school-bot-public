@@ -31,6 +31,7 @@ async function mediaFromUrl(rawUrl, mediaType) {
 
 const bridge = new Bridge({
   stateDir: process.env.SCHOOL_WHATSAPP_STATE_DIR || '/data/state',
+  authDir: process.env.SCHOOL_WHATSAPP_AUTH_DIR || '/data/auth',
   makeQr: qr => QRCode.toDataURL(qr, { errorCorrectionLevel: 'M', margin: 2, width: 320 }),
   mediaFromUrl,
   testNumbers: (process.env.SCHOOL_WHATSAPP_TEST_NUMBERS || '').split(',').map(x => x.trim()).filter(Boolean),

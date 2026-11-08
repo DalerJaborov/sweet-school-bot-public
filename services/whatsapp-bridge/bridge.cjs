@@ -29,7 +29,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 class Bridge {
-  constructor({ stateDir, createClient, makeQr, mediaFromUrl, testNumbers = [], now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+  constructor({ stateDir, authDir = null, createClient, makeQr, mediaFromUrl, testNumbers = [], now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
     // Номера владельца для проверки бота: даже если они сохранены в телефоне Ширин, бот им отвечает (SCHOOL_WHATSAPP_TEST_NUMBERS).
     this.testNumbers = new Set(testNumbers.map(n => String(n).replace(/\D/g, '')).filter(Boolean));
     this.pacing = pacing ? { ...DEFAULT_PACING, ...pacing } : null;
@@ -38,6 +38,7 @@ class Bridge {
     this.lastSendAt = 0;
     this.paceChain = Promise.resolve();
     this.stateDir = stateDir;
+    this.authDir = authDir;
     this.createClient = createClient;
     this.makeQr = makeQr;
     this.mediaFromUrl = mediaFromUrl;
@@ -100,11 +101,31 @@ class Bridge {
     this.lastError = String(error?.message || error).slice(0, 180);
   }
 
+  /**
+   * Chromium leaves Singleton* lock files in the profile after an unclean stop; the next
+   * launch then refuses to start ("profile in use") and the account looks disconnected.
+   * Safe to remove here: start() runs only when no client of ours is alive. Only Singleton*
+   * entries are touched - never the session data itself.
+   */
+  clearBrowserLocks() {
+    if (!this.authDir) return 0;
+    const dir = path.join(this.authDir, 'session-school');
+    let removed = 0;
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { return 0; }
+    for (const name of names) {
+      if (!name.startsWith('Singleton')) continue;
+      try { fs.rmSync(path.join(dir, name), { force: true, recursive: false }); removed++; } catch {}
+    }
+    return removed;
+  }
+
   async start() {
     if (this.starting) return this.starting;
     if (this.client && ['pairing', 'starting', 'synchronizing', 'ready', 'paused'].includes(this.state)) return this.status();
     if (this.client) { await this.client.destroy().catch(() => {}); this.client = null; }
     this.state = 'starting'; this.contactsReady = false; this.lastError = null;
+    this.clearBrowserLocks();
     const client = this.createClient();
     this.client = client;
     client.on('code', code => { if (this.client === client) { this.pairingCode = String(code); this.state = 'pairing'; this.contactsReady = false; } });

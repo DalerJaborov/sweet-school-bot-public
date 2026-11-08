@@ -245,3 +245,21 @@ test('owner test number: saved contact is answered, any other saved contact stay
   const other = await bridge.contactStatus('992900000009@c.us');
   assert.equal(other.blocked, true); assert.equal(other.isMyContact, true);
 });
+
+test('start() removes stale Chromium Singleton* locks but never touches session data', async t => {
+  const auth = fs.mkdtempSync(path.join(os.tmpdir(), 'school-wa-auth-'));
+  t.after(() => fs.rmSync(auth, { recursive: true, force: true }));
+  const profile = path.join(auth, 'session-school');
+  fs.mkdirSync(path.join(profile, 'Default'), { recursive: true });
+  for (const n of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) fs.symlinkSync('stale-target', path.join(profile, n));
+  fs.writeFileSync(path.join(profile, 'Default', 'Cookies'), 'keep');
+  await fixture(t, { authDir: auth });
+  assert.deepEqual(fs.readdirSync(profile).filter(n => n.startsWith('Singleton')), []);
+  assert.equal(fs.readFileSync(path.join(profile, 'Default', 'Cookies'), 'utf8'), 'keep');
+});
+
+test('lock cleanup is a no-op without auth dir or profile', async t => {
+  const { bridge } = await fixture(t);
+  assert.equal(bridge.clearBrowserLocks(), 0);
+  assert.equal(new Bridge({ stateDir: os.tmpdir(), authDir: path.join(os.tmpdir(), 'nope-wa'), createClient: () => null }).clearBrowserLocks(), 0);
+});
