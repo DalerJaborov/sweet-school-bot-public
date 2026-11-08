@@ -75,7 +75,8 @@ export function sleep(ms: number): Promise<void> {
  * что здесь (`low`) — ни одна не даёт 400 на этот параметр, поэтому список общий,
  * без разбора по семействам, как в основной CRM.
  */
-export const FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash", "gemini-3-flash-preview"];
+// gemini-3.1-flash убрана 08.11.2026: Google отвечает 404 (модели нет) — лишний запрос на каждый перебор.
+export const FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview"];
 
 /** Токены израсходованного ответа — по ним считаются деньги (см. ai/pricing.ts). */
 export interface GeminiUsage {

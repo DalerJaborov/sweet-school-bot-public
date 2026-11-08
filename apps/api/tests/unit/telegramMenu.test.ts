@@ -12,6 +12,10 @@ vi.mock("../../src/telegram.js", () => ({
   createOneTimeInviteLink: (...a: unknown[]) => createOneTimeInviteLink(...a),
   trustedChatIds: vi.fn(async () => ["111", "222"]),
 }));
+const handleManualLinkCommand = vi.fn(async () => true);
+vi.mock("../../src/course/manualLink.js", () => ({
+  handleManualLinkCommand: (...a: unknown[]) => handleManualLinkCommand(...a),
+}));
 vi.mock("../../src/dailyReport.js", () => ({
   buildReport: vi.fn(async () => "ОТЧЁТ"),
   offsetMs: vi.fn(async () => 0),
@@ -75,5 +79,34 @@ describe("Меню быстрых действий", () => {
     await handleMenuCallback("tok", { id: "cb", data: "mn:inv:70", message: { chat: { id: 111 } } });
     await handleMenuCallback("tok", { id: "cb", data: "mn:inv:../../x", message: { chat: { id: 111 } } });
     expect(createOneTimeInviteLink).not.toHaveBeenCalled();
+  });
+  it("«Последние оплаты» считает сумму", async () => {
+    db.model("purchase").findMany.mockResolvedValue([
+      { course: "COURSE70", amount: 70, contact: { username: "malika", igUserId: "1" } },
+      { course: "COURSE50", amount: 50, contact: { username: null, igUserId: "123456789" } },
+    ]);
+    await handleMenuCommand(msg("💳 Последние оплаты"));
+    const t = sendTelegramMessage.mock.calls[0]?.[2] as string;
+    expect(t).toContain("120 сомони");
+    expect(t).toContain("@malika");
+  });
+  it("«Найти ученицу» просит ник реплаем, ответ показывает курсы", async () => {
+    await handleMenuCommand(msg("🔎 Найти ученицу"));
+    const markup = sendWithMarkup.mock.calls[0]?.[3] as { force_reply: boolean };
+    expect(markup.force_reply).toBe(true);
+    const prompt = sendWithMarkup.mock.calls[0]?.[2] as string;
+    db.model("contact").findFirst.mockResolvedValue({ id: "c1", username: "malika", paid: true });
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70", amount: 70, joinedAt: new Date() }]);
+    await handleMenuCommand({ ...msg("@Malika"), reply_to_message: { text: prompt } });
+    expect(sendTelegramMessage.mock.calls[0]?.[2]).toContain("21 рецепт");
+  });
+  it("«Выдать доступ»: ответ с ником уходит в команду /ссылка", async () => {
+    await handleMenuCommand(msg("🔑 Выдать доступ"));
+    const prompt = sendWithMarkup.mock.calls[0]?.[2] as string;
+    await handleMenuCommand({ ...msg("@malika"), reply_to_message: { text: prompt } });
+    expect((handleManualLinkCommand.mock.calls[0]?.[0] as { text: string }).text).toBe("/ссылка @malika");
+  });
+  it("ответ на чужое сообщение из чужого чата не работает", async () => {
+    expect(await handleMenuCommand({ ...msg("@x", 999), reply_to_message: { text: "Кого найти? Ответьте на это сообщение ником" } })).toBe(false);
   });
 });

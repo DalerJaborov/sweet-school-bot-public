@@ -1061,3 +1061,24 @@ model WhatsAppInbox {
   @@index([status, createdAt])
   @@index([chatId, createdAt])
 }
+
+/// Журнал фильтра «не по делу — молчать» (ai/relevanceGate.ts): что за сообщение пришло
+/// от нового собеседника, как оно разобрано и что бот сделал. Хозяйка видит, почему
+/// на конкретное сообщение не ответили.
+model ReplyGate {
+  id        String   @id @default(uuid())
+  contactId String
+  channel   String
+  /// on_topic | greeting | personal | delivery | shop | spam | empty | unclear
+  cls       String
+  /// reply | clarify | attention | silent
+  action    String
+  /// code | model | fallback
+  source    String
+  reason    String
+  /// Начало сообщения (до 200 знаков) — чтобы понять, о чём речь, не открывая переписку.
+  preview   String
+  createdAt DateTime @default(now())
+  @@index([contactId, createdAt])
+  @@index([createdAt])
+}

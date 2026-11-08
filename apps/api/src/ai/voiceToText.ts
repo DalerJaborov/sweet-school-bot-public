@@ -43,7 +43,7 @@ const NOTHING = "НЕТ_РЕЧИ";
  * дополнение, и падение здесь не должно ронять обработку вебхука, ради которой
  * всё и затевалось.
  */
-export async function voiceToText(url: string): Promise<string | null> {
+export async function voiceToText(url: string, modelOverride?: string): Promise<string | null> {
   try {
     const apiKeys = await resolveGeminiKeys();
     if (apiKeys.length === 0) return null;
@@ -58,7 +58,7 @@ export async function voiceToText(url: string): Promise<string | null> {
 
     // Голос требует модели посильнее: дешёвые flash таджикскую речь на слух почти
     // не понимают (та же причина, по которой у голосовых клиента своя модель).
-    const model = (await getSetting("aiModelVoice"))?.trim() || "gemini-3.1-pro-preview";
+    const model = modelOverride?.trim() || (await getSetting("aiModelVoice"))?.trim() || "gemini-3.1-pro-preview";
     const startedAt = Date.now();
     const result = await generateWithFallback(
       apiKeys,

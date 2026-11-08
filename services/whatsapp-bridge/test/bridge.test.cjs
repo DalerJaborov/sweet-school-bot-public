@@ -181,3 +181,24 @@ test('pacing: typing failures never block the reply, and pacing is off when not 
   await prepare(bridge); await bridge.send(request());
   assert.equal(client.sent.length, 1);
 });
+
+test('pacing: the chat is marked as read before typing starts', async t => {
+  const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0 });
+  const order = [];
+  client.getChatById = async () => ({ sendSeen: async () => { order.push('seen'); }, sendStateTyping: async () => { order.push('typing'); }, clearState: async () => {} });
+  await prepare(bridge); await bridge.send(request());
+  assert.deepEqual(order, ['seen', 'typing']);
+});
+test('react: only whitelisted emoji on a recent incoming message, idempotent, blocked for saved contacts', async t => {
+  const { bridge, client } = await fixture(t);
+  const reactions = [];
+  client.getMessageById = async id => ({ react: async emoji => { reactions.push({ id, emoji }); } });
+  await prepare(bridge);
+  await assert.rejects(bridge.react({ operationId: 'r-0', chatId: USER, replyToId: 'in-1', emoji: '👍' }), /Invalid reaction/);
+  await assert.rejects(bridge.react({ operationId: 'r-1', chatId: USER, replyToId: 'unknown', emoji: '❤️' }), /recent incoming/);
+  assert.deepEqual(await bridge.react({ operationId: 'r-2', chatId: USER, replyToId: 'in-1', emoji: '❤️' }), { operationId: 'r-2', status: 'sent' });
+  await bridge.react({ operationId: 'r-2', chatId: USER, replyToId: 'in-1', emoji: '❤️' });
+  assert.deepEqual(reactions, [{ id: 'in-1', emoji: '❤️' }]);
+  client.contacts.get(USER).isMyContact = true;
+  await assert.rejects(bridge.react({ operationId: 'r-3', chatId: USER, replyToId: 'in-1', emoji: '🌸' }), /excluded/);
+});

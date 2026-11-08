@@ -19,12 +19,19 @@ import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "./courses.js";
 export const BTN_REPORT = "📊 Сводка сейчас";
 export const BTN_WAITING = "⏳ Кто ждёт ответа";
 export const BTN_INVITE = "👥 Приглашение в группу";
+export const BTN_PAYMENTS = "💳 Последние оплаты";
+export const BTN_FIND = "🔎 Найти ученицу";
+export const BTN_GRANT = "🔑 Выдать доступ";
+// Вопрос бота с «ответом» (force_reply): по началу текста узнаём, чей это ответ.
+const PROMPT_FIND = "Кого найти? Ответьте на это сообщение ником";
+const PROMPT_GRANT = "Кому выдать доступ? Ответьте на это сообщение ником";
 const MENU_COMMANDS = ["/start", "/menu", "/меню"];
 
 type TgMessage = {
   message_id?: number;
   text?: string;
   chat?: { id?: number | string; type?: string };
+  reply_to_message?: { text?: string };
   from?: { id?: number | string };
 };
 
@@ -38,11 +45,16 @@ export type MenuQuery = {
 /** Постоянная клавиатура. «Открыть панель» — кнопка мини-приложения, только
  *  если известен https-адрес сайта (иначе Telegram отвергнет всю клавиатуру). */
 export function menuKeyboard(): Record<string, unknown> {
-  const rows: Record<string, unknown>[][] = [[{ text: BTN_REPORT }, { text: BTN_WAITING }], [{ text: BTN_INVITE }]];
+  const rows: Record<string, unknown>[][] = [
+    [{ text: BTN_REPORT }, { text: BTN_WAITING }],
+    [{ text: BTN_INVITE }, { text: BTN_PAYMENTS }],
+    [{ text: BTN_FIND }, { text: BTN_GRANT }],
+    [],
+  ];
   if (env.publicBaseUrl.startsWith("https://")) {
-    rows[1].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
+    rows[3].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
   }
-  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
+  return { keyboard: rows.filter((r) => r.length > 0), resize_keyboard: true, is_persistent: true };
 }
 
 /** Какие группы можно пригласить: только те, у которых в настройках есть ID. */
@@ -104,12 +116,62 @@ export async function buildWaitingText(): Promise<string> {
   return lines.join("\n");
 }
 
+const COURSE_SHORT: Record<string, string> = { COURSE50: "Арт-десерты", COURSE70: "21 рецепт" };
+const handleOf = (c: { username: string | null; igUserId: string }) =>
+  c.username ? `@${c.username}` : `ID ···${c.igUserId.slice(-6)}`;
+
+/** Оплаты за 3 дня: кто, какой курс, сколько. */
+export async function buildPaymentsText(): Promise<string> {
+  const since = new Date(Date.now() - 3 * 24 * 3_600_000);
+  const rows = await prisma.purchase.findMany({
+    where: { createdAt: { gte: since }, revokedAt: null },
+    include: { contact: { select: { username: true, igUserId: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 15,
+  });
+  if (rows.length === 0) return "💳 За 3 дня оплат нет.";
+  const sum = rows.reduce((t, r) => t + r.amount, 0);
+  return [
+    `💳 За 3 дня: ${rows.length} шт. · ${sum} сомони`,
+    ...rows.map((r) => `   ${handleOf(r.contact)} · ${COURSE_SHORT[r.course] ?? r.course} · ${r.amount} с.`),
+  ].join("\n");
+}
+
+/** Карточка ученицы по нику: какие курсы куплены и в группе ли она. */
+export async function buildStudentText(nick: string): Promise<string> {
+  const username = nick.trim().replace(/^@/, "");
+  if (!username) return "Напишите ник, например @malika.";
+  const c = await prisma.contact.findFirst({ where: { username: { in: [username, username.toLowerCase()] } } });
+  if (!c) return `Не нашла @${username}. Проверьте ник.`;
+  const purchases = await prisma.purchase.findMany({
+    where: { contactId: c.id, revokedAt: null },
+    orderBy: { createdAt: "asc" },
+  });
+  if (purchases.length === 0) return `@${c.username}: курсов нет${c.paid ? "" : " (не оплачивала)"}.`;
+  return [
+    `🔎 @${c.username}`,
+    ...purchases.map(
+      (p) => `   ${COURSE_SHORT[p.course] ?? p.course} · ${p.amount} с. · ${p.joinedAt ? "в группе" : "ещё не вошла"}`,
+    ),
+    "Новую ссылку на уроки — кнопка «🔑 Выдать доступ».",
+  ].join("\n");
+}
+
 /** true — сообщение было командой меню и обработано; дальше его вести не нужно. */
 export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
   const text = (message.text ?? "").trim();
   const lower = text.toLowerCase();
   const isMenu = MENU_COMMANDS.some((c) => lower === c || lower.startsWith(`${c}@`));
-  if (!isMenu && ![BTN_REPORT, BTN_WAITING, BTN_INVITE].includes(text)) return false;
+  const replyTo = message.reply_to_message?.text ?? "";
+  const answeringFind = replyTo.startsWith(PROMPT_FIND);
+  const answeringGrant = replyTo.startsWith(PROMPT_GRANT);
+  if (
+    !isMenu &&
+    !answeringFind &&
+    !answeringGrant &&
+    ![BTN_REPORT, BTN_WAITING, BTN_INVITE, BTN_PAYMENTS, BTN_FIND, BTN_GRANT].includes(text)
+  )
+    return false;
 
   // Только личная переписка: в группе учениц эти слова — обычные сообщения.
   if (message.chat?.type && message.chat.type !== "private") return false;
@@ -120,6 +182,27 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
 
   const send = (body: string) => sendTelegramMessage(botToken, chatId, body, message.message_id ?? undefined);
 
+  if (answeringFind) {
+    await send(await buildStudentText(text));
+    return true;
+  }
+  if (answeringGrant) {
+    // Выдача — тем же путём, что команда «/ссылка @ник» (новая ссылка, старая гаснет).
+    const { handleManualLinkCommand } = await import("./course/manualLink.js");
+    await handleManualLinkCommand({ ...message, text: `/ссылка ${text}` });
+    return true;
+  }
+  if (text === BTN_PAYMENTS) {
+    await send(await buildPaymentsText());
+    return true;
+  }
+  if (text === BTN_FIND || text === BTN_GRANT) {
+    await sendWithMarkup(botToken, chatId, text === BTN_FIND ? PROMPT_FIND : PROMPT_GRANT, {
+      force_reply: true,
+      input_field_placeholder: "@ник",
+    });
+    return true;
+  }
   if (isMenu) {
     await sendWithMarkup(botToken, chatId, "Кнопки внизу — быстрые действия. Чеки приходят сюда же, с кнопками.", menuKeyboard());
     return true;

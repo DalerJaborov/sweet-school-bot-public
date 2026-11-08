@@ -23,6 +23,7 @@ const DEFAULT_PACING = {
   typingMinMs: 1500, typingMaxMs: 8000, typingMsPerChar: 40,
   perChatWindowMs: 10 * 60 * 1000, perChatMax: 8, hourMax: 40, dayMax: 200,
 };
+const REACTION_EMOJI = new Set(['❤️', '🌸', '💚', '🤍', '🥰', '😊', '✨', '🌷']);
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -376,6 +377,37 @@ class Bridge {
     finally { if (this.chatChains.get(chatId) === task) this.chatChains.delete(chatId); }
   }
 
+  /**
+   * Реакция-смайлик на ВХОДЯЩЕЕ сообщение (как ставит живой человек на «спасибо»).
+   * Те же замки, что у отправки: свежее входящее в этом чате, контакт не исключён, хозяйка
+   * не перехватила разговор. Идемпотентно по operationId. Смайлики — из короткого белого списка.
+   */
+  async react(input) {
+    const { operationId, chatId, replyToId, emoji } = input || {};
+    if (typeof operationId !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(operationId) || !directId(chatId)
+      || typeof replyToId !== 'string' || !REACTION_EMOJI.has(emoji)) throw failure('Invalid reaction request', 400);
+    const account = this.account();
+    const known = account.operations[operationId];
+    if (known?.status === 'sent') return { operationId, status: 'sent' };
+    if (known) throw failure('Reaction outcome uncertain; do not retry automatically');
+    const inbound = account.events[replyToId];
+    if (!inbound || inbound.type !== 'incoming' || inbound.chatId !== chatId || inbound.accountId !== this.accountId
+      || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
+    await this.assertSendAllowed(chatId, 'reply');
+    account.operations[operationId] = { status: 'sending', chatId, replyToId, purpose: 'reaction', createdAt: this.now() };
+    this.save();
+    try {
+      const message = await this.client.getMessageById(inbound.messageId || replyToId);
+      if (!message) throw new Error('Message not found');
+      await message.react(emoji);
+      account.operations[operationId].status = 'sent'; this.save();
+      return { operationId, status: 'sent' };
+    } catch (error) {
+      account.operations[operationId].status = 'uncertain'; this.save(); this.report(error);
+      throw failure('Reaction outcome uncertain; do not retry automatically');
+    }
+  }
+
   assertWithinLimits(chatId) {
     const p = this.pacing; if (!p) return;
     const account = this.account(); const now = this.now();
@@ -395,6 +427,8 @@ class Bridge {
       const typingMs = Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
       try {
         const chat = await this.client.getChatById?.(chatId);
+        // Прочитала → набирает: так делает человек (owner 08.11.2026). Только когда мы отвечаем.
+        try { await chat?.sendSeen?.(); } catch { /* отметка прочтения не должна ломать «печатает» */ }
         await chat?.sendStateTyping?.();
         await this.sleep(typingMs);
         await chat?.clearState?.();

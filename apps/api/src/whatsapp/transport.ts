@@ -59,3 +59,13 @@ export async function sendWhatsAppAttachment(contact: Recipient, mediaUrl: strin
   const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, mediaUrl, mediaType });
   return whatsappMessageId(auth.accountId, sent.messageId);
 }
+
+/** Реакция-смайлик на текущее входящее сообщение (как у живого человека). Те же замки, что у ответа — их держит мост. */
+export async function sendWhatsAppReaction(contact: Recipient, emoji: string): Promise<void> {
+  if (contact.channel !== "WHATSAPP") throw new Error("Не тот канал отправки");
+  const active = currentWhatsAppTurn();
+  if (!active || active.contactId !== contact.id) throw new Error("WhatsApp: реакция только на новое входящее сообщение");
+  await assertMessagingAllowed();
+  const operationId = createHash("sha256").update(`${active.inboxId}:react`).digest("hex");
+  await bridgeRequest("/react", { operationId, chatId: active.chatId, replyToId: active.messageId, emoji });
+}
