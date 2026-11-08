@@ -309,7 +309,7 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
       ok: "Перенос разрешён, ей написали",
       expired: "Карточка устарела или уже использована: пусть напишет боту снова",
       blocked: "Устройство заблокировано: сначала разблокируйте его в панели",
-      failed: "Не получилось отправить ссылку, попробуйте ещё раз",
+      failed: "Не получилось отправить ссылку. Новая карточка придёт, когда она напишет снова",
     }[done];
     await answerCallback(botToken, query.id, answer);
     return;
