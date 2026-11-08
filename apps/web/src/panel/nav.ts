@@ -11,6 +11,7 @@ export type Tab =
   | "recipes"
   | "receipts"
   | "questions"
+  | "attention"
   | "clients"
   | "more"
   | "summary"
@@ -46,7 +47,7 @@ export const BOTTOM_NAV: { id: Tab; label: string }[] = [
 ];
 
 /** В режиме сестры — только то, что нужно для разбора заявок и чеков. */
-export const SIMPLE_TABS: ReadonlySet<Tab> = new Set<Tab>(["home", "receipts", "questions", "clients", "more"]);
+export const SIMPLE_TABS: ReadonlySet<Tab> = new Set<Tab>(["home", "receipts", "questions", "attention", "clients", "more"]);
 
 /** Разделы экрана «Ещё». Нижняя панель их не дублирует. */
 export const MORE_SECTIONS: SectionInfo[] = [
@@ -79,7 +80,7 @@ export function bottomNavFor(simple: boolean): { id: Tab; label: string }[] {
 
 /** Разделы, которые подсвечивают одну кнопку внизу. */
 export function navOwner(tab: Tab): Tab {
-  if (tab === "questions") return "receipts";
+  if (tab === "questions" || tab === "attention") return "receipts";
   if (tab === "texts" || tab === "recipes") return "courses";
   if (MORE_SECTIONS.some((s) => s.id === tab)) return "more";
   return tab;
