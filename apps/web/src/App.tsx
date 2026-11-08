@@ -45,6 +45,7 @@ const TestimonialsPage = lazyPage(() => import("./pages/TestimonialsPage"), "Tes
 const MediaExamplesPage = lazyPage(() => import("./pages/MediaExamplesPage"), "MediaExamplesPage");
 const ImportPage = lazyPage(() => import("./pages/ImportPage"), "ImportPage");
 const RecipeReviewPage = lazyPage(() => import("./pages/RecipeReviewPage"), "RecipeReviewPage");
+const LinksPage = lazyPage(() => import("./pages/LinksPage"), "LinksPage");
 
 /** Иконка каждого раздела — для сайдбара на ПК и нижней панели. */
 const TAB_ICON: Partial<Record<Tab, JSX.Element>> = {
@@ -56,6 +57,7 @@ const TAB_ICON: Partial<Record<Tab, JSX.Element>> = {
   money: Icons.money,
   summary: Icons.pulse,
   testimonials: Icons.testimonials,
+  links: Icons.attach,
   settings: Icons.settings,
 };
 
@@ -317,6 +319,7 @@ export function App() {
           {tab === "import" && <ImportPage onGo={(t) => (t === "recipes" ? openReview(null) : void goTo(t))} />}
           {tab === "quality" && <QualityPage />}
           {tab === "testimonials" && <TestimonialsPage />}
+          {tab === "links" && <LinksPage />}
           {tab === "settings" && <SettingsPage />}
         </Suspense>
 

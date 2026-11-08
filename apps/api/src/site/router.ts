@@ -17,6 +17,7 @@ import { visitorOf } from "./visitor.js";
 import type { Attachment } from "../ai/media.js";
 import type { Contact, Message } from "@prisma/client";
 import { renderCatalogFragment, renderCatalogUnavailable } from "./catalogFragment.js";
+import { rememberContactSource } from "../links/siteLinks.js";
 
 /**
  * ПУБЛИЧНОЕ API САЙТА shirinsweets.online — каталог, чат с ботом, заявка на
@@ -269,8 +270,12 @@ const MSG_SELECT = { id: true, direction: true, byHuman: true, text: true, image
 
 /** Контакт посетителя. Ник «site-<6 знаков>» — чтобы в панели и карточках
  *  владельцу было видно, что человек с сайта, и чем один отличается от другого. */
-async function siteContact(v: Visitor): Promise<Contact> {
-  return upsertContact(v.id, `site-${v.id.slice(0, 6)}`, "WEB");
+async function siteContact(v: Visitor, req: Request): Promise<Contact> {
+  const contact = await upsertContact(v.id, `site-${v.id.slice(0, 6)}`, "WEB");
+  // С какой рекламной ссылки пришёл (кука /go/<код>, links/siteLinks.ts) —
+  // запоминается один раз, без новых вопросов к человеку.
+  await rememberContactSource(contact, req);
+  return contact;
 }
 
 async function findSiteContact(v: Visitor): Promise<Contact | null> {
@@ -310,7 +315,7 @@ siteRouter.post(`${API_BASE}/chat/start`, async (req: Request, res: Response) =>
     return;
   }
   const v = visitor(res);
-  const contact = await siteContact(v);
+  const contact = await siteContact(v, req);
   // Язык сайта — лучшая подсказка о языке человека до первого сообщения:
   // модель и карточки (offlineCourse.ts) смотрят на preferredLanguage.
   if (parsed.data.lang && contact.preferredLanguage !== parsed.data.lang) {
@@ -375,7 +380,7 @@ siteRouter.post(`${API_BASE}/chat/send`, parseImage, async (req: Request, res: R
   }
   const text = parsed.data.text ?? "";
 
-  const contact = await siteContact(v);
+  const contact = await siteContact(v, req);
 
   // Картинка = чек: тот же конвейер, что у Instagram (rescue → очередь → разбор
   // в aiReply). Сохраняется ДО записи сообщения, чтобы в ленте сайта чек был
@@ -455,7 +460,7 @@ siteRouter.post(`${API_BASE}/offline-signup`, async (req: Request, res: Response
   if (!limit.ok) return tooMany(res, limit);
 
   const { name, phone, lang } = parsed.data;
-  const contact = await siteContact(visitor(res));
+  const contact = await siteContact(visitor(res), req);
   if (lang && contact.preferredLanguage !== lang) {
     await prisma.contact
       .update({ where: { id: contact.id }, data: { preferredLanguage: lang } })

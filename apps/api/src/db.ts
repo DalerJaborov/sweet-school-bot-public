@@ -108,7 +108,10 @@ export async function setSetting(key: string, value: string): Promise<void> {
  *  адрес. Вырезаем значение секретных query-параметров, а не сам факт вызова:
  *  так видно, что произошло, но не видно, чем можно воспользоваться. */
 function redact(msg: string): string {
-  return msg.replace(/((?:access_token|token|key)=)[^&\s"]+/gi, "$1***");
+  return msg
+    .replace(/((?:access_token|token|key)=)[^&\s"]+/gi, "$1***")
+    // Telegram Bot API несёт токен прямо в пути: https://api.telegram.org/bot<id>:<секрет>/…
+    .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot***");
 }
 
 /**
