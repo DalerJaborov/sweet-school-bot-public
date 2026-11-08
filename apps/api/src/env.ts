@@ -21,6 +21,15 @@ export const env = {
   elevenLabsKey: process.env.ELEVENLABS_API_KEY ?? "",
   elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? "",
   elevenLabsModel: process.env.ELEVENLABS_MODEL ?? "eleven_v3",
+  /// Ползунки голоса (владелец подбирает на слух на сайте ElevenLabs и переносит сюда). Пусто — умолчания из voiceClone.ts.
+  elevenLabsStability: Number(process.env.ELEVENLABS_STABILITY) || 0,
+  elevenLabsSimilarity: Number(process.env.ELEVENLABS_SIMILARITY) || 0,
+  /// Метка эмоции в начале голосового для v3/v4, например «[warm]». Пусто — без метки.
+  elevenLabsTag: (process.env.ELEVENLABS_TAG ?? "").trim(),
+  /// Темп готового голосового (ffmpeg atempo): 1.0 — как есть, 1.07 — чуть быстрее. У v4 своего ползунка скорости нет.
+  elevenLabsTempo: Number(process.env.ELEVENLABS_TEMPO) || 1,
+  /// «Телефонное» звучание голосового бота: none — чистый голос, light — мягкая обрезка частот и чуть шума, strong — узкий телефонный звук.
+  elevenLabsFx: (["none", "light", "strong"] as const).find((v) => v === (process.env.ELEVENLABS_FX ?? "none").trim()) ?? "none",
   /// Публичный адрес самого бота — нужен, чтобы собрать ссылку на загруженный файл
   /// (фото/видео шага воронки), которую сможет скачать сервер Meta.
   /// Без этого медиа-вложения в воронках не работают — Meta не может скачать файл.

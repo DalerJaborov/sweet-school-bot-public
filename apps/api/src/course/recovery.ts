@@ -1,5 +1,6 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
-import { deviceLimitFor, deviceCountFor, releaseDevice, ownerOfExpiredLink } from "./access.js";
+import { handlePhoneChange, isAwaitingProof, phoneChangeProof } from "./phoneChange.js";
+import { ownerOfExpiredLink, recentlyHitDeviceLimit } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
@@ -8,6 +9,7 @@ import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact, Purchase } from "@prisma/client";
 import { isBotFrozen, contactAutomationBlocked } from "../messaging/automation.js";
+import { parseRecoveryCode, findContactByRecoveryCode } from "./linkCode.js";
 
 /**
  * САМОВОССТАНОВЛЕНИЕ ДОСТУПА — «не открывается курс, дайте ссылку заново».
@@ -50,16 +52,18 @@ const WINDOW_DAYS = 30;
  * belong to support, not to token or device management.
  */
 const ACCESS_SUBJECT = /(ссылк|доступ|кабинет|курс|урок[иов]*|линк|дастрас|дарс)/iu;
-const ACCESS_PROBLEM =
-  /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
-const NEW_DEVICE = /(смен(ил|ила)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав)/iu;
+const ACCESS_PROBLEM = /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
+const NEW_DEVICE = /(это\s+мой\s+новый\s+телефон|смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
 const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ/iu;
 
-const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string }> = {
+const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string; foreign: string }> = {
   ru: {
+    foreign:
+      "Поняла вас. Это другой чат, поэтому ссылку здесь сама выдать не могу. Передала Ширин: " +
+      "она проверит покупку и откроет доступ.",
     sent: "Вот новая ссылка на ваши уроки. Откройте её на том телефоне, где будете смотреть:\n",
     pending:
       "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
@@ -67,6 +71,9 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
     revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Ширин посмотрит и напишет вам сама.",
   },
   tg: {
+    foreign:
+      "Фаҳмидам. Ин чати дигар аст, барои ҳамин линкро худам дода наметавонам. Ба Ширин расондам: " +
+      "ӯ харидро месанҷад ва дастрасиро мекушояд.",
     sent: "Мана линки нави дарсҳоятон. Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
     pending:
       "Хариди шуморо дидам. Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
@@ -74,6 +81,7 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
     revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида. Ширин месанҷад ва худаш менависад.",
   },
   en: {
+    foreign: "This is a different chat, so I cannot issue the link here. I passed this to Shirin, she will check the purchase and open access.",
     sent: "Here is a fresh link to your lessons. Open it on the phone you will watch on:\n",
     pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
     revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
@@ -86,11 +94,9 @@ export type RecoveryResult = { handled: false } | { handled: true; outcome: "rei
 export function looksLikeAccessRequest(text: string): boolean {
   const trimmed = text?.trim();
   if (!trimmed || trimmed.length > 400) return false;
-  return (
-    DEVICE_LIMIT_HINT.test(trimmed) ||
-    NEW_DEVICE.test(trimmed) ||
-    (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed))
-  );
+  // Код покупательницы из готового сообщения страницы курса — сам по себе просьба.
+  return parseRecoveryCode(trimmed) !== null || DEVICE_LIMIT_HINT.test(trimmed) || NEW_DEVICE.test(trimmed) ||
+    (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed));
 }
 
 /**
@@ -98,9 +104,30 @@ export function looksLikeAccessRequest(text: string): boolean {
  * ИИ-консультанту отвечать уже не нужно — иначе он поверх выдачи ссылки скажет
  * что-то своё, и человек получит два разных ответа на один вопрос.
  */
-export async function maybeRestoreAccess(contact: Contact, text: string): Promise<RecoveryResult> {
+export async function maybeRestoreAccess(
+  contact: Contact,
+  text: string,
+  imageHashes: string[] = []
+): Promise<RecoveryResult> {
   if (await isBotFrozen()) return { handled: false };
-  if (!looksLikeAccessRequest(text)) return { handled: false };
+  // Бот уже просил доказательство смены телефона: код, картинка или имя с номером — продолжение.
+  const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
+  if (!waiting && !looksLikeAccessRequest(text)) return { handled: false };
+  // Ждём доказательство, а пришло просто фото (домашка) или чужой код: это не наш случай.
+  if (waiting && !looksLikeAccessRequest(text) && !(await phoneChangeProof(contact, text, imageHashes))) {
+    return { handled: false };
+  }
+
+  // Код из ссылки: покупка могла быть сделана в другом чате. Бот выдаёт ссылку
+  // САМ только когда код указывает на ЭТОТ ЖЕ контакт; на чужой — только владельцу.
+  const code = parseRecoveryCode(text);
+  if (code) {
+    const owner = await findContactByRecoveryCode(code).catch((err) => {
+      logError("recovery:codeLookup", err);
+      return null;
+    });
+    if (owner && owner.id !== contact.id) return handleForeignCode(contact, owner, text);
+  }
 
   const verdict = await eligibility(contact);
   // Ничего не покупал — это не наш случай, пусть отвечает консультант: человек
@@ -114,6 +141,31 @@ export async function maybeRestoreAccess(contact: Contact, text: string): Promis
     await tellOwner(contact, "просит доступ, но он ОТОЗВАН — решайте вы", verdict.purchases, 0);
     return { handled: true, outcome: "revoked" };
   }
+  // Смена телефона — отдельный путь с доказательством (phoneChange.ts): простая
+  // ссылка устройства не снимает, перенос делает только бот и только при
+  // совпавших данных, не чаще раза в 30 дней. Лимит перевыдач ссылки сюда не
+  // относится: это не «потеряла ссылку».
+  // Переносим только после настоящего отказа «курс открыт на другом телефоне»
+  // (или с кодом/чеком из экрана): иначе «новый телефон» в разговоре — не просьба.
+  const hitLimit = recentlyHitDeviceLimit(contact.id) || parseRecoveryCode(text) !== null || imageHashes.length > 0;
+  if (hitLimit && (waiting || DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text))) {
+    const active = verdict.active;
+    const paidProof = await hasPaymentProof(contact.id);
+    if (!paidProof || (await deliveryModeFor(contact)) === "telegram") {
+      await reply(contact, TEXTS[language].pending);
+      await tellOwner(
+        contact,
+        paidProof ? "просит сменить телефон, но выдача идёт через Telegram-группу" : "просит сменить телефон, но чека в базе нет",
+        active.length,
+        0,
+      );
+      return { handled: true, outcome: "escalated" };
+    }
+    if (await isBotFrozen()) return { handled: false };
+    const outcome = await handlePhoneChange(contact, text, language, imageHashes);
+    return { handled: true, outcome: outcome === "changed" ? "reissued" : "escalated" };
+  }
+
   if (verdict.kind === "escalate") {
     await reply(contact, TEXTS[language].pending);
     await tellOwner(contact, verdict.why, verdict.active.length, verdict.reissues);
@@ -121,12 +173,6 @@ export async function maybeRestoreAccess(contact: Contact, text: string): Promis
   }
   const { active, reissues: reissuesUsed } = verdict;
 
-  // Освобождаем место под новый телефон: человек пишет как раз потому, что
-  // старое устройство ему больше недоступно. Самое давнее уходит первым.
-  // Устройства и ссылка — на человека, поэтому по одному разу, не по курсам.
-  if (await isBotFrozen()) return { handled: false };
-  // A request for a link never implicitly removes another device.
-  const releaseDevice = DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text);
   if (await isBotFrozen()) return { handled: false };
   const url = await issueCourseLink(contact.id, { automatic: true });
   if (!url || !(await reply(contact, TEXTS[language].sent + url))) {
@@ -138,7 +184,6 @@ export async function maybeRestoreAccess(contact: Contact, text: string): Promis
     );
     return { handled: true, outcome: "escalated" };
   }
-  if (releaseDevice && !(await isBotFrozen())) await releaseOldestDevice(contact.id);
   await noteReissue(contact, active, reissuesUsed, "бот сам выдал ссылку");
   return { handled: true, outcome: "reissued" };
 }
@@ -324,6 +369,43 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
   return "sent";
 }
 
+/**
+ * Код указывает на другого покупателя: человек пишет с другого номера/канала.
+ * Ссылку не выдаём НИКОГДА (кто угодно мог увидеть код в чужой переписке) —
+ * только передаём владельцу, кто покупатель, и он подтверждает одним действием.
+ */
+async function handleForeignCode(contact: Contact, owner: Contact, text: string): Promise<RecoveryResult> {
+  const language = detectClientLanguage(text);
+  const purchases = await prisma.purchase.findMany({ where: { contactId: owner.id }, orderBy: { createdAt: "desc" } });
+  const active = purchases.filter((p) => !p.revokedAt);
+  await reply(contact, TEXTS[language].foreign);
+
+  const courses = purchases
+    .map((p) => `${p.course}, куплено ${p.createdAt.toISOString().slice(0, 10)}${p.revokedAt ? " (ДОСТУП ОТОЗВАН)" : ""}`)
+    .join("; ");
+  const buyer = [owner.name, owner.username ? `@${owner.username}` : null, `${owner.channel} ${owner.igUserId}`]
+    .filter(Boolean)
+    .join(", ");
+  const writer = `${contact.channel} ${contact.username ? `@${contact.username}` : contact.igUserId}`;
+  const verdict = purchases.length === 0
+    ? "покупок по коду нет"
+    : active.length === 0
+      ? "покупка ОТОЗВАНА — не открывайте без причины"
+      : "покупка действует; если это она, выдайте доступ командой /ссылка на ник покупателя";
+  await sendOwnerAlert(
+    `recovery-code:${owner.id}:${contact.id}`,
+    `Просят ссылку по коду из ссылки, но пишут с ДРУГОГО чата.
+Покупатель: ${buyer}
+Курсы: ${courses || "нет"}
+` +
+      `Пишет: ${writer}
+${verdict}
+Бот ссылку сам НЕ выдавал.`
+  );
+  logInfo("course:recovery", `код другого контакта: пишет ${contact.id}, покупатель ${owner.id}`);
+  return { handled: true, outcome: "escalated" };
+}
+
 /** Есть ли в данных след реальной оплаты. */
 async function hasPaymentProof(contactId: string): Promise<boolean> {
   const approved = await prisma.receiptCheck.count({
@@ -343,38 +425,6 @@ function countRecentReissues(purchases: { linkReissueCount: number; linkReissued
     if (!p.linkReissuedAt || p.linkReissuedAt.getTime() < since) return max;
     return Math.max(max, p.linkReissueCount);
   }, 0);
-}
-
-/**
- * Освободить место под новое устройство. Удаляем самое давно не появлявшееся:
- * это либо потерянный телефон, либо браузер, которым больше не пользуются.
- * Заблокированные владельцем не трогаем — их сняли осознанно.
- */
-async function releaseOldestDevice(contactId: string): Promise<void> {
-  // Лимит и счёт занятых — ТЕ ЖЕ функции, что решают «пускать или нет» в
-  // access.ts. Раньше здесь было своё представление (запас 3 и только
-  // незаблокированные), и место не освобождалось ровно тогда, когда было
-  // нужно.
-  const limit = await deviceLimitFor(contactId);
-  const used = await deviceCountFor(contactId);
-  if (used < limit) return;
-
-  // Освобождаем ровно одно место — самое давно не появлявшееся из
-  // НЕзаблокированных: заблокированные считаются занятыми, но сняли их
-  // осознанно, и оживлять место за их счёт нельзя.
-  const oldest = await prisma.device.findFirst({
-    where: { contactId, blockedAt: null },
-    orderBy: { lastSeenAt: "asc" },
-  });
-  if (!oldest) {
-    // Все места заняты заблокированными — это уже к владельцу, а не к автомату.
-    logError(
-      "recovery:releaseDevice",
-      new Error(`контакт ${contactId}: все устройства заблокированы, место не освободить`),
-    );
-    return;
-  }
-  await releaseDevice(oldest, "bot").catch((err) => logError("recovery:releaseDevice", err));
 }
 
 async function reply(contact: Contact, text: string): Promise<boolean> {
@@ -398,23 +448,19 @@ async function tellOwner(
   reissues: number,
   opts: { always?: boolean } = {}
 ): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
+  const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
+  const text = `${who}: ${what}
+Курсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`;
   // always — случай, где кроме хозяйки помочь некому (покупательница с сайта):
   // суточное глушение не действует. От двойного нажатия защищает relinkBySiteToken.
-  if (opts.always && botToken && chatId) {
-    const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
-    await sendTelegramMessage(botToken, chatId, `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`)
-      .catch((err) => logError("recovery:tellOwner", err));
-    return;
-  }
+  await sendOwnerAlert(`recovery:${contact.id}`, text, opts.always === true);
+}
+
+async function sendOwnerAlert(gateKey: string, text: string, always = false): Promise<void> {
+  const botToken = (await getSetting("telegramBotToken"))?.trim();
+  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!botToken || !chatId) return;
-  // Одна и та же ученица — не чаще раза в сутки (08.11.2026).
-  if (!(await shouldSendAlert(`recovery:${contact.id}`, { cooldownMs: 24 * 3_600_000 }))) return;
-  const who = contact.username ? `@${contact.username}` : contact.igUserId;
-  await sendTelegramMessage(
-    botToken,
-    chatId,
-    `${who}: ${what}\nКурсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
-  ).catch((err) => logError("recovery:tellOwner", err));
+  // Одно и то же — не чаще раза в сутки (08.11.2026), кроме always.
+  if (!always && !(await shouldSendAlert(gateKey, { cooldownMs: 24 * 3_600_000 }))) return;
+  await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("recovery:tellOwner", err));
 }

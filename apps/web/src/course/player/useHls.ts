@@ -149,7 +149,11 @@ export function useHls(
           if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) setStalled(true);
           return;
         }
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && data.response?.code === 409) {
+          // Сервер: курс играет на другом телефоне. Повторы бессмысленны.
+          setStalled(false);
+          setError("elsewhere");
+        } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
           if (networkRetries.current < NETWORK_RETRIES) {
             const attempt = networkRetries.current;
             networkRetries.current += 1;

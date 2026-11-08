@@ -1,4 +1,6 @@
 import type { Contact } from "@prisma/client";
+import { deliveryMode } from "./delivery.js";
+import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
 import { detectClientLanguage } from "../ai/clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
@@ -35,6 +37,10 @@ export async function deferGrantForChoice(
   verdict: { amount: number | null; currency?: string | null }, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" },
 ): Promise<boolean> {
   if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return false;
+  // Вопрос «куда прислать уроки» нужен только когда владелец выбрал «обе ссылки» (both).
+  // В режимах telegram/web человек после оплаты сразу получает одну ссылку, без вопросов
+  // (владелец 08.11.2026: «получаем деньги — бот отправляет ссылку на Телеграм, и всё»).
+  if ((await deliveryMode()) !== "both") return false;
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh) return false;
   if (isDeliveryChoice(fresh.courseDeliveryChoice)) {
@@ -43,7 +49,7 @@ export async function deferGrantForChoice(
   }
   if (fresh.accessRevokedAt || fresh.spamBlockedAt) return true;
   if (!opts.byHuman && await isBotFrozen()) return true;
-  let createdNew = false;
+  const createdIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     // Сумма делится только между НОВЫМИ покупками (ревью PR 72): курс, выданный
     // раньше, не должен уменьшать долю нового (35 вместо 70).
@@ -57,22 +63,24 @@ export async function deferGrantForChoice(
       if (prior) {
         await tx.purchase.update({ where: { id: prior.id }, data: { deliveryAwaitingChoice: true } });
       } else {
-        createdNew = true;
         const myShare = shares[Math.max(0, newCourses.indexOf(course))] ?? Math.round(amount);
         const catalog = await tx.course.findUnique({ where: { code: course } });
-        await tx.purchase.create({ data: {
+        const created = await tx.purchase.create({ data: {
           contactId: contact.id, course, courseId: catalog?.id ?? null,
           amount: myShare,
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", deliveryAwaitingChoice: true,
         } });
+        if (created?.id) createdIds.push(created.id);
       }
     }
     await tx.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
   });
+  // Оплата подтверждена уже здесь — выбор «куда прислать уроки» её не меняет.
+  await enqueuePurchaseConversion(contact.id, createdIds);
   // Напоминание - только когда появился НОВЫЙ платёж; повтор той же выдачи (ретрай)
   // вопрос не дублирует.
   if (await awaitingDeliveryChoice(contact.id)) {
-    if (createdNew) await askOrRemindDeliveryChoice(fresh, opts);
+    if (createdIds.length > 0) await askOrRemindDeliveryChoice(fresh, opts);
     else await askDeliveryChoice(fresh, opts);
   }
   return true;

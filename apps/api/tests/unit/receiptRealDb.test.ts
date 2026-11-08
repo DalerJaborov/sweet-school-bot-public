@@ -69,6 +69,7 @@ beforeEach(async () => {
     await (db[t] as unknown as { deleteMany: () => Promise<unknown> }).deleteMany();
   }
   await db.setting.create({ data: { key: "telegramBotToken", value: "tok" } });
+  await db.setting.create({ data: { key: "courseDeliveryMode", value: "both" } });
 });
 
 async function newContact(id: string) {

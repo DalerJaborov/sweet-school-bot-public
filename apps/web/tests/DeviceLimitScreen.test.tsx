@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { describe, it, expect, afterEach } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
 import { DeviceLimitScreen } from "../src/course/screens/DeviceLimitScreen";
 import { dict, formatLastSeen } from "../src/course/i18n";
 import type { DeviceLimitState } from "../src/course/hooks/useCourse";
@@ -9,25 +9,9 @@ const DAY = 86_400_000;
 
 function limit(over: Partial<DeviceLimitState> = {}): DeviceLimitState {
   return {
-    devices: [
-      {
-        id: "d1",
-        label: "iPhone",
-        city: "Душанбе",
-        lastSeenAt: new Date(Date.now() - DAY).toISOString(),
-        blocked: false,
-      },
-      {
-        id: "d2",
-        label: "Компьютер",
-        city: null,
-        lastSeenAt: new Date(Date.now() - 30 * DAY).toISOString(),
-        blocked: true,
-      },
-    ],
-    swapsLeft: 1,
+    devices: [{ id: "d1", label: "Android", city: "Душанбе", lastSeenAt: new Date(Date.now() - DAY).toISOString(), blocked: false }],
+    phone: "SM-A515F",
     school: null,
-    busy: false,
     ...over,
   };
 }
@@ -35,47 +19,60 @@ function limit(over: Partial<DeviceLimitState> = {}): DeviceLimitState {
 afterEach(cleanup);
 
 /**
- * Лимит устройств (дизайн доступа 03.09.2026): вместо тупика «напишите нам» —
- * список занятого и кнопка «заменить самое старое», пока замены есть.
+ * Второй телефон (владелец 08.11.2026): кнопок «Перенести» и «Купить» и поля кода
+ * нет; экран говорит про отдельный доступ и отправляет к боту.
  */
 describe("DeviceLimitScreen", () => {
-  it("перечисляет устройства: подпись, город, «вчера», значок блокировки", () => {
-    render(<DeviceLimitScreen t={t} limit={limit()} onReplace={() => undefined} />);
-    expect(screen.getByText("iPhone · Душанбе")).toBeTruthy();
-    expect(screen.getByText("Компьютер")).toBeTruthy();
-    expect(screen.getByText("в сети вчера")).toBeTruthy();
-    expect(screen.getByText("заблокировано")).toBeTruthy();
+  it("ГЛАВНОЕ: «нужен отдельный доступ на другой аккаунт или номер, напишите Ширин» и «напишите боту»", () => {
+    render(<DeviceLimitScreen t={t} limit={limit()} />);
+    expect(screen.getByText(t.deviceLimitTitle)).toBeTruthy();
+    expect(
+      screen.getByText("Для второго телефона нужен отдельный доступ, он оформляется на другой аккаунт или номер, напишите Ширин."),
+    ).toBeTruthy();
+    expect(screen.getByText("Если это ваш телефон, напишите боту, он проверит и откроет.")).toBeTruthy();
   });
 
-  it("ГЛАВНОЕ: «заменить самое старое» зовёт /open с replaceOldest, пока замены есть", () => {
-    const onReplace = vi.fn();
-    render(<DeviceLimitScreen t={t} limit={limit()} onReplace={onReplace} />);
-    fireEvent.click(screen.getByRole("button", { name: t.replaceOldest }));
-    expect(onReplace).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Осталось замен: 1")).toBeTruthy();
+  it("не обещает «купите курс для этого телефона», нет кнопок и поля кода, нет цифр про лимит", () => {
+    const { container } = render(<DeviceLimitScreen t={t} limit={limit()} />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByLabelText(/код/i)).toBeNull();
+    expect(container.textContent).not.toMatch(/купите курс|30|#kupit/);
+    expect(container.querySelector("a[href*='kupit']")).toBeNull();
   });
 
-  it("пока запрос идёт — кнопка выключена, чтобы не заменить дважды", () => {
-    render(<DeviceLimitScreen t={t} limit={limit({ busy: true })} onReplace={() => undefined} />);
-    expect((screen.getByRole("button", { name: t.replaceOldest }) as HTMLButtonElement).disabled).toBe(true);
+  it("на таджикском тот же смысл", () => {
+    const tg = dict("tg");
+    render(<DeviceLimitScreen t={tg} limit={limit({ phone: null })} />);
+    expect(screen.getByText(/дастрасии алоҳида лозим аст/)).toBeTruthy();
+    expect(screen.getByText(/ба бот нависед/)).toBeTruthy();
   });
 
-  it("замены кончились — кнопки нет, есть «напишите нам» и контакты школы", () => {
+  it("главная кнопка «Написать в чат»: WhatsApp с готовым текстом и публичным кодом из ссылки", () => {
+    localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+    render(<DeviceLimitScreen t={t} limit={limit({ school: { telegram: null, instagram: null, whatsapp: "https://wa.me/992900000000" } })} />);
+    const link = screen.getByRole("link", { name: t.deviceLimitWrite }) as HTMLAnchorElement;
+    const href = link.getAttribute("href") ?? "";
+    expect(href.startsWith("https://wa.me/992900000000?text=")).toBe(true);
+    const text = decodeURIComponent(href.split("text=")[1]);
+    expect(text).toContain("Я сменила телефон");
+    expect(text).toContain("7F3A-91C2");
+    localStorage.removeItem("course.recoveryCode");
+  });
+
+  it("покупка в Instagram: кнопка ведёт в Instagram, а не в WhatsApp", () => {
     render(
       <DeviceLimitScreen
         t={t}
-        limit={limit({ swapsLeft: 0, school: { telegram: "https://t.me/x", instagram: null, whatsapp: null } })}
-        onReplace={() => undefined}
+        limit={limit({ channel: "INSTAGRAM", school: { telegram: null, instagram: "https://ig.me/m/shirin", whatsapp: "https://wa.me/992900000000" } })}
       />,
     );
-    expect(screen.queryByRole("button", { name: t.replaceOldest })).toBeNull();
-    expect(screen.getByText(t.noSwapsLeft)).toBeTruthy();
-    expect(screen.getByRole("link", { name: t.telegramGroup })).toBeTruthy();
+    const link = screen.getByRole("link", { name: t.deviceLimitWrite }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://ig.me/m/shirin");
   });
 
-  it("на таджикском подписи устройств тоже переведены", () => {
-    render(<DeviceLimitScreen t={dict("tg")} limit={limit()} onReplace={() => undefined} />);
-    expect(screen.getByText("Компютер")).toBeTruthy();
+  it("контакты школы показываются, если известны", () => {
+    render(<DeviceLimitScreen t={t} limit={limit({ school: { telegram: "https://t.me/x", instagram: null, whatsapp: null } })} />);
+    expect(screen.getByRole("link", { name: t.telegramGroup })).toBeTruthy();
   });
 });
 
