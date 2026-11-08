@@ -1,12 +1,19 @@
 <!doctype html>
 <html lang="ru">
   <head>
+    <meta charset="UTF-8" />
     <!-- Панель всегда светлая (решение владельца): фиксируем и на уровне
          браузера, иначе телефон с тёмной системной темой на миг красит страницу
          чёрным до загрузки скриптов. -->
     <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#FFF8F3" />
-    <meta charset="UTF-8" />
+    <meta name="theme-color" content="#f3f2ef" />
+    <!-- Панель как приложение: свой манифест (область /panel/), не путать с
+         приложением учениц (manifest.webmanifest, /course). -->
+    <link rel="manifest" href="/panel.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Shirin" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="robots" content="noindex, nofollow" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Shirin — панель</title>

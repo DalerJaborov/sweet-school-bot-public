@@ -311,6 +311,10 @@ model Message {
   /// проблемных мест, ради которого не нужно просить её что-то отмечать руками.
   byHuman   Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  /// Последнее сообщение разговора ищут по (contactId, createdAt): экран «Сегодня»
+  /// и сводки. Без индекса это полный проход по таблице.
+  @@index([contactId, createdAt])
 }
 
 /// Воронка. trigger:
@@ -1030,6 +1034,7 @@ model WhatsAppInbox {
   replyToId String?
   status String @default("pending")
   attempts Int @default(0)
+  attentionReason String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([status, createdAt])

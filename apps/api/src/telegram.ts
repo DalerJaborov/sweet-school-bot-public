@@ -299,6 +299,37 @@ export async function createOneTimeInviteLink(
   }
 }
 
+/** Сообщение с произвольной клавиатурой (постоянное меню внизу или кнопки под
+ *  текстом) — для меню быстрых действий владельца и сестры (telegramMenu.ts). */
+export async function sendWithMarkup(
+  botToken: string,
+  chatId: string,
+  text: string,
+  replyMarkup: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = (await res.json()) as { ok?: boolean; description?: string };
+    if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+    return true;
+  } catch (err) {
+    logError("telegram:markup", err);
+    return false;
+  }
+}
+
+function parseChatIds(raw: string | null | undefined): string[] {
+  return (raw ?? "")
+    .split(/[\s,;]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
 /**
  * Погасить ссылку-приглашение в группе chatId. true — Telegram подтвердил или
  * ссылка уже мертва. Одна дверь для автоматических ссылок бота: отзыв после
@@ -321,13 +352,45 @@ export async function revokeInviteLink(botToken: string, chatId: string, inviteL
   }
 }
 
+
 /**
- * Кому слать тревоги владельцу: личный чат (telegramOwnerChatId) и чат сводок
- * (telegramReportChatId), без дублей. На проде 05.09.2026 ключ владельца
- * оказался переименован в «…_paused» — и всё, что писало только в него
- * (запись на офлайн-курс, часть тревог), молча пропадало. Один список на всех.
+ * ТЕХНИЧЕСКИЕ УВЕДОМЛЕНИЯ — ТОЛЬКО ВЛАДЕЛЬЦУ (решение 08.11.2026).
+ *
+ * Сбои, токены Instagram, зависания, тревоги доступа, напоминания — всё, что
+ * не нужно сестре. Явная настройка `telegramTechChatId` (через запятую); пока
+ * она пуста — чат сводок владельца (`telegramReportChatId`). Личный чат сестры
+ * (`telegramOwnerChatId`) сюда НЕ входит никогда.
+ *
+ * Не путать с `telegramAdminIds` — это список тех, кто может войти в панель.
  */
-export async function ownerAlertChatIds(): Promise<string[]> {
-  const ids = [(await getSetting("telegramOwnerChatId"))?.trim(), (await getSetting("telegramReportChatId"))?.trim()];
+export async function techChatIds(): Promise<string[]> {
+  const explicit = parseChatIds(await getSetting("telegramTechChatId"));
+  if (explicit.length > 0) return [...new Set(explicit)];
+  const report = (await getSetting("telegramReportChatId"))?.trim();
+  return report ? [report] : [];
+}
+
+/**
+ * ВЕЧЕРНЯЯ СВОДКА И КАРТОЧКИ ПОДОЗРИТЕЛЬНЫХ ЧЕКОВ — ВЛАДЕЛЬЦУ И СЕСТРЕ.
+ * Настройка `telegramSummaryChatIds`; пока пуста — прежняя пара
+ * (`telegramOwnerChatId` + `telegramReportChatId`).
+ */
+export async function summaryChatIds(): Promise<string[]> {
+  const explicit = parseChatIds(await getSetting("telegramSummaryChatIds"));
+  const ids =
+    explicit.length > 0
+      ? explicit
+      : [(await getSetting("telegramOwnerChatId"))?.trim(), (await getSetting("telegramReportChatId"))?.trim()];
+  return [...new Set(ids.filter((id): id is string => Boolean(id)))];
+}
+
+/** Все свои чаты: кому разрешено нажимать кнопки и писать боту. */
+export async function trustedChatIds(): Promise<string[]> {
+  const ids = [
+    ...(await summaryChatIds()),
+    ...(await techChatIds()),
+    (await getSetting("telegramOwnerChatId"))?.trim(),
+    (await getSetting("telegramReportChatId"))?.trim(),
+  ];
   return [...new Set(ids.filter((id): id is string => Boolean(id)))];
 }

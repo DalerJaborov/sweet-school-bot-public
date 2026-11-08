@@ -174,12 +174,14 @@ async function persistAndMaybeAlert(source: string, text: string): Promise<void>
 
     await prisma.errorLog.create({ data: { source, message: text.slice(0, 2000) } });
 
-    if (!seenLately) {
-      try {
-        newErrorHook?.(source, text);
-      } catch {
-        // Крючок не должен ронять запись самой ошибки.
-      }
+    // Крючок зовём на каждую неотсеянную запись (раз в 10 минут на вид ошибки):
+    // отправлять ли что-то, решает шлюз alertGate.ts — тревога только если сбой
+    // идёт дольше 30 минут и не чаще раза в 6 часов (08.11.2026).
+    void seenLately;
+    try {
+      newErrorHook?.(source, text);
+    } catch {
+      // Крючок не должен ронять запись самой ошибки.
     }
   } catch {
     // Журнал ошибок не должен ломать то, об ошибке чего он пишет. Если

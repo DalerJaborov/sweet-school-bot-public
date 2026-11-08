@@ -117,10 +117,10 @@ describe("вход по ссылке из панели (chat_member)", () => {
     db = mockPrisma();
     telegramCalls.length = 0;
     db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-      ({ telegramBotToken: "1:abc", telegramOwnerChatId: "777", telegramChatId50: "-1001" })[where.key]
+      ({ telegramBotToken: "1:abc", telegramReportChatId: "777", telegramChatId50: "-1001" })[where.key]
         ? {
             value: (
-              { telegramBotToken: "1:abc", telegramOwnerChatId: "777", telegramChatId50: "-1001" } as Record<
+              { telegramBotToken: "1:abc", telegramReportChatId: "777", telegramChatId50: "-1001" } as Record<
                 string,
                 string
               >

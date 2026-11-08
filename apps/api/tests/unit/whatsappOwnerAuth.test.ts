@@ -18,7 +18,8 @@ describe("WhatsApp owner routes use actual parent authentication", () => {
     ["GET", "/admin/v1/whatsapp/status"], ["POST", "/admin/v1/whatsapp/start"],
     ["POST", "/admin/v1/whatsapp/resume"], ["POST", "/admin/v1/whatsapp/logout"],
     ["GET", "/admin/v1/conversations/paused"], ["POST", "/admin/v1/conversations/c/resume"],
-    ["POST", "/admin/v1/conversations/c/block"],
+    ["POST", "/admin/v1/conversations/c/block"], ["GET", "/admin/v1/conversations/attention"],
+    ["POST", "/admin/v1/conversations/c/answered"], ["POST", "/admin/v1/conversations/c/return-to-bot"],
   ])("rejects unauthenticated %s %s before side effects", async (method, path) => {
     const response = await fetch(base + path, { method, headers: { authorization: "Bearer invalid" } });
     expect(response.status).toBe(401);

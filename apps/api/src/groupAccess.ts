@@ -1,5 +1,6 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
+import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
+import { shouldSendAlert } from "./alertGate.js";
 import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryModeFor, issueCourseLink } from "./course/delivery.js";
@@ -112,17 +113,13 @@ async function alertUnexplainedJoin(update: ChatMemberUpdate, link: string | und
 
   // Те же двое получателей, что и в остальных алертах бота (askOwner в ai.ts,
   // maybeSendDailyReport в dailyReport.ts) — сестра и владелец, дубли отсечены.
-  const recipients = [
-    ...new Set(
-      [
-        (await getSetting("telegramOwnerChatId"))?.trim(),
-        (await getSetting("telegramReportChatId"))?.trim(),
-      ].filter((id): id is string => Boolean(id))
-    ),
-  ];
+  // Только владельцу (telegramTechChatId).
+  const recipients = await techChatIds();
   if (recipients.length === 0) return;
 
   const user = update.new_chat_member?.user;
+  // Один и тот же вход (человек + группа) — не чаще раза в 6 часов.
+  if (!(await shouldSendAlert(`join:${user?.id ?? "?"}:${update.chat?.id ?? "?"}`))) return;
   const who = user?.username ? `@${user.username}` : user?.first_name ?? "без имени";
   const group = (await courseNameForChat(update.chat?.id)) ?? `неизвестная группа (chat_id ${update.chat?.id ?? "?"})`;
   const how = link ? "по ссылке, которую не узнаём — возможно слитая" : "без ссылки вообще";
@@ -405,7 +402,7 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
 }
 
 async function notifyOwner(botToken: string, who: string, reason: string, details: string, mark = "🚫"): Promise<void> {
-  const chatId = (await ownerAlertChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
+  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!chatId) return;
   const title = mark === "🔓" ? `${mark} Доступ возвращён` : `${mark} Доступ отобран`;
   await sendTelegramMessage(botToken, chatId, `${title} у ${who}\nПричина: ${reason}\n${details}`).catch((err) =>

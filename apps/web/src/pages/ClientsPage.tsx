@@ -49,10 +49,10 @@ type Client = {
 const clientWho = (c: Client) => c.channel === "MANUAL" ? c.name || c.igUserId : shortWho(c.username, c.igUserId);
 
 const STATE_LABEL: Record<string, string> = {
-  ACTIVE: "воронка идёт",
-  WAITING: "ждёт кнопку",
-  DONE: "прошёл воронку",
-  FAILED: "сбой воронки",
+  ACTIVE: "автосообщения идут",
+  WAITING: "ждёт нажатия кнопки",
+  DONE: "прошёл автосообщения",
+  FAILED: "сбой автосообщений",
 };
 
 type Filter = "all" | "paid" | "waiting" | "personal" | "spam";
@@ -154,8 +154,8 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
 
   return (
     <div className="card">
-      <h2>{Icons.clients} Ученицы</h2>
-      <p className="hint">Кто писал и на каком она шаге. «Личный» — бот с этим человеком молчит навсегда.</p>
+      <h2>{Icons.clients} Клиенты</h2>
+      <p className="hint">Кто писал и что у него с курсом. «Личный» — помощник с этим человеком не переписывается никогда.</p>
       <ManualEnrollment onSaved={reload} onOpenStudent={onOpenStudent} />
 
       <label className="field" style={{ marginBottom: 10 }}>
@@ -212,7 +212,7 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
               </div>
               <div className="list-chips">
                 {c.personal && <span className="chip">личный</span>}
-                {c.spamBlockedAt && <span className="chip chip-err" title={c.spamReason ?? ""}>спам · бот молчит</span>}
+                {c.spamBlockedAt && <span className="chip chip-err" title={c.spamReason ?? ""}>спам · помощник молчит</span>}
                 {c.accessRevokedAt && <span className="chip chip-err">доступ отобран</span>}
                 {c.paid && !c.accessRevokedAt && <span className="chip chip-ok">оплатил</span>}
                 {c.channel === "MANUAL" && c.paid && !c.accessRevokedAt && <span className="chip">платформа курсов</span>}

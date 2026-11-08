@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { mockPrisma, restorePrisma } from "../helpers.js";
 
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => undefined) }));
+  techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => undefined) }));
 
 import { issueMagicLink, verifyMagicLink } from "../../src/course/access.js";
 import { courseTokenSecret } from "../../src/course/tokenSecret.js";

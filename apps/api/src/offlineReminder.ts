@@ -1,7 +1,7 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "./telegram.js";
+import { techChatIds, sendTelegramMessage } from "./telegram.js";
 import { offsetMs } from "./dailyReport.js";
 import { detectClientLanguage } from "./ai/clientLanguage.js";
 import { offlineStartDate } from "./ai/courseDate.js";
@@ -93,7 +93,7 @@ async function sweep(): Promise<void> {
   if (signups.length === 0) return;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const ownerChat = (await ownerAlertChatIds())[0];
+  const ownerChat = (await techChatIds())[0];
   const forOwner: string[] = [];
   let reachedInInstagram = 0;
 
