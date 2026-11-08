@@ -3,7 +3,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { techChatIds, sendTelegramMessage, createOneTimeInviteLink } from "./telegram.js";
+import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
 import { rememberInviteLink } from "./groupAccess.js";
 import { chatIdFor, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryMode, deliveryModeFor, issueCourseLink, type DeliveryMode } from "./course/delivery.js";
@@ -179,7 +179,13 @@ async function sweep(): Promise<void> {
         delivered = true;
         await recordOutgoingMessage(contact.id, text, mid);
         for (const update of deliveredUpdates) {
+          const before = await prisma.purchase.findUnique({ where: { id: update.id }, select: { inviteLink: true, course: true } });
           await prisma.purchase.updateMany({ where: { id: update.id, revokedAt: null }, data: { inviteLink: update.link } });
+          // Новая ссылка ушла — прежняя Telegram-ссылка больше не нужна и не должна
+          // оставаться рабочей (её могли переслать).
+          const old = before?.inviteLink;
+          const oldChat = old?.startsWith("https://t.me/") && old !== update.link ? await chatIdFor(before!.course as Course) : null;
+          if (botToken && old && oldChat) await revokeInviteLink(botToken, oldChat, old);
         }
       } catch (err) {
         uncertain = metaFailureKind(err) === "AMBIGUOUS";

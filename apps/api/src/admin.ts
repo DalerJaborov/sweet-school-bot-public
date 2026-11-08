@@ -30,6 +30,7 @@ import { geminiGenerateUrl, geminiProxyHeaders } from "./gemini.js";
 import { revokeAccess, restoreAccess } from "./groupAccess.js";
 import { offsetMs, localDayStart } from "./dailyReport.js";
 import { countNotOpened } from "./notOpened.js";
+import { linksAdminRouter } from "./links/routes.js";
 
 export const adminRouter = Router();
 
@@ -1007,7 +1008,7 @@ adminRouter.post("/admin/contacts/:id/revoke", async (req, res) => {
     res.status(400).json({ error: result.details });
     return;
   }
-  res.json({ ok: true, details: result.details });
+  res.json({ ok: true, details: result.details, ...(result.warning ? { warning: result.warning } : {}) });
 });
 
 /**
@@ -1342,6 +1343,9 @@ adminRouter.use(searchRouter);
 // «Спросить помощницу» — ИИ-диспетчер над закрытым набором read-only
 // инструментов (assistantPanel.ts); ничего не отправляет, SQL не пишет.
 adminRouter.use(assistantRouter);
+// «Ссылки» — ссылки на сайт для рекламы и приглашения в Telegram-группы
+// (links/routes.ts). Внутри adminRouter: только после проверки входа.
+adminRouter.use(linksAdminRouter);
 
 // ---------- отзывы (реальные скриншоты, см. ai/testimonials.ts) ----------
 //

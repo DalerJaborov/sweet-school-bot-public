@@ -38,6 +38,7 @@ export default defineConfig({
       "/api": "http://localhost:4100",
       "/health": "http://localhost:4100",
       "/media": "http://localhost:4100",
+      "/go": "http://localhost:4100",
     },
   },
 });

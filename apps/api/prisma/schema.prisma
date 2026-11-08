@@ -172,8 +172,13 @@ model Contact {
   /// Ставится один раз: спросил повторно — не заваливаем той же простынёй,
   /// дальше разговор ведёт обычный консультант (см. ai/offlineCourse.ts).
   offlineInfoSentAt    DateTime?
+  /// Ссылка с рекламы/блогера (SiteLink.id), по которой человек впервые пришёл
+  /// на сайт. Ставится один раз, без внешнего ключа: строгое добавление
+  /// столбца, без пересоздания большой таблицы (links/siteLinks.ts).
+  siteLinkId           String?
 
   @@unique([channel, igUserId])
+  @@index([siteLinkId])
   // Индекс существует в базе с 20260821190000_group_access (поиск контакта по
   // ссылке в handleChatMember), но раньше отсутствовал здесь в схеме — из-за
   // этого расхождения последующий `prisma migrate dev` тихо сгенерировал бы
@@ -663,7 +668,71 @@ model FreeLessonLead {
   lang      String
   lessonId  String
   createdAt DateTime @default(now())
+  /// Рекламная ссылка (SiteLink.id), с которой пришёл человек; null — без неё.
+  siteLinkId String?
   @@index([createdAt])
+  @@index([siteLinkId])
+}
+
+/// Короткая ссылка на сайт для рекламы и блогеров: /go/<code> → страница сайта
+/// с метками источника. Цель — только из закрытого списка страниц (target),
+/// поэтому увести человека на чужой сайт через неё нельзя (links/siteLinks.ts).
+model SiteLink {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  /// home | online | art | bundle | offline
+  target      String
+  /// tg | ru — язык страницы
+  lang        String
+  /// instagram | tiktok | telegram | whatsapp | blogger | ads
+  source      String
+  /// Имя блогера или название рекламы — только для blogger/ads.
+  label       String?
+  clicks      Int       @default(0)
+  lastClickAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+}
+
+/// Приглашение в Telegram-группу, выданное из панели (раздел «Ссылки»).
+/// chatId хранится на момент выдачи: отозвать ссылку можно только в той группе,
+/// где она создана, даже если ID группы в настройках потом поменяют.
+model TelegramInvite {
+  id           String    @id @default(uuid())
+  /// COURSE50 | COURSE70 | QA
+  groupKey     String
+  chatId       String
+  inviteLink   String    @unique
+  /// Для кого (видно и в Telegram в списке ссылок группы), до 32 знаков.
+  name         String?
+  memberLimit  Int?
+  expiresAt    DateTime?
+  /// Ученица, для которой выдано (необязательно), — без внешнего ключа.
+  contactId    String?
+  joinedCount  Int       @default(0)
+  lastJoinedAt DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([contactId])
+}
+
+/// Кто вошёл по приглашению из панели — по общей ссылке (на 5–20 человек)
+/// хозяйка видит людей и может выгнать лишнего. Только то, что прислал
+/// Telegram в событии входа: id, имя, ник.
+model TelegramInviteJoin {
+  id             String    @id @default(uuid())
+  inviteId       String
+  telegramUserId String
+  name           String?
+  username       String?
+  joinedAt       DateTime  @default(now())
+  /// Когда хозяйка удалила человека из группы кнопкой в «Ссылках».
+  removedAt      DateTime?
+
+  @@index([inviteId])
 }
 
 model Course {
@@ -965,6 +1034,7 @@ model WhatsAppInbox {
   replyToId String?
   status String @default("pending")
   attempts Int @default(0)
+  attentionReason String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([status, createdAt])
