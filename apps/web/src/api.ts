@@ -470,7 +470,17 @@ export type Student = {
   };
   courses: StudentCourse[];
   devices: StudentDevice[];
+  /** Журнал мест: кто освободил, заблокировал или вернул устройство. Поле
+   *  необязательное — старый сервер его не присылает. */
+  deviceEvents?: StudentDeviceEvent[];
   unansweredQuestions: number;
+};
+
+export type StudentDeviceEvent = {
+  action: "released" | "blocked" | "unblocked" | string;
+  actor: "owner" | "student" | "bot" | string;
+  detail: string | null;
+  at: string;
 };
 
 // ---- ⌘K-поиск (GET /admin/search, см. apps/api/src/search.ts) ----

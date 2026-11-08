@@ -103,11 +103,18 @@ describe("сторож неотвеченных: тревога, когда бо
 
   it("общая поломка (много клиентов без ответа) — одна сводка, а не поток сообщений", async () => {
     db.model("message").findMany.mockResolvedValue(
-      ["a", "b", "c", "d"].map((id) => ({ contactId: id, createdAt: inAt, text: "Вопрос " + id }))
+      ["a", "b", "c", "d"].map((id) => ({ contactId: id, createdAt: inAt, text: "Вопрос " + id })),
     );
     db.model("message").count.mockResolvedValue(0);
     db.model("contact").findUnique.mockResolvedValue(
-      fakeContact({ name: "Клиент", humanTakenOverAt: null, humanSilencedUntil: null, humanRequestedAt: null, spamBlockedAt: null, whatsappSavedContact: false })
+      fakeContact({
+        name: "Клиент",
+        humanTakenOverAt: null,
+        humanSilencedUntil: null,
+        humanRequestedAt: null,
+        spamBlockedAt: null,
+        whatsappSavedContact: false,
+      }),
     );
     expect(await checkUnansweredInbound(now)).toBe(4);
     expect(notifyOwnerDirect).toHaveBeenCalledTimes(1);
@@ -262,9 +269,14 @@ describe("фильтр молчания: наши собственные пре�
   });
 
   it.each([
-    "дайте курс бесплатно", "пустите так", "ройгон диҳед",
-    "скиньте уроки бесплатно", "дарсҳоро ройгон диҳед", "я занята, пустите так",
-    "денег нет, потом заплачу за уроки", "пустите на курс бесплатно",
+    "дайте курс бесплатно",
+    "пустите так",
+    "ройгон диҳед",
+    "скиньте уроки бесплатно",
+    "дарсҳоро ройгон диҳед",
+    "я занята, пустите так",
+    "денег нет, потом заплачу за уроки",
+    "пустите на курс бесплатно",
   ])("«%s» → осознанное молчание сохранено", (text) => {
     expect(guardOffTopic(text)?.kind).toBe("freeloader");
   });

@@ -70,7 +70,8 @@ export async function checkInboundSilence(now = new Date()): Promise<void> {
   // сообщения перестали бы читать (ревью 03.09.2026). Отсчёт — от более
   // позднего из двух: последнее входящее или начало сегодняшнего рабочего дня.
   const local = new Date(now.getTime() + offset);
-  const dayStartUtc = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), WORK_START_HOUR) - offset;
+  const dayStartUtc =
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), WORK_START_HOUR) - offset;
   const from = Math.max(last.createdAt.getTime(), dayStartUtc);
   const silentHours = Math.max(0, now.getTime() - from) / 3_600_000;
   const threshold = await thresholdHours();
@@ -115,7 +116,7 @@ export type UnansweredReason = { skip: true; why: string } | { skip: false; reas
 export async function explainUnanswered(
   contactId: string,
   lastIn: { createdAt: Date; text: string | null },
-  now: Date
+  now: Date,
 ): Promise<UnansweredReason> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { skip: true, why: "контакта нет" };
@@ -157,7 +158,9 @@ export async function explainUnanswered(
   // WhatsApp: очередь «нужен человек», обработка и просроченные события ведёт сам мост;
   // эти строки уже видны владельцу в панели, повторная тревога была бы шумом.
   if (contact.channel === "WHATSAPP") {
-    const inbox = await prisma.whatsAppInbox.findFirst({ where: { contactId, createdAt: { gte: new Date(lastIn.createdAt.getTime() - 60_000) } } });
+    const inbox = await prisma.whatsAppInbox.findFirst({
+      where: { contactId, createdAt: { gte: new Date(lastIn.createdAt.getTime() - 60_000) } },
+    });
     if (inbox) return { skip: true, why: `WhatsApp: событие в очереди моста (${inbox.status})` };
   }
   const retry = await prisma.pendingAiReply.findFirst({ where: { contactId } });
@@ -184,21 +187,27 @@ export async function checkUnansweredInbound(now = new Date()): Promise<number> 
     take: 500,
   });
   const latest = new Map<string, { createdAt: Date; text: string | null }>();
-  for (const m of recent) if (!latest.has(m.contactId)) latest.set(m.contactId, { createdAt: m.createdAt, text: m.text });
+  for (const m of recent)
+    if (!latest.has(m.contactId)) latest.set(m.contactId, { createdAt: m.createdAt, text: m.text });
 
   const offset = await offsetMs();
   const items: { who: string; when: string; preview: string; reason: string; channel: string }[] = [];
   for (const [contactId, lastIn] of latest) {
     if (items.length >= MAX_ALERTS_PER_TICK * 4) break;
     if (lastIn.createdAt.getTime() > cutoff.getTime()) continue; // ещё в пределах двух минут
-    const answered = await prisma.message.count({ where: { contactId, direction: "OUT", createdAt: { gt: lastIn.createdAt } } });
+    const answered = await prisma.message.count({
+      where: { contactId, direction: "OUT", createdAt: { gt: lastIn.createdAt } },
+    });
     if (answered > 0) continue;
     const verdict = await explainUnanswered(contactId, lastIn, now);
     if (verdict.skip) continue;
     // Одна тревога на одно сообщение (или на одну паузу); уже отправленные не тратят лимит тика.
     const key = verdict.dedupeKey ?? `unanswered:${contactId}:${lastIn.createdAt.getTime()}`;
     if (!(await shouldSendAlert(key, { cooldownMs: 24 * 3_600_000 }))) continue;
-    const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { name: true, username: true, igUserId: true, channel: true } });
+    const contact = await prisma.contact.findUnique({
+      where: { id: contactId },
+      select: { name: true, username: true, igUserId: true, channel: true },
+    });
     items.push({
       who: contact?.name || (contact?.username ? "@" + contact.username : contact?.igUserId) || contactId,
       channel: contact?.channel ?? "?",
@@ -214,16 +223,28 @@ export async function checkUnansweredInbound(now = new Date()): Promise<number> 
   if (items.length <= 2) {
     for (const it of items) {
       await notifyOwnerDirect(
-        "Бот не ответил клиенту: " + it.who + " (" + it.channel + ")\n" +
-          "Написал(а) в " + it.when + ": " + it.preview + "\n" +
-          "Причина: " + it.reason
+        "Бот не ответил клиенту: " +
+          it.who +
+          " (" +
+          it.channel +
+          ")\n" +
+          "Написал(а) в " +
+          it.when +
+          ": " +
+          it.preview +
+          "\n" +
+          "Причина: " +
+          it.reason,
       ).catch((err) => logError("inboundWatch:unanswered", err));
     }
   } else {
     const lines = items.slice(0, 10).map((it) => "- " + it.who + " (" + it.when + "): " + it.reason);
     await notifyOwnerDirect(
-      "Бот не ответил " + items.length + " клиентам дольше двух минут:\n" + lines.join("\n") +
-        (items.length > 10 ? "\n...и ещё " + (items.length - 10) : "")
+      "Бот не ответил " +
+        items.length +
+        " клиентам дольше двух минут:\n" +
+        lines.join("\n") +
+        (items.length > 10 ? "\n...и ещё " + (items.length - 10) : ""),
     ).catch((err) => logError("inboundWatch:unanswered", err));
   }
   return items.length;

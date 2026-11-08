@@ -521,14 +521,15 @@ export async function aiReply(
         const parts = splitHumanLike(replyText, splitOpts);
         // Короткий тёплый ответ может уйти голосом (рубильник voiceReplyEnabled, по
         // умолчанию выключен; правило и границы - ai/voiceReply.ts). Любая ошибка до отправки - текстом.
-        const sentAsVoice =
-          parts.length === 1 &&
-          (await trySendVoiceReply(
-            contact,
-            parts[0],
-            attachments.some((a) => a.kind === "audio"),
-          ));
-        for (const part of sentAsVoice ? [] : parts) {
+        // Голос решает по ВСЕМУ ответу, а не по одной части: короткий ответ, разбитый на несколько сообщений,
+        // тоже может уйти голосом (владелец 08.11.2026: «не отправил голос»).
+        const textRest = await trySendVoiceReply(
+          contact,
+          replyText,
+          attachments.some((a) => a.kind === "audio"),
+        );
+        const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
+        for (const part of toSend) {
           const mid = await sendToContact(contact, part);
           await recordOutgoingMessage(contact.id, part, mid);
         }

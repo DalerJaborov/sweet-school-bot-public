@@ -128,6 +128,67 @@ describe("StudentPage — карточка ученицы", () => {
     expect(calls.filter((c) => c.url === "/admin/metrics/student/c1").length).toBe(2);
   });
 
+  it("«Освободить место» — подтверждение простыми словами, POST .../release, карточка перечитана", async () => {
+    mockFetch();
+    render(
+      <>
+        <StudentPage contactId="c1" onBack={vi.fn()} />
+        <ConfirmHost />
+      </>
+    );
+    await screen.findByText("Мадина Р.");
+    fireEvent.click(screen.getAllByRole("button", { name: "Освободить место" })[0]);
+    expect(await screen.findByText("Освободить место «Chrome на Android»?")).toBeTruthy();
+    expect(screen.getByText(/уроки закроются/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Освободить" }));
+    });
+    expect(calls.find((c) => c.url === "/admin/course-devices/d1/release")?.method).toBe("POST");
+    expect(calls.filter((c) => c.url === "/admin/metrics/student/c1").length).toBe(2);
+  });
+
+  it("у ЗАБЛОКИРОВАННОГО устройства кнопки «Освободить место» нет — удаление сняло бы блокировку", async () => {
+    mockFetch();
+    render(<StudentPage contactId="c1" onBack={vi.fn()} />);
+    await screen.findByText("Мадина Р.");
+    // d1 живое, d2 заблокировано: кнопка одна, и она у живого.
+    expect(screen.getAllByRole("button", { name: "Освободить место" })).toHaveLength(1);
+    const blockedRow = screen.getByText("Instagram на iPhone").closest(".list-row") as HTMLElement;
+    expect(within(blockedRow).queryByRole("button", { name: "Освободить место" })).toBeNull();
+    expect(within(blockedRow).getByRole("button", { name: "Разблокировать" })).toBeTruthy();
+  });
+
+  it("передумала в подтверждении — ничего не освобождается", async () => {
+    mockFetch();
+    render(
+      <>
+        <StudentPage contactId="c1" onBack={vi.fn()} />
+        <ConfirmHost />
+      </>
+    );
+    await screen.findByText("Мадина Р.");
+    fireEvent.click(screen.getAllByRole("button", { name: "Освободить место" })[0]);
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Отмена" }));
+    });
+    expect(calls.some((c) => c.url.endsWith("/release"))).toBe(false);
+  });
+
+  it("журнал мест: кто и когда освободил — бытовыми словами", async () => {
+    mockFetch({
+      ...student,
+      deviceEvents: [
+        { action: "released", actor: "owner", detail: "iPhone · TJ", at: "2026-09-04T09:00:00Z" },
+        { action: "released", actor: "student", detail: "Android", at: "2026-09-03T09:00:00Z" },
+      ],
+    });
+    render(<StudentPage contactId="c1" onBack={vi.fn()} />);
+    await screen.findByText("Мадина Р.");
+    const log = screen.getByTestId("device-events");
+    expect(within(log).getByText(/Место освобождено · iPhone · TJ · вы/)).toBeTruthy();
+    expect(within(log).getByText(/сама ученица/)).toBeTruthy();
+  });
+
   it("сайт без Instagram: WhatsApp, если номер есть; иначе — скопировать ник", async () => {
     mockFetch({
       ...student,
