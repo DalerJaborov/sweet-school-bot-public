@@ -35,6 +35,7 @@ type Client = {
   personal: boolean;
   spamBlockedAt?: string | null;
   spamReason?: string | null;
+  offlineHandoffAt?: string | null;
   tags: string[];
   messages: number;
   updatedAt: string;
@@ -213,6 +214,7 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
               <div className="list-chips">
                 {c.personal && <span className="chip">личный</span>}
                 {c.spamBlockedAt && <span className="chip chip-err" title={c.spamReason ?? ""}>спам · помощник молчит</span>}
+                {c.offlineHandoffAt && !c.paid && <span className="chip chip-warn" title="Получил условия офлайн-курса; помощник молчит, пока человек не напишет про онлайн">офлайн · ведёте вы</span>}
                 {c.accessRevokedAt && <span className="chip chip-err">доступ отобран</span>}
                 {c.paid && !c.accessRevokedAt && <span className="chip chip-ok">оплатил</span>}
                 {c.channel === "MANUAL" && c.paid && !c.accessRevokedAt && <span className="chip">платформа курсов</span>}

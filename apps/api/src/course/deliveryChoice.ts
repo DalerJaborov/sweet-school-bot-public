@@ -5,6 +5,7 @@ import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
 import type { Allocation, Course } from "../courses.js";
+import { settleChoiceIfHandedOut } from "./handedOut.js";
 
 export type CourseDeliveryChoice = "telegram" | "web";
 export function isDeliveryChoice(value: unknown): value is CourseDeliveryChoice {
@@ -66,17 +67,21 @@ export async function deferGrantForChoice(
 }
 
 export async function awaitingDeliveryChoice(contactId: string): Promise<boolean> {
-  return (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
+  const waiting = (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
+  if (!waiting) return false;
+  // Ширин уже выдала доступ руками - ожидание выбора снимается, бот молчит (08.11.2026).
+  return !(await settleChoiceIfHandedOut(contactId));
 }
 
-export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<void> {
-  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice)) return;
-  if (!opts.byHuman && await isBotFrozen()) return;
+export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<boolean> {
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice)) return false;
+  if (!opts.byHuman && await isBotFrozen()) return false;
+  if (await settleChoiceIfHandedOut(contact.id)) return false;
   const claim = await prisma.contact.updateMany({
     where: { id: contact.id, courseDeliveryChoice: null, deliveryChoicePromptState: null, accessRevokedAt: null, spamBlockedAt: null },
     data: { deliveryChoicePromptState: "SENDING", deliveryChoiceAskedAt: new Date() },
   });
-  if (claim.count !== 1) return;
+  if (claim.count !== 1) return false;
   const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN" }, orderBy: { createdAt: "desc" } });
   const lang = contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
     ? contact.preferredLanguage : detectClientLanguage(lastIn?.text ?? "") === "ru" ? "ru" : "tg";
@@ -88,6 +93,7 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
     sent = true;
     await recordOutgoingMessage(contact.id, text, mid);
     await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: mid } });
+    return true;
   } catch (err) {
     const uncertain = sent || metaFailureKind(err) === "AMBIGUOUS";
     await prisma.contact.update({ where: { id: contact.id }, data: {
@@ -95,6 +101,7 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
       ...(!uncertain ? { deliveryChoiceAskedAt: null } : {}),
     } });
     logError("deliveryChoice:question", err);
+    return false;
   }
 }
 
