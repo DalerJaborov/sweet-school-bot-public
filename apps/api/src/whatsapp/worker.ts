@@ -5,6 +5,7 @@ import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
 import { isListedPersonal } from "../ai/personalList.js";
+import { withTakeoverOverride } from "../messaging/automation.js";
 import { resolveTakeover } from "../ai/ownerTakeover.js";
 import { attentionError, classifyAttention } from "./attention.js";
 
@@ -94,6 +95,7 @@ export async function processInbox(id: string): Promise<void> {
     }
     // Owner takeover suppresses ordinary conversation but image intake remains
     // durable: the existing verified receipt worker can deliver paid access.
+    let safeAnswer = false;
     let fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
     if (!fresh) return;
     if (fresh.humanTakenOverAt || check.takenOver) {
@@ -106,6 +108,7 @@ export async function processInbox(id: string): Promise<void> {
         }
         return;
       }
+      safeAnswer = verdict.why === "safe_intent";
       // Мост сам запрещает отправку после ручной реплики — снимаем его флаг перед ответом.
       if (check.takenOver) await bridgeRequest("/takeover/reset", { chatId: row.chatId });
       fresh = (await prisma.contact.findUnique({ where: { id: contact.id } })) ?? fresh;
@@ -118,7 +121,9 @@ export async function processInbox(id: string): Promise<void> {
       if (!url) throw attentionError("save_failed", "Не удалось сохранить голосовое");
       attachments.push({ url, kind: "audio" });
     }
-    await aiReply(fresh, event.text, attachments, images);
+    // Безопасный запрос: пауза хозяйки остаётся, но разовое разрешение даёт ответить (ai/ownerTakeover.ts).
+    if (safeAnswer) await withTakeoverOverride(fresh.id, () => aiReply(fresh!, event.text, attachments, images));
+    else await aiReply(fresh, event.text, attachments, images);
   });
   // updateMany + условие: если шлюз «не по делу» уже перевёл строку в attention («нужен человек»),
   // статус done её не затрёт.

@@ -80,6 +80,8 @@ export function decideTakeover(input: {
   const { config, anchor, incomingAt, safeIntent, now } = input;
   if (!config.enabled) return { action: "hold", until: null };
   if (now.getTime() - anchor.getTime() >= config.expireHours * 3_600_000) return { action: "answer", why: "expired" };
+  // Хозяйка уже ответила ПОСЛЕ этого сообщения — бот не вмешивается, ждём следующего сообщения клиентки.
+  if (anchor.getTime() > incomingAt.getTime()) return { action: "hold", until: null };
   if (safeIntent) return { action: "answer", why: "safe_intent" };
   const liveUntil = anchor.getTime() + config.liveWindowMin * 60_000;
   const idleUntil = incomingAt.getTime() + config.idleReplyMin * 60_000;

@@ -44,3 +44,14 @@ describe("родня и истории", () => {
     expect(storyReplyWorthAnswer({ storyCaption: "", replyText: "❤️" })).toBe(false);
   });
 });
+
+describe("после ревью PR 60", () => {
+  it("«Дочка хочет на курс» и «Мама попросила узнать цену» — клиентки, не родня", () => {
+    expect(startsWithFamilyAddress("Дочка хочет на ваш курс, сколько стоит?")).toBe(false);
+    expect(startsWithFamilyAddress("Мама попросила узнать цену курса")).toBe(false);
+    expect(startsWithFamilyAddress("Мама, ты дома?")).toBe(true);
+  });
+  it("английские слова в ответе на историю распознаются", () => {
+    expect(storyReplyWorthAnswer({ replyText: "what is the price?" })).toBe(true);
+  });
+});

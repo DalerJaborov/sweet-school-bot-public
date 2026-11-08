@@ -32,3 +32,9 @@ describe("умный перехват хозяйки", () => {
     expect(isSafeIntent("Сколько стоит?", true)).toBe(false);
   });
 });
+
+describe("хозяйка уже ответила после сообщения", () => {
+  it("бот не отвечает поверх неё", () => {
+    expect(decideTakeover({ config, anchor: min(5), incomingAt: min(0), safeIntent: false, now: min(13) })).toEqual({ action: "hold", until: null });
+  });
+});
