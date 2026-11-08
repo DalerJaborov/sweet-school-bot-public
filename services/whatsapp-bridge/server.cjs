@@ -82,6 +82,7 @@ const server = http.createServer(async (request, response) => {
     if (route === 'POST /resume') return reply(200, await bridge.resume());
     if (route === 'POST /logout') return reply(200, await bridge.logout());
     if (route === 'POST /send') return reply(200, await bridge.send(body));
+    if (route === 'POST /react') return reply(200, await bridge.react(body));
     if (route === 'POST /contacts/block') return reply(200, await bridge.block(body.chatId));
     if (route === 'POST /takeover/reset') return reply(200, await bridge.resetTakeover(body.chatId));
     const ack = url.pathname.match(/^\/events\/(.+)\/ack$/);

@@ -49,7 +49,15 @@ export const BOTTOM_NAV: { id: Tab; label: string }[] = [
 ];
 
 /** В режиме сестры — только то, что нужно для разбора заявок и чеков. */
-export const SIMPLE_TABS: ReadonlySet<Tab> = new Set<Tab>(["home", "receipts", "questions", "attention", "clients", "links", "more"]);
+export const SIMPLE_TABS: ReadonlySet<Tab> = new Set<Tab>([
+  "home",
+  "receipts",
+  "questions",
+  "attention",
+  "clients",
+  "links",
+  "more",
+]);
 
 /** Разделы экрана «Ещё». Нижняя панель их не дублирует. */
 export const MORE_SECTIONS: SectionInfo[] = [

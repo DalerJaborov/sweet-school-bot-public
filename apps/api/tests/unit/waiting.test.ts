@@ -21,75 +21,39 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 const NOW = new Date("2026-11-08T10:00:00Z").getTime();
 const at = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000);
 
-type Msg = {
-  contactId: string;
-  direction: "IN" | "OUT";
-  byHuman?: boolean;
-  payload?: string | null;
-  text?: string | null;
-  createdAt: Date;
-};
-type Contact = {
-  id: string;
-  channel: string;
-  igUserId: string;
-  username: string | null;
-  name: string | null;
-  humanSilencedUntil?: Date | null;
-  humanTakenOverAt?: Date | null;
-};
+type Contact = { id: string; channel: string; igUserId: string; username: string | null; name: string | null; humanRequestedAt?: Date | null };
+type Human = { contactId: string; createdAt: Date };
+type Pending = { contactId: string; text: string; createdAt: Date; attempts?: number };
+type Inbox = { contactId: string; chatId?: string; kind?: string; text?: string; media?: boolean; attentionReason?: string | null; createdAt: Date };
 
-/** Мини-база: честно применяет фильтры сообщений, которые waiting.ts просит у Prisma. */
-function fakeDb(
-  db: PrismaMock,
-  contacts: Contact[],
-  messages: Msg[],
-  settings: Record<string, string> = { aiEnabled: "true" },
-) {
-  db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    settings[where.key] != null ? { key: where.key, value: settings[where.key] } : null,
-  );
+function fake(db: PrismaMock, o: { contacts: Contact[]; human?: Human[]; pending?: Pending[]; inbox?: Inbox[] }) {
   db.model("contact").findMany.mockImplementation(async (args: unknown) => {
-    const a = args as { select: { messages: { where: { direction: string; payload: null } } } };
-    const w = a.select.messages.where;
-    return contacts.map((c) => ({
-      humanSilencedUntil: null,
-      humanTakenOverAt: null,
-      ...c,
-      messages: messages
-        .filter((m) => m.contactId === c.id && m.direction === w.direction && (m.payload ?? null) === w.payload)
-        .sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime())
-        .slice(0, 1),
-    }));
+    const where = (args as { where: { humanRequestedAt?: unknown; id?: { in: string[] } } }).where;
+    if (where.humanRequestedAt) return o.contacts.filter((c) => c.humanRequestedAt);
+    return o.contacts.filter((c) => where.id!.in.includes(c.id));
   });
-  db.model("message").findMany.mockImplementation(async (args: unknown) => {
-    const a = args as { where: { contactId: { in: string[] }; direction: string; byHuman: boolean } };
-    return messages
-      .filter(
-        (m) =>
-          a.where.contactId.in.includes(m.contactId) &&
-          m.direction === a.where.direction &&
-          Boolean(m.byHuman) === a.where.byHuman,
-      )
-      .sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime());
-  });
+  db.model("message").findMany.mockResolvedValue(o.human ?? []);
+  db.model("pendingAiReply").findMany.mockResolvedValue((o.pending ?? []).filter((p) => (p.attempts ?? 2) >= 2));
+  db.model("whatsAppInbox").findMany.mockResolvedValue(
+    (o.inbox ?? []).map((i) => ({
+      contactId: i.contactId,
+      chatId: i.chatId ?? "992900112233@c.us",
+      kind: i.kind ?? "message",
+      status: "attention",
+      attentionReason: i.attentionReason ?? "generation",
+      createdAt: i.createdAt,
+      payload: JSON.stringify(i.media ? { media: { mimeType: "image/jpeg" } } : { text: i.text ?? "" }),
+    }))
+  );
 }
 
 async function waiting() {
   const res = await fetch(`${base}/admin/v1/waiting`);
-  return (await res.json()) as { count: number; aiOff: boolean; clients: WaitingClient[] };
+  return (await res.json()) as { count: number; clients: WaitingClient[] };
 }
+const insta = (id: string, username: string, extra: Partial<Contact> = {}): Contact => ({ id, channel: "INSTAGRAM", igUserId: id, username, name: null, ...extra });
 
-const insta = (id: string, username: string, extra: Partial<Contact> = {}): Contact => ({
-  id,
-  channel: "INSTAGRAM",
-  igUserId: id,
-  username,
-  name: null,
-  ...extra,
-});
-
-describe("GET /admin/v1/waiting", () => {
+describe("GET /admin/v1/waiting — только то, что бот передал человеку", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
@@ -101,118 +65,76 @@ describe("GET /admin/v1/waiting", () => {
     restorePrisma();
   });
 
-  it("цепочка «просьба позвать человека → ответ бота „зову Ширин“»: клиент остаётся в списке", async () => {
-    fakeDb(
-      db,
-      [insta("a", "madina", { humanSilencedUntil: new Date(NOW + 55 * 60_000) })],
-      [
-        { contactId: "a", direction: "IN", text: "Позовите Ширин", createdAt: at(5) },
-        { contactId: "a", direction: "OUT", byHuman: false, text: "Сейчас позову Ширин", createdAt: at(5) },
-      ],
-    );
+  it("просьба позвать Ширин: имя, канал, причина простыми словами; текста переписки в ответе нет", async () => {
+    fake(db, { contacts: [insta("a", "madina", { humanRequestedAt: at(5) })] });
     const body = await waiting();
-    expect(body.clients.map((c) => c.contactId)).toEqual(["a"]);
-    expect(body.clients[0]).toMatchObject({
-      name: "@madina",
-      lastText: "Позовите Ширин",
-      replyUrl: "https://ig.me/m/madina",
+    expect(body.clients).toHaveLength(1);
+    expect(body.clients[0]).toMatchObject({ name: "@madina", channelLabel: "Instagram", reason: "Просит позвать Ширин", replyUrl: "https://ig.me/m/madina" });
+    expect(JSON.stringify(body)).not.toContain("lastText");
+  });
+
+  it("обычное последнее входящее («Рахмат», «Хоб майла») никогда не попадает — нет метки передачи", async () => {
+    fake(db, { contacts: [insta("a", "zarina")] }); // humanRequestedAt нет
+    expect((await waiting()).count).toBe(0);
+    // и запрос не смотрит на переписку и на aiEnabled вовсе
+    expect(db.model("setting").findUnique).not.toHaveBeenCalled();
+  });
+
+  it("после ответа живой Ширин просьба считается закрытой; позже новая — возвращается", async () => {
+    fake(db, { contacts: [insta("a", "madina", { humanRequestedAt: at(60) })], human: [{ contactId: "a", createdAt: at(30) }] });
+    expect((await waiting()).count).toBe(0);
+    fake(db, { contacts: [insta("a", "madina", { humanRequestedAt: at(5) })], human: [{ contactId: "a", createdAt: at(30) }] });
+    expect((await waiting()).count).toBe(1);
+  });
+
+  it("бот не смог ответить: завис в очереди повторов — показываем, пустяк — нет", async () => {
+    fake(db, {
+      contacts: [insta("a", "madina"), insta("b", "zarina")],
+      pending: [
+        { contactId: "a", text: "Сколько стоит курс?", createdAt: at(40) },
+        { contactId: "b", text: "Рахмат", createdAt: at(30) },
+      ],
     });
-  });
-
-  it("ответила живая Ширин — клиент уходит из списка; написал снова — возвращается", async () => {
-    const c = insta("a", "madina", { humanTakenOverAt: at(60) });
-    fakeDb(
-      db,
-      [c],
-      [
-        { contactId: "a", direction: "IN", text: "Вопрос", createdAt: at(30) },
-        { contactId: "a", direction: "OUT", byHuman: true, text: "Ответ", createdAt: at(20) },
-      ],
-    );
-    expect((await waiting()).count).toBe(0);
-    fakeDb(
-      db,
-      [c],
-      [
-        { contactId: "a", direction: "IN", text: "Вопрос", createdAt: at(30) },
-        { contactId: "a", direction: "OUT", byHuman: true, text: "Ответ", createdAt: at(20) },
-        { contactId: "a", direction: "IN", text: "А ещё?", createdAt: at(2) },
-      ],
-    );
-    expect((await waiting()).clients[0].lastText).toBe("А ещё?");
-  });
-
-  it("обычный разговор с ботом сюда не попадает", async () => {
-    fakeDb(
-      db,
-      [insta("a", "zarina", { humanSilencedUntil: at(600) })],
-      [{ contactId: "a", direction: "IN", text: "Цена?", createdAt: at(300) }],
-    );
-    // тишина закончилась до сообщения клиента → бот ответит сам
-    expect((await waiting()).count).toBe(0);
-  });
-
-  it("нажатия кнопок воронки — не вопрос человеку", async () => {
-    fakeDb(
-      db,
-      [insta("a", "zarina", { humanTakenOverAt: at(900) })],
-      [{ contactId: "a", direction: "IN", text: "Да", payload: "btn:yes", createdAt: at(5) }],
-    );
-    expect((await waiting()).count).toBe(0);
-  });
-
-  it("помощник выключен (aiEnabled не true) — ждут все, кто написал; карточка говорит об этом", async () => {
-    fakeDb(
-      db,
-      [insta("a", "madina"), { id: "b", channel: "WEB", igUserId: "v", username: null, name: null }],
-      [
-        { contactId: "a", direction: "IN", text: "Здравствуйте", createdAt: at(50) },
-        { contactId: "b", direction: "IN", text: null, createdAt: at(10) },
-      ],
-      { aiEnabled: "false" },
-    );
     const body = await waiting();
-    expect(body.aiOff).toBe(true);
-    expect(body.clients.map((c) => c.contactId)).toEqual(["a", "b"]);
-    expect(body.clients[1]).toMatchObject({
-      name: "Клиент без имени",
-      replyUrl: null,
-      lastText: "Прислал(а) фото или файл",
-    });
-    // и условие по тишине в запросе не требуется
-    const where = (db.model("contact").findMany.mock.calls[0][0] as { where: Record<string, unknown> }).where;
-    expect(where.OR).toBeUndefined();
+    expect(body.clients.map((c) => [c.contactId, c.reason])).toEqual([["a", "Помощник не смог ответить"]]);
   });
 
-  it("запрос: только свежие входящие, без личных/спама, с сортировкой и пределом", async () => {
-    fakeDb(db, [], []);
+  it("WhatsApp «нужен ответ»: фото без текста — показываем, «Рахмат» и реакция — нет", async () => {
+    fake(db, {
+      contacts: [
+        { id: "w1", channel: "WHATSAPP", igUserId: "wa:1", username: null, name: "Нигина" },
+        { id: "w2", channel: "WHATSAPP", igUserId: "wa:2", username: null, name: "Дилафруз" },
+        { id: "w3", channel: "WHATSAPP", igUserId: "wa:3", username: null, name: "Малика" },
+        { id: "w4", channel: "WHATSAPP", igUserId: "wa:4", username: null, name: "Зарина" },
+      ],
+      inbox: [
+        { contactId: "w1", media: true, attentionReason: "media_unavailable", createdAt: at(20) },
+        { contactId: "w2", text: "Рахмат 🙏", createdAt: at(15) },
+        { contactId: "w3", kind: "reaction", createdAt: at(10) },
+        { contactId: "w4", text: "Не получается оплатить", createdAt: at(5) },
+      ],
+    });
+    const body = await waiting();
+    expect(body.clients.map((c) => c.contactId)).toEqual(["w1", "w4"]);
+    expect(body.clients[0].reason).toContain("файл");
+    expect(body.clients[0].replyUrl).toBeNull(); // wa.me не ставим
+  });
+
+  it("у одного клиента несколько причин — одна карточка, «просит позвать» важнее", async () => {
+    fake(db, {
+      contacts: [insta("a", "madina", { humanRequestedAt: at(5) })],
+      pending: [{ contactId: "a", text: "Помогите с оплатой", createdAt: at(50) }],
+    });
+    const body = await waiting();
+    expect(body.count).toBe(1);
+    expect(body.clients[0].reason).toBe("Просит позвать Ширин");
+  });
+
+  it("личных и заблокированных за спам не просим у базы", async () => {
+    fake(db, { contacts: [] });
     await waiting();
-    const q = db.model("contact").findMany.mock.calls[0][0] as {
-      where: Record<string, unknown>;
-      orderBy: unknown;
-      take: number;
-    };
+    const q = db.model("contact").findMany.mock.calls[0][0] as { where: Record<string, unknown> };
     expect(q.where).toMatchObject({ personal: false, spamBlockedAt: null, whatsappSavedContact: false });
-    expect(q.where.messages).toMatchObject({ some: { direction: "IN", payload: null } });
-    expect(q.orderBy).toEqual({ updatedAt: "desc" });
-    expect(q.take).toBeGreaterThan(0);
-  });
-
-  it("кто ждёт дольше — первым; старше недели не берём", async () => {
-    fakeDb(
-      db,
-      [
-        insta("a", "a1", { humanTakenOverAt: at(5000) }),
-        insta("b", "b1", { humanTakenOverAt: at(5000) }),
-        insta("c", "c1", { humanTakenOverAt: at(99999) }),
-      ],
-      [
-        { contactId: "a", direction: "IN", text: "новее", createdAt: at(5) },
-        { contactId: "b", direction: "IN", text: "старее", createdAt: at(90) },
-        { contactId: "c", direction: "IN", text: "давно", createdAt: at(60 * 24 * 9) },
-      ],
-    );
-    expect((await waiting()).clients.map((c) => c.contactId)).toEqual(["b", "a"]);
   });
 
   it("имя и ссылка без выдумок; WhatsApp без ссылки", () => {

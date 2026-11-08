@@ -5,7 +5,7 @@
  */
 export type AttentionReason =
   | "media_unavailable" | "attachment" | "empty" | "too_big" | "save_failed"
-  | "contact_check" | "other_account" | "restarted" | "generation";
+  | "contact_check" | "other_account" | "restarted" | "generation" | "unclear_message" | "voice_unreadable";
 
 export const ATTENTION_TEXT: Record<AttentionReason, string> = {
   media_unavailable: "Клиент прислал файл, который не удалось открыть",
@@ -17,6 +17,8 @@ export const ATTENTION_TEXT: Record<AttentionReason, string> = {
   other_account: "К помощнику подключён другой номер WhatsApp",
   restarted: "Во время ответа сервис перезапускался — неизвестно, успел ли помощник ответить. Загляните в чат",
   generation: "Помощник не смог придумать ответ",
+  unclear_message: "Непонятно, о чём пишет человек: помощник один раз уточнил и ясного ответа не получил",
+  voice_unreadable: "Голосовое не удалось расшифровать, помощник не стал гадать",
 };
 
 export function attentionError(reason: AttentionReason, message: string): Error {
