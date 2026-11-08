@@ -22,7 +22,7 @@ class FakeClient extends EventEmitter {
   async getContacts() { return [...this.contacts.values()]; }
   async getContactById(id) { return this.contacts.get(id); }
   async getContactLidAndPhone() { return this.mappings || []; }
-  async sendMessage(chatId, text) { this.sent.push({ chatId, text }); return { id: { _serialized: `out-${this.sent.length}` } }; }
+  async sendMessage(chatId, text, options) { this.sent.push({ chatId, text, options }); return { id: { _serialized: `out-${this.sent.length}` } }; }
 }
 async function fixture(t, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'school-wa-test-'));
@@ -180,4 +180,21 @@ test('pacing: typing failures never block the reply, and pacing is off when not 
   client.getChatById = async () => { throw new Error('no chat'); };
   await prepare(bridge); await bridge.send(request());
   assert.equal(client.sent.length, 1);
+});
+
+test('audio goes out as a voice note (ptt) with a recording state and no caption', async t => {
+  const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0.5 });
+  let typing = 0, recording = 0;
+  client.getChatById = async () => ({ sendStateTyping: async () => { typing++; }, sendStateRecording: async () => { recording++; }, clearState: async () => {} });
+  await prepare(bridge);
+  await bridge.send(request({ operationId: 'op-voice', text: 'подпись', mediaUrl: 'https://shirinsweets.online/media/a.ogg', mediaType: 'audio' }));
+  assert.equal(recording, 1); assert.equal(typing, 0);
+  assert.equal(client.sent[0].options.sendAudioAsVoice, true);
+  assert.equal(client.sent[0].options.caption, undefined);
+});
+test('images keep the caption and are not sent as voice', async t => {
+  const { bridge, client } = await fixture(t);
+  await prepare(bridge);
+  await bridge.send(request({ operationId: 'op-img', text: 'подпись', mediaUrl: 'https://shirinsweets.online/media/a.jpg', mediaType: 'image' }));
+  assert.equal(client.sent[0].options.caption, 'подпись'); assert.equal(client.sent[0].options.sendAudioAsVoice, undefined);
 });

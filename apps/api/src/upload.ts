@@ -57,6 +57,8 @@ const SAFE_EXT_BY_MIME: Record<string, string> = {
   "audio/mpeg": ".mp3",
   "audio/mp4": ".m4a",
   "audio/ogg": ".ogg",
+  "audio/aac": ".aac",
+  "application/pdf": ".pdf",
 };
 
 const storage = multer.diskStorage({

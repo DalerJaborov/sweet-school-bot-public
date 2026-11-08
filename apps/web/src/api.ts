@@ -129,6 +129,24 @@ export async function uploadFile(file: File): Promise<{ url: string; kind: strin
   return { url: data.url, kind: data.kind ?? "" };
 }
 
+/** Файл в библиотеку медиа хозяйки (фото, видео, PDF, голосовое) с подписью и словами для подбора. */
+export async function uploadLibraryFile(file: File, caption: string, keywords: string, approved: boolean): Promise<void> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("caption", caption);
+  form.append("keywords", keywords);
+  form.append("approved", approved ? "true" : "false");
+  const sentToken = Boolean(token);
+  const res = await fetch("/admin/media-library", {
+    method: "POST",
+    headers: sentToken ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  expireSessionIfUnauthorized(res, sentToken);
+  if (!res.ok) throw new ApiError(res.status, data.error ?? `Ошибка ${res.status}`);
+}
+
 export type Button = { title: string; targetOrder: number };
 export type Step = {
   order: number;

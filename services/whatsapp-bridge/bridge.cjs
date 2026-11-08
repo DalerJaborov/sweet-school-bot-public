@@ -21,6 +21,7 @@ const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)
 const DEFAULT_PACING = {
   minGapMs: 4000, maxGapMs: 9000,
   typingMinMs: 1500, typingMaxMs: 8000, typingMsPerChar: 40,
+  recordMinMs: 3000, recordMaxMs: 9000,
   perChatWindowMs: 10 * 60 * 1000, perChatMax: 8, hourMax: 40, dayMax: 200,
 };
 const HOUR_MS = 60 * 60 * 1000;
@@ -348,7 +349,7 @@ class Bridge {
         || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
       await this.assertSendAllowed(chatId, purpose);
       this.assertWithinLimits(chatId);
-      await this.pace(chatId, (text || '').length);
+      await this.pace(chatId, (text || '').length, mediaType === 'audio' && Boolean(mediaUrl));
       const content = mediaUrl ? await this.mediaFromUrl(mediaUrl, mediaType) : text;
       // Network/media work may take time. Recheck immediately before dispatch.
       await this.assertSendAllowed(chatId, purpose);
@@ -359,7 +360,9 @@ class Bridge {
       const ownSend = new Promise(resolve => { settle = resolve; });
       this.sending.set(chatId, ownSend);
       try {
-        const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text ? { caption: text } : {}), sendSeen: false });
+        // Audio goes out as a real voice note (ptt, waveform bubble), never as a file; voice notes carry no caption.
+        const isVoice = Boolean(mediaUrl) && mediaType === 'audio';
+        const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text && !isVoice ? { caption: text } : {}), ...(isVoice ? { sendAudioAsVoice: true } : {}), sendSeen: false });
         const messageId = idOf(sent?.id);
         if (!messageId) throw failure('Transport returned no message ID');
         op.status = 'sent'; op.messageId = messageId;
@@ -386,16 +389,19 @@ class Bridge {
   }
 
   /** Serialises all sends: random gap since the previous send, then a typing indicator sized to the text. */
-  pace(chatId, textLength) {
+  pace(chatId, textLength, voice = false) {
     const p = this.pacing; if (!p) return Promise.resolve();
     const run = this.paceChain.catch(() => {}).then(async () => {
       const gap = p.minGapMs + this.random() * (p.maxGapMs - p.minGapMs);
       const wait = this.lastSendAt + gap - this.now();
       if (wait > 0) await this.sleep(wait);
-      const typingMs = Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
+      // A voice note shows "recording audio…" for a few seconds, like a person talking into the phone.
+      const typingMs = voice
+        ? p.recordMinMs + this.random() * (p.recordMaxMs - p.recordMinMs)
+        : Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
       try {
         const chat = await this.client.getChatById?.(chatId);
-        await chat?.sendStateTyping?.();
+        await (voice ? chat?.sendStateRecording?.() : chat?.sendStateTyping?.());
         await this.sleep(typingMs);
         await chat?.clearState?.();
       } catch { /* typing is cosmetic; never block or fail a send because of it */ }

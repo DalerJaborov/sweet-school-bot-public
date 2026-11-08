@@ -16,6 +16,7 @@ import { courseAdminRouter } from "./course/adminRoutes.js";
 import { manualEnrollmentRouter } from "./course/manualEnrollment.js";
 import { importRouter } from "./course/importRoutes.js";
 import { textsRouter } from "./textsRoutes.js";
+import { mediaLibraryRouter } from "./mediaLibrary.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
 import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
@@ -791,6 +792,7 @@ adminRouter.get("/admin/media-examples", async (req, res) => {
   const merged = [
     ...style.map((r) => ({
       pool: "style" as const,
+      source: r.source,
       id: r.id,
       studentText: r.clientText,
       ownerText: r.ownerText,
@@ -1326,6 +1328,8 @@ adminRouter.use(manualEnrollmentRouter);
 adminRouter.use(importRouter);
 // «Тексты и цены» — цены, реквизиты, сертификат, офлайн (textsRoutes.ts).
 adminRouter.use(textsRouter);
+// Библиотека медиа хозяйки: загрузка, подпись, озвучка (mediaLibrary.ts).
+adminRouter.use(mediaLibraryRouter);
 // Главный экран «Сегодня» — очередь дел и утренние числа (today.ts).
 adminRouter.use(todayRouter);
 // Воронка, выручка по каналам, карточка ученицы (metrics.ts). Внутри
