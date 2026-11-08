@@ -1,4 +1,5 @@
 import { prisma, getSetting, logError } from "./../db.js";
+import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 
 /**
  * Самообучение стилю хозяйки — БЕЗ переписывания промта.
@@ -133,20 +134,51 @@ export function score(example: { clientText: string; ledToSale: boolean; source:
  * ровно теми словами, какими отвечает Ширин, а не своим пересказом. Дальше —
  * доказавшие себя (привели к продаже) и её живые поправки.
  */
+/** Служебный мусор, который однажды попал в «образцы» как будто это слова хозяйки. */
+const NOT_HER_WORDS = /Automation powered|Drafting the|\*\*|NO_REPLY|Рады приветствовать вас в|Добро пожаловать в/;
+
+/**
+ * Образцы, написанные НЕ хозяйкой: тексты, которые бот или воронка уже слали клиентам
+ * (замер 08.11.2026: 236 из 940 образцов дословно совпали с автоматическими
+ * сообщениями). Учить бота его же шаблонам — замкнутый круг: «манера Ширин»
+ * превращается в эхо самого бота. Отсеиваем при выборке, базу не трогаем.
+ */
+export async function withoutBotAuthored<T extends { ownerText: string }>(pool: T[]): Promise<T[]> {
+  const texts = [...new Set(pool.map((e) => e.ownerText.trim()).filter(Boolean))];
+  if (texts.length === 0) return pool;
+  const sentByBot = new Set(
+    (
+      await prisma.message.findMany({
+        where: { direction: "OUT", byHuman: false, text: { in: texts } },
+        select: { text: true },
+      })
+    ).map((m) => (m.text ?? "").trim())
+  );
+  return pool.filter((e) => !sentByBot.has(e.ownerText.trim()) && !NOT_HER_WORDS.test(e.ownerText));
+}
+
+/** Бонус образцу на языке текущего клиента: таджикской клиентке — таджикские образцы. */
+export function languageBonus(example: { ownerText: string }, language: ClientLanguage): number {
+  if (language !== "ru" && language !== "tg") return 0;
+  return detectClientLanguage(example.ownerText) === language ? 4 : 0;
+}
+
 export async function buildStyleBlock(clientText = ""): Promise<string> {
   if ((await getSetting("styleLearningEnabled")) === "false") return "";
 
-  const pool = await prisma.styleExample.findMany({
-    // Библиотека медиа — это файлы с ключевыми словами, а не живые ответы Ширин: в образцы манеры не годятся.
+  const rawPool = await prisma.styleExample.findMany({
+    // Библиотека медиа - это файлы с ключевыми словами, а не живые ответы Ширин: в образцы манеры не годятся.
     where: { enabled: true, source: { not: "LIBRARY" } },
     orderBy: [{ ledToSale: "desc" }, { createdAt: "desc" }],
     take: CANDIDATE_POOL,
   });
+  const pool = await withoutBotAuthored(rawPool);
   if (pool.length === 0) return "";
 
   const ask = words(clientText);
+  const language = detectClientLanguage(clientText);
   const examples = [...pool]
-    .map((e) => ({ e, s: score(e, ask) }))
+    .map((e) => ({ e, s: score(e, ask) + languageBonus(e, language) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, EXAMPLES_IN_PROMPT)
     .map((x) => x.e);
@@ -154,7 +186,14 @@ export async function buildStyleBlock(clientText = ""): Promise<string> {
   const lines = examples.map((e) =>
     e.clientText.trim() ? `Клиент: ${e.clientText.trim()}\nШирин: ${e.ownerText}` : `Ширин: ${e.ownerText}`
   );
+  const tajikRule =
+    language === "tg"
+      ? "\n\nПИСЬМЕННЫЙ ТАДЖИКСКИЙ: пиши так, как Ширин в образцах ниже — коротко, разговорно, на «шумо» (глагол во множественном числе: мекунед, мекнен, дорем). " +
+        "Особые буквы (ӣ ӯ қ ғ ҳ ҷ) ставь там, где она ставит их в похожей фразе, а где пишет без них — пиши без них. " +
+        "НЕ ВЫДУМЫВАЙ слов и оборотов, которых нет в образцах и в разговорнике: нет подходящего образца — скажи короче и проще, чем сомневаться в форме."
+      : "";
   return (
+    tajikRule +
     "\n\nТАК ОТВЕЧАЕТ САМА ШИРИН — ЭТО ЭТАЛОН МАНЕРЫ, НЕ ИСТОЧНИК АКТУАЛЬНЫХ ФАКТОВ. Держи её манеру: те же слова, тот же " +
     "душанбинский говор, та же длина фразы. Эти примеры исторические: не копируй из них цены, даты, акции, состав курса, реквизиты или личные данные. " +
     "Факты бери только из текущих правил и настроек курса; при конфликте или отсутствии подтверждения не угадывай. " +

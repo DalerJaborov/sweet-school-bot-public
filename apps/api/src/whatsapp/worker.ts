@@ -100,7 +100,10 @@ export async function processInbox(id: string): Promise<void> {
     }
     await aiReply(fresh, event.text, attachments, images);
   });
-  await prisma.whatsAppInbox.update({ where: { id }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+  // updateMany + условие: если шлюз «не по делу» уже перевёл строку в attention («нужен человек»),
+  // статус done её не затрёт.
+  await prisma.whatsAppInbox.updateMany({ where: { id, status: "processing" }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+  await prisma.whatsAppInbox.updateMany({ where: { id, status: "attention" }, data: { payload: JSON.stringify({ ...payload, media: undefined }) } });
 }
 
 export async function dispatchWhatsAppInbox(): Promise<void> {
