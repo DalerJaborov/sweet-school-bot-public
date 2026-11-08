@@ -19,3 +19,15 @@
 
 ## Voice-or-text rule (ai/voiceReply.ts), switch `voiceReplyEnabled` OFF by default
 Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 after the client's own voice note). Always text: links, any numbers/prices/money words, card/requisites, multi-line, long. Never two voice replies in a row (previous OUT message starts with the microphone mark). Any synthesis error (cap, network) falls back to text. Needs ElevenLabs key + `voiceCloneEnabled=true` too.
+
+## Voice consent record
+- Date: 2026-11-08. Person: Farangis J. (the voice owner).
+- Wording (name omitted here on purpose): "I give my consent for my voice to be used for my bot."
+- How received: written in the project owner's chat, not from her own Telegram account. Ask her to repeat it from her own account when convenient.
+- Scope: only her speech is used as samples; samples and generated audio are never published; no audio stored in git.
+
+## Revoking the voice (any time, on her request)
+1. Set `voiceReplyEnabled` and `voiceCloneEnabled` to `false` in the panel settings (the bot stops using the voice at once).
+2. In ElevenLabs delete the cloned voice (Voices -> the voice -> Delete) and remove `ELEVENLABS_VOICE_ID` from the server `.env`.
+3. Delete cached synthesis on the server: files `tts-*.ogg` / `tts-*.mp3` in `/data/uploads`, and library rows with `audio` that came from synthesis (panel "Медиа на повтор" -> delete).
+4. Delete her original sample files wherever they were kept (not in git).
