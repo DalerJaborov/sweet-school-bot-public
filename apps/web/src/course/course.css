@@ -2149,3 +2149,59 @@ span.ingredient-row {
 .recipe-originals .photos { display: block; }
 .recipe-originals .photos a { display: block; max-width: 640px; margin: 0 auto 16px; }
 .recipe-originals .photos img { width: 100%; height: auto; max-height: none; aspect-ratio: auto; }
+
+/* «Посмотреть как ученица» — полоса предпросмотра владельца (PreviewStrip.tsx).
+   Высота полосы добавляется к --safe-t: страницы и липкий плеер сдвигаются
+   вниз сами, полоса ничего не перекрывает. */
+html.is-preview {
+  --preview-h: 40px;
+  --safe-t: calc(env(safe-area-inset-top, 0px) + var(--preview-h));
+}
+.preview-strip {
+  position: fixed;
+  z-index: 60;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: calc(var(--preview-h) + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) 12px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--c-warn-soft);
+  color: var(--c-ink);
+  border-bottom: 1px solid var(--c-warn);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.preview-badge {
+  flex: none;
+  font-weight: 700;
+  color: var(--c-warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+}
+.preview-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-exit {
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--c-warn);
+  background: transparent;
+  color: var(--c-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.preview-exit:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
