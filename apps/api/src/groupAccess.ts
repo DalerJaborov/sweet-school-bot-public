@@ -3,6 +3,7 @@ import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink } from 
 import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryModeFor, issueCourseLink } from "./course/delivery.js";
+import { recordPanelInviteJoin, revokeInvitesForContact } from "./links/telegramInvites.js";
 
 /**
  * ДОСТУП В ЗАКРЫТЫЕ ГРУППЫ: кто вошёл и как отобрать.
@@ -161,6 +162,11 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
     return;
   }
 
+  // Ссылка выдана из панели (раздел «Ссылки»): бот создал её сам, но в
+  // Contact.inviteLink её нет — без этой проверки каждый такой вход поднимал бы
+  // тревогу «возможно слитая».
+  if (await recordPanelInviteJoin(link, userId, joined)) return;
+
   const contact = await prisma.contact.findFirst({ where: { inviteLink: link } });
   if (!contact) {
     if (!joined) return;
@@ -233,6 +239,9 @@ export async function revokeAccess(contactId: string, reason = "фальшивы
       await call(botToken, "revokeChatInviteLink", { chat_id: chatId, invite_link: contact.inviteLink });
     }
   }
+  // Ссылки, выданные этой ученице вручную из панели, — тоже гасим: иначе по
+  // ней можно было бы войти уже после отзыва доступа.
+  await revokeInvitesForContact(contactId).catch((err) => logError("groupAccess:revoke:panelInvites", err));
 
   const results: string[] = [];
   if (contact.telegramUserId) {

@@ -35,6 +35,7 @@ export const SECTIONS: { tab: string; title: string; words: string[] }[] = [
   { tab: "courses", title: "Курсы", words: ["курс", "урок", "видео", "рецепт"] },
   { tab: "import", title: "Импорт", words: ["импорт", "загрузить уроки", "telegram", "папка"] },
   { tab: "texts", title: "Тексты и цены", words: ["цена", "цены", "реквизиты", "стоимость", "текст", "приветствие", "сертификат", "офлайн"] },
+  { tab: "links", title: "Ссылки", words: ["реклама", "блогер", "qr", "приглашение", "группа в telegram"] },
   { tab: "settings", title: "Настройки", words: ["настройка", "ключ", "gemini", "instagram", "бот", "лимит"] },
 ];
 

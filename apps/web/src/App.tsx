@@ -25,6 +25,7 @@ import { ImportPage } from "./pages/ImportPage";
 import { TextsPage } from "./pages/TextsPage";
 import { StudentPage } from "./pages/StudentPage";
 import { RecipeReviewPage } from "./pages/RecipeReviewPage";
+import { LinksPage } from "./pages/LinksPage";
 
 type Tab =
   | "home"
@@ -42,6 +43,7 @@ type Tab =
   | "import"
   | "quality"
   | "testimonials"
+  | "links"
   | "settings";
 
 type NavItem = { id: Tab; label: string; icon: JSX.Element };
@@ -69,6 +71,7 @@ const SECONDARY: NavItem[] = [
   { id: "import", label: "Импорт", icon: Icons.media },
   { id: "quality", label: "Качество", icon: Icons.style },
   { id: "testimonials", label: "Отзывы", icon: Icons.testimonials },
+  { id: "links", label: "Ссылки", icon: Icons.attach },
   { id: "settings", label: "Настройки", icon: Icons.settings },
 ];
 
@@ -244,6 +247,7 @@ export function App() {
         {tab === "import" && <ImportPage onGo={(t) => (t === "recipes" ? openReview(null) : void goTo(t))} />}
         {tab === "quality" && <QualityPage />}
         {tab === "testimonials" && <TestimonialsPage />}
+        {tab === "links" && <LinksPage />}
         {tab === "settings" && <SettingsPage />}
 
         <nav className="nav" aria-label="Разделы">
