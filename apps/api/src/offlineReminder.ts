@@ -1,10 +1,12 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "./telegram.js";
+import { techChatIds, sendTelegramMessage } from "./telegram.js";
 import { offsetMs } from "./dailyReport.js";
 import { detectClientLanguage } from "./ai/clientLanguage.js";
 import { offlineStartDate } from "./ai/courseDate.js";
+import { offlineAddress, parseHours, type OfflineFacts } from "./ai/offlineFacts.js";
+import { getOfflineFacts } from "./services/salesTextsService.js";
 
 /**
  * НАПОМИНАНИЕ ЗА ДЕНЬ ДО ОЧНОГО КУРСА.
@@ -38,18 +40,26 @@ const HOURS_BEFORE = 24;
  *  достаточно, чтобы не зависеть от точности запуска. */
 const WINDOW_HOURS = 6;
 
-const TEXTS = {
-  ru: (name: string) =>
+/** Время и адрес — из раздела «Цены и даты» (те же, что в карточке бота и на
+ *  сайте). Раньше здесь стояли зашитые «13:40» и «Воданасос, здание Dodo
+ *  Pizza», а карточка бота в это же время называла другой адрес и часы. */
+export function reminderText(language: "ru" | "tg", name: string, facts: OfflineFacts): string {
+  const at = parseHours(facts.hours)?.from;
+  if (language === "tg") {
+    return (
+      `${name ? `${name}, ` : ""}Пагоҳ курси мо оғоз мешавад 🌸\n\n` +
+      (at ? `⏰ Соати ${at} интизоратонем\n` : "") +
+      `📍 ${offlineAddress(facts, "tg")}\n\n` +
+      `Маҳсулот овардан лозим нест, ҳама аз мо. То дидор!`
+    );
+  }
+  return (
     `${name ? `${name}, ` : ""}Завтра начинается наш курс 🌸\n\n` +
-    `⏰ Ждём вас к 13:40\n` +
-    `📍 Душанбе, Воданасос, здание Dodo Pizza\n\n` +
-    `Продукты приносить не нужно, всё наше. До встречи!`,
-  tg: (name: string) =>
-    `${name ? `${name}, ` : ""}Пагоҳ курси мо оғоз мешавад 🌸\n\n` +
-    `⏰ Соати 13:40 интизоратонем\n` +
-    `📍 Душанбе, Воданасос, бинои Dodo Pizza\n\n` +
-    `Маҳсулот овардан лозим нест, ҳама аз мо. То дидор!`,
-};
+    (at ? `⏰ Ждём вас к ${at}\n` : "") +
+    `📍 ${offlineAddress(facts, "ru")}\n\n` +
+    `Продукты приносить не нужно, всё наше. До встречи!`
+  );
+}
 
 /**
  * Дата начала курса в настройках — строго ГГГГ-ММ-ДД.
@@ -59,15 +69,16 @@ const TEXTS = {
  * ошибка здесь стоит владелице неполной группы. Пусто или мусор — напоминание
  * просто не работает, и это видно в логе.
  */
-async function courseStartAt(): Promise<Date | null> {
+async function courseStartAt(facts: OfflineFacts): Promise<Date | null> {
   const date = await offlineStartDate();
   if (!date) return null;
-  // Занятия начинаются в 13:40 по Душанбе; переводим в момент времени сервера.
+  // Начало занятий по Душанбе (раздел «Цены и даты»); переводим в момент
+  // времени сервера. Нераспознанные часы — полдень: напоминание всё равно уйдёт накануне.
+  const [h, m] = (parseHours(facts.hours)?.from ?? "12:00").split(":").map(Number);
   const offset = await offsetMs();
   const midnightUtc = Date.UTC(date.year, date.month - 1, date.day);
-  return new Date(midnightUtc - offset + 13 * 3_600_000 + 40 * 60_000);
+  return new Date(midnightUtc - offset + h * 3_600_000 + m * 60_000);
 }
-
 
 export async function runOfflineReminders(): Promise<void> {
   // Один прогон за раз, с предохранителем от вечного «занято» (singleFlight.ts).
@@ -76,7 +87,8 @@ export async function runOfflineReminders(): Promise<void> {
 
 async function sweep(): Promise<void> {
   if ((await getSetting("botFrozen")) === "true") return;
-  const startAt = await courseStartAt();
+  const facts = await getOfflineFacts();
+  const startAt = await courseStartAt(facts);
   if (!startAt) return;
 
   const hoursLeft = (startAt.getTime() - Date.now()) / 3_600_000;
@@ -93,7 +105,7 @@ async function sweep(): Promise<void> {
   if (signups.length === 0) return;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const ownerChat = (await ownerAlertChatIds())[0];
+  const ownerChat = (await techChatIds())[0];
   const forOwner: string[] = [];
   let reachedInInstagram = 0;
 
@@ -114,7 +126,7 @@ async function sweep(): Promise<void> {
 
     if (windowOpen) {
       const language = detectClientLanguage(lastIn?.text ?? "");
-      const text = (language === "tg" ? TEXTS.tg : TEXTS.ru)(signup.name);
+      const text = reminderText(language === "tg" ? "tg" : "ru", signup.name, facts);
       try {
         const mid = await sendToContact(signup.contact, text);
         await recordOutgoingMessage(signup.contactId, text, mid);
@@ -131,14 +143,14 @@ async function sweep(): Promise<void> {
     // этим человеком и готовым сообщением: тридцать нажатий вместо тридцати
     // звонков. Никакого платного шлюза для этого не нужно, и сообщение уходит
     // с её личного номера — для очного курса это плюс, а не минус.
-    const waText = encodeURIComponent(TEXTS.ru(signup.name));
+    const waText = encodeURIComponent(reminderText("ru", signup.name, facts));
     const waLink = `https://wa.me/992${signup.phone}?text=${waText}`;
     forOwner.push(
       [
         `${signup.name || "имя не указано"} — ${signup.phone}${windowOpen ? "" : " ← бот не смог написать"}`,
         who,
         waLink,
-      ].join("\n")
+      ].join("\n"),
     );
   }
 
@@ -149,7 +161,7 @@ async function sweep(): Promise<void> {
       `📣 Завтра начинается очный курс. Записалось: ${forOwner.length}\n` +
         `Боту удалось написать в Instagram: ${reachedInInstagram}\n\n` +
         `${forOwner.join("\n")}\n\n` +
-        `Нажмите на ссылку под нужным человеком — откроется WhatsApp с уже написанным сообщением.`
+        `Нажмите на ссылку под нужным человеком — откроется WhatsApp с уже написанным сообщением.`,
     ).catch((err) => logError("offlineReminder:notifyOwner", err));
   }
 

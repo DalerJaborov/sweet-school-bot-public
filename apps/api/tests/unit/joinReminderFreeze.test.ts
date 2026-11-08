@@ -6,7 +6,7 @@ const { createOneTimeInviteLink, sendTelegramMessage, sendToContact } = vi.hoist
 }));
 vi.mock("../../src/telegram.js", () => ({
   createOneTimeInviteLink, sendTelegramMessage,
-  ownerAlertChatIds: async () => ["owner"],
+  techChatIds: async () => ["owner"],
 }));
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact }));
 import { MetaDeliveryError } from "../../src/messaging/metaErrors.js";

@@ -4,6 +4,8 @@ import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { mergeObjectionEntries, type NewObjection } from "./ai/objectionLibrary.js";
 import { logAiCall } from "./ai/aiLog.js";
 import { pollGeminiBatch, submitGeminiBatch } from "./ai/geminiBatch.js";
+import { getPrices } from "./services/priceService.js";
+import { priceLineRu } from "./prices.js";
 
 /**
  * НОЧНОЙ РАЗБОР ДНЯ — бот учится не только манере, но и продаже.
@@ -64,7 +66,10 @@ async function collectDialogs(from: Date, to: Date): Promise<Dialog[]> {
   return out;
 }
 
-function buildPrompt(dialogs: Dialog[]): string {
+/** `priceLine` — текущие цены из «Цены и даты» (priceLineRu); раньше здесь
+ *  было вписано «50 и 70 сомони, оба вместе — 100», и после смены цены ночной
+ *  разбор учил бота старым цифрам. */
+function buildPrompt(dialogs: Dialog[], priceLine: string): string {
   const sold = dialogs.filter((d) => d.sold);
   const lost = dialogs.filter((d) => !d.sold);
   const render = (list: Dialog[]) =>
@@ -72,7 +77,7 @@ function buildPrompt(dialogs: Dialog[]): string {
 
   return (
     "Ты — маркетолог и психолог продаж. Перед тобой переписки за сутки из директа " +
-    "авторского кондитерского курса Ширин в Душанбе. Продают два онлайн-курса (50 и 70 сомони, оба вместе — 100) и офлайн-курс. " +
+    `авторского кондитерского курса Ширин в Душанбе. Продают два онлайн-курса (${priceLine}) и офлайн-курс. ` +
     "Отвечает администратор — женщина, пишет на душанбинском разговорном таджикском.\n\n" +
     `РАЗГОВОРЫ С ПОКУПКОЙ (${sold.length}):\n${sold.length ? render(sold) : "сегодня таких не было"}\n\n` +
     `РАЗГОВОРЫ БЕЗ ПОКУПКИ (${lost.length}):\n${lost.length ? render(lost) : "нет"}\n\n` +
@@ -238,6 +243,7 @@ async function runLearning(offset: number, opts: { forceSync?: boolean } = {}): 
   const model = (await getSetting("aiModel")) || "gemini-3.7-flash";
   const day = from.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
   const soldCount = dialogs.filter((d) => d.sold).length;
+  const prompt = buildPrompt(dialogs, priceLineRu(await getPrices()));
 
   // ФАЗА 1: пробуем пакетным заданием — те же токены за полцены, ответ заберёт
   // maybeCollectBatch. Не вышло отправить (сеть, отказ) — обычный путь ниже,
@@ -249,7 +255,7 @@ async function runLearning(offset: number, opts: { forceSync?: boolean } = {}): 
       model,
       displayName: `nightly-${from.toISOString().slice(0, 10)}`,
       request: {
-        contents: [{ role: "user", parts: [{ text: buildPrompt(dialogs) }] }],
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
           thinkingConfig: thinkingConfigFor(model),
           maxOutputTokens: 1200,
@@ -271,7 +277,7 @@ async function runLearning(offset: number, opts: { forceSync?: boolean } = {}): 
     model,
     (m) =>
       JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: buildPrompt(dialogs) }] }],
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
           thinkingConfig: thinkingConfigFor(m),
           maxOutputTokens: 1200,

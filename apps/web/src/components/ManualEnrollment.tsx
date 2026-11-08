@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
+import { GroupInviteButton } from "./GroupInviteButton";
 
 type Catalog = { courses: { code: string; title: string; price: number }[]; bundlePrice: number };
 type Result = { contactId: string; url: string; createdCourses: string[]; alreadyEnrolled: boolean };
@@ -126,6 +127,15 @@ export function ManualEnrollment({
         >
           {copied ? "Скопировано" : "Скопировать ссылку"}
         </button>
+        {result.createdCourses.map((code) => (
+          <GroupInviteButton
+            key={code}
+            course={code}
+            title={catalog?.courses.find((c) => c.code === code)?.title ?? code}
+            contactId={result.contactId}
+            name={name}
+          />
+        ))}
         {onOpenStudent && (
           <button type="button" className="btn ghost" onClick={() => onOpenStudent(result.contactId)}>
             Карточка ученицы

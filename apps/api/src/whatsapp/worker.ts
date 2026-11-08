@@ -4,6 +4,7 @@ import { bridgeRequest, bridgeEventSchema, whatsappConfigured, whatsappMessageId
 import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
+import { attentionError, classifyAttention } from "./attention.js";
 
 let ingesting = false;
 const processing = new Set<string>();
@@ -46,7 +47,7 @@ export async function processInbox(id: string): Promise<void> {
   const contact = await prisma.contact.findUnique({ where: { id: row.contactId } });
   if (!contact) return;
   const connection = await bridgeRequest<{ accountId?: string; enabled?: boolean; contactsReady?: boolean }>("/status");
-  if (connection.accountId !== row.accountId) throw new Error("Подключён другой аккаунт WhatsApp");
+  if (connection.accountId !== row.accountId) throw attentionError("other_account", "Подключён другой аккаунт WhatsApp");
   if (!connection.enabled || !connection.contactsReady) throw Object.assign(new Error("WhatsApp на паузе"), { code: "WhatsAppPaused" });
   const check = await bridgeRequest<ContactStatus>(`/contact-status?chatId=${encodeURIComponent(row.chatId)}`);
   if (check.isMyContact || check.blocked) {
@@ -54,7 +55,7 @@ export async function processInbox(id: string): Promise<void> {
     await prisma.whatsAppInbox.update({ where: { id }, data: { status: "blocked", payload: JSON.stringify({ ...payload, media: undefined }) } });
     return;
   }
-  if (!check.identityResolved) throw new Error("Не удалось проверить контакт WhatsApp");
+  if (!check.identityResolved) throw attentionError("contact_check", "Не удалось проверить контакт WhatsApp");
   const phone = check.aliases?.find(alias => /^\d{7,15}@c\.us$/.test(alias))?.split("@")[0];
   if (phone && !contact.name) await prisma.contact.update({ where: { id: contact.id }, data: { name: `+${phone}` } });
   const stamp = event.timestamp;
@@ -68,18 +69,18 @@ export async function processInbox(id: string): Promise<void> {
   if (check.takenOver && !contact.humanTakenOverAt) {
     await prisma.contact.update({ where: { id: contact.id }, data: { humanTakenOverAt: new Date() } });
   }
-  if (event.mediaUnavailable) throw new Error(`Вложение WhatsApp недоступно: ${event.mediaUnavailable}; нужен ответ хозяйки`);
-  if (!event.text.trim() && !event.media) throw new Error("Пустое сообщение WhatsApp не передаётся ИИ");
+  if (event.mediaUnavailable) throw attentionError("media_unavailable", `Вложение WhatsApp недоступно: ${event.mediaUnavailable}; нужен ответ хозяйки`);
+  if (!event.text.trim() && !event.media) throw attentionError("empty", "Пустое сообщение WhatsApp не передаётся ИИ");
   await withWhatsAppTurn({ inboxId: id, contactId: contact.id, accountId: row.accountId, chatId: row.chatId, messageId: event.messageId }, async () => {
     const images: RescuedImage[] = [];
     const attachments: Attachment[] = [];
     if (event.media?.mimeType.startsWith("image/")) {
       const buffer = Buffer.from(event.media.data, "base64");
-      if (buffer.length > 8 * 1024 * 1024) throw new Error("Слишком большое вложение");
+      if (buffer.length > 8 * 1024 * 1024) throw attentionError("too_big", "Слишком большое вложение");
       const image = payload.imageHash && payload.imageUrl
         ? { buffer, mimeType: event.media.mimeType, hash: payload.imageHash, url: payload.imageUrl, queuedId: payload.queuedId ?? null }
         : await rescueImage(contact, buffer, event.media.mimeType);
-      if (!image.url || !image.queuedId) throw new Error("Не удалось сохранить чек");
+      if (!image.url || !image.queuedId) throw attentionError("save_failed", "Не удалось сохранить чек");
       images.push(image); attachments.push({ url: image.url, kind: "image" });
       payload.imageHash = image.hash; payload.imageUrl = image.url; payload.queuedId = image.queuedId;
       await prisma.whatsAppInbox.update({ where: { id }, data: { payload: JSON.stringify(payload) } });
@@ -90,11 +91,11 @@ export async function processInbox(id: string): Promise<void> {
     const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
     if (!fresh || fresh.humanTakenOverAt || check.takenOver) return;
     if (event.media && !event.media.mimeType.startsWith("image/")) {
-      if (!event.media.mimeType.startsWith("audio/")) throw new Error("Вложение требует ответа хозяйки");
+      if (!event.media.mimeType.startsWith("audio/")) throw attentionError("attachment", "Вложение требует ответа хозяйки");
       const buffer = Buffer.from(event.media.data, "base64");
-      if (buffer.length > 8 * 1024 * 1024) throw new Error("Слишком большое голосовое");
+      if (buffer.length > 8 * 1024 * 1024) throw attentionError("too_big", "Слишком большое голосовое");
       const url = saveOwnerMedia(buffer, event.media.mimeType);
-      if (!url) throw new Error("Не удалось сохранить голосовое");
+      if (!url) throw attentionError("save_failed", "Не удалось сохранить голосовое");
       attachments.push({ url, kind: "audio" });
     }
     await aiReply(fresh, event.text, attachments, images);
@@ -126,7 +127,7 @@ export async function dispatchWhatsAppInbox(): Promise<void> {
           return;
         }
         const retryable = isWhatsAppGenerationRetry(error) && row.attempts < 2;
-        await prisma.whatsAppInbox.update({ where: { id: row.id }, data: { status: retryable ? "pending" : "attention" } });
+        await prisma.whatsAppInbox.update({ where: { id: row.id }, data: retryable ? { status: "pending" } : { status: "attention", attentionReason: classifyAttention(error) } });
         logError("whatsapp:inbox", error);
       }
     })().catch(e => logError("whatsapp:worker", e)).finally(() => processing.delete(chatKey));
@@ -142,7 +143,7 @@ export function startWhatsAppWorker(): void {
   if (!whatsappConfigured()) return;
   // A process interrupted after dispatch may already have sent something.
   // Never blindly replay such a turn on restart.
-  void prisma.whatsAppInbox.updateMany({ where: { status: "processing" }, data: { status: "attention" } }).catch(e => logError("whatsapp:recover", e));
+  void prisma.whatsAppInbox.updateMany({ where: { status: "processing" }, data: { status: "attention", attentionReason: "restarted" } }).catch(e => logError("whatsapp:recover", e));
   setInterval(() => { void ingestWhatsAppEvents().catch(e => logError("whatsapp:connection", e)); }, 2500).unref();
   setInterval(() => { void dispatchWhatsAppInbox().catch(e => logError("whatsapp:queue", e)); }, 3000).unref();
 }

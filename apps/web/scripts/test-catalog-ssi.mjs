@@ -58,6 +58,39 @@ try {
     else assert.match(html, /147 сомон/, route);
     checks++;
   }
+  // Offline facts from the panel (via /_site/offer-fact), in body, <title> and meta.
+  for (const route of ["/kursy-konditera-dushanbe", "/tg/kursy-konditera-dushanbe", "/faq", "/tg/faq", "/"]) {
+    const response = await request(route, { Cookie: "private-session=fixture", Authorization: "Bearer fixture" });
+    const html = await response.text();
+    assert.equal(response.status, 200, route);
+    assert.doesNotMatch(html, /<!--#|\{\{offline|an error occurred while processing/, route);
+    assert.match(html, /777 сомон/, route);
+    if (route.includes("kursy")) {
+      assert.match(html, /<title>[^<]*777 сомон[^<]*<\/title>/, `${route}: title`);
+      assert.match(html, /09:15/, route);
+      assert.match(html, /23 (десерт|ширинӣ|намуд)/, route);
+      assert.doesNotMatch(html, /13:40|16:30|700 сомон/, route);
+    }
+    checks++;
+  }
+  // Course address (footer, map link, JSON-LD) on every public page, incl. pages without prices.
+  for (const route of ["/sertifikat", "/tg/o-shirin", "/politika-konfidentsialnosti", "/"]) {
+    const html = await (await request(route)).text();
+    assert.doesNotMatch(html, /<!--#|\{\{contact|an error occurred while processing|Додо/, route);
+    assert.match(html, /Фикстура, улица 9/, route);
+    assert.match(html, /maps\.google\.com\/\?q=fixture%20street%209/, route);
+    assert.match(html, /"streetAddress":"улица 9"/, route);
+    checks++;
+  }
+  {
+    const missing = await request("/missing-course-page");
+    const html = await missing.text();
+    assert.equal(missing.status, 404);
+    assert.doesNotMatch(html, /<!--#/);
+    assert.match(html, /Фикстура, улица 9/);
+    checks++;
+  }
+  assert.equal((await request("/_site/offer-fact?key=offline.price")).status, 404); checks++;
   assert.equal((await request("/tg/")).status, 301); checks++;
   assert.equal((await request("/_site/catalog-fragment?lang=ru")).status, 404); checks++;
   assert.equal((await request("/missing-course-page")).status, 404); checks++;
@@ -77,6 +110,15 @@ try {
     assert.equal(response.status, 200, mode);
     assert.match(html, /WhatsApp/, mode);
     assert.doesNotMatch(html, /83 сомон|91 сомон|97 сомон|147 сомон|an error occurred while processing/, mode);
+    checks++;
+  }
+  // API down: offline facts come from the 30 s micro-cache (stale allowed) or
+  // the build-time fallback — never an SSI error or an empty price.
+  await request("/api/site/fixture?mode=error");
+  {
+    const html = await (await request("/kursy-konditera-dushanbe")).text();
+    assert.doesNotMatch(html, /<!--#|an error occurred while processing/);
+    assert.match(html, /(777|700) сомон/);
     checks++;
   }
   console.log(`Nginx SSI integration: ${checks} scenarios passed (synthetic catalogue only).`);

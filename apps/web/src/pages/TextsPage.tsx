@@ -6,15 +6,14 @@ import { useUnsavedGuard } from "../components/UnsavedGuard";
 import { useTelegramMainButton } from "../telegram";
 
 /**
- * «ТЕКСТЫ И ЦЕНЫ» — одно место для всего, что видит покупательница
- * («Утро Ширин» §12). Цены курсов и комплекта, реквизиты и на чьё имя
- * карта, условие сертификата, язык уроков, «что после оплаты», офлайн-курс
- * (цена, дата, адрес, часы, десерты, свой текст карточки) — RU и TG рядом.
+ * «ТЕКСТЫ» — реквизиты и на чьё имя карта, условие сертификата, язык уроков,
+ * «что после оплаты», свой текст карточки очного курса — RU и TG рядом
+ * («Утро Ширин» §12). Цены и даты набора с 08.11.2026 — отдельный экран
+ * «Цены и даты» (OfferPage): одна дверь записи, проверки и журнал.
  *
  * Предпросмотр «как увидит покупательница» приходит С СЕРВЕРА
  * (POST /admin/texts/preview) из черновика — теми же функциями, что читают
  * бот и сайт, поэтому не может разойтись с тем, что уйдёт на самом деле.
- * Сохранение пишет и Settings, и Course.price (то, что показывает сайт).
  */
 type Pair = { ru: keyof TextsForm["texts"]; tg: keyof TextsForm["texts"]; label: string; hint?: string };
 
@@ -88,8 +87,6 @@ export function TextsPage() {
   if (err && !form) return <div className="card"><div className="msg err">{err}</div></div>;
   if (!form) return <div className="card"><div className="skeleton" style={{ height: 300 }} /></div>;
 
-  const setPrice = (key: keyof TextsForm["prices"], value: string) =>
-    setForm({ ...form, prices: { ...form.prices, [key]: Number(value) || 0 } });
   const setText = (key: keyof TextsForm["texts"], value: string) => setForm({ ...form, texts: { ...form.texts, [key]: value } });
   const setOffline = <K extends keyof TextsForm["offline"]>(key: K, value: TextsForm["offline"][K]) =>
     setForm({ ...form, offline: { ...form.offline, [key]: value } });
@@ -101,29 +98,7 @@ export function TextsPage() {
         void save();
       }}
     >
-      <div className="card">
-        <h2>{Icons.money} Цены</h2>
-        <p className="hint">Одно место: бот, проверка чека, выдача доступа и сайт читают отсюда.</p>
-        <div className="row">
-          <label className="field">
-            <span>Арт-десерты, сомони</span>
-            <input type="number" inputMode="numeric" min={1} value={form.prices.course50} onChange={(e) => setPrice("course50", e.target.value)} />
-          </label>
-          <label className="field">
-            <span>21 рецепт, сомони</span>
-            <input type="number" inputMode="numeric" min={1} value={form.prices.course70} onChange={(e) => setPrice("course70", e.target.value)} />
-          </label>
-          <label className="field">
-            <span>Оба курса вместе</span>
-            <input type="number" inputMode="numeric" min={1} value={form.prices.bundle} onChange={(e) => setPrice("bundle", e.target.value)} />
-          </label>
-        </div>
-        {preview && (
-          <Preview title="Как скажет бот">
-            <div>{preview.priceLine}</div>
-          </Preview>
-        )}
-      </div>
+      <p className="hint">Цены курсов и дата набора — в разделе «Цены и даты».</p>
 
       <div className="card">
         <h2>{Icons.receipts} Реквизиты</h2>
@@ -159,43 +134,16 @@ export function TextsPage() {
       </div>
 
       <div className="card">
-        <h2>{Icons.journal} Офлайн-курс в Душанбе</h2>
-        <div className="row">
-          <label className="field">
-            <span>Цена, сомони</span>
-            <input type="number" inputMode="numeric" min={1} value={form.offline.price} onChange={(e) => setOffline("price", Number(e.target.value) || 0)} />
-          </label>
-          <label className="field">
-            <span>Дата начала</span>
-            <input type="date" value={form.offline.startDate} onChange={(e) => setOffline("startDate", e.target.value)} />
-          </label>
-        </div>
-        <div className="row">
-          <label className="field">
-            <span>Дней</span>
-            <input type="number" inputMode="numeric" min={1} value={form.offline.days} onChange={(e) => setOffline("days", Number(e.target.value) || 0)} />
-          </label>
-          <label className="field">
-            <span>Часы</span>
-            <input value={form.offline.hours} placeholder="14:00 до 17:00" onChange={(e) => setOffline("hours", e.target.value)} />
-          </label>
-          <label className="field">
-            <span>Десертов</span>
-            <input type="number" inputMode="numeric" min={1} value={form.offline.desserts} onChange={(e) => setOffline("desserts", Number(e.target.value) || 0)} />
-          </label>
-        </div>
-        <label className="field">
-          <span>Адрес</span>
-          <input value={form.offline.address} onChange={(e) => setOffline("address", e.target.value)} />
-        </label>
+        <h2>{Icons.journal} Карточка очного курса</h2>
+        <p className="hint">Пусто — бот соберёт карточку сам из «Цены и даты». Свой текст уходит дословно, и цены с датой в нём вы обновляете сами.</p>
         <div className="pair">
           <label className="field">
             <span>Свой текст карточки — RU</span>
-            <textarea value={form.offline.infoRu} placeholder="Пусто — соберём из полей выше" onChange={(e) => setOffline("infoRu", e.target.value)} />
+            <textarea value={form.offline.infoRu} placeholder="Пусто — соберём из «Цены и даты»" onChange={(e) => setOffline("infoRu", e.target.value)} />
           </label>
           <label className="field">
             <span>Свой текст карточки — TG</span>
-            <textarea value={form.offline.infoTg} placeholder="Холӣ — аз майдонҳои боло месозем" onChange={(e) => setOffline("infoTg", e.target.value)} />
+            <textarea value={form.offline.infoTg} placeholder="Холӣ — аз «Нарх ва сана» месозем" onChange={(e) => setOffline("infoTg", e.target.value)} />
           </label>
         </div>
         {preview && <Preview title="Карточка, которую отправит бот" ru={preview.offlineCard.ru} tg={preview.offlineCard.tg} pre />}

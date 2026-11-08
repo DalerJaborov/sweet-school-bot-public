@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => 555) }));
+  techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => 555) }));
 vi.mock("../../src/ai/qaGroupReply.js", () => ({ findQaAnswer: vi.fn(async () => null) }));
 vi.mock("../../src/storage/s3.js", () => ({
   storageConfig: vi.fn(async () => null),

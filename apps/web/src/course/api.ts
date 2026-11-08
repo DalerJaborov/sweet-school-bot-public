@@ -9,8 +9,14 @@
  */
 
 import { clearPair, loadPair } from "./offline";
+import { isPreview, previewLang, setPreviewLang } from "./preview";
 
 const BASE = "/api/course";
+
+/** Отказ «в предпросмотре это не делается»: ничего не отправляем на сервер. */
+function previewOnly(): Promise<never> {
+  return Promise.reject(new CourseError(403, "preview: read only", "preview"));
+}
 
 /** Одно из устройств ученицы — как его описывает сервер при лимите. */
 export type DeviceInfo = {
@@ -93,7 +99,14 @@ async function request<T>(path: string, init: RequestInit = {}, retried = false)
   const data = (await res.json().catch(() => ({}))) as { error?: string; reason?: string } & Record<string, unknown>;
   if (!res.ok) {
     const reason = data.reason ?? "unknown";
-    if (res.status === 401 && reason === "no_session" && !retried && path !== "/pair" && path !== "/open") {
+    if (
+      res.status === 401 &&
+      reason === "no_session" &&
+      !retried &&
+      path !== "/pair" &&
+      path !== "/open" &&
+      !path.startsWith("/preview")
+    ) {
       let repaired = false;
       try {
         await repairSession();
@@ -319,7 +332,29 @@ export function pairDevice(pair: string): Promise<{ ok: boolean; contactId: stri
 }
 
 export function loadCourse(): Promise<CourseView> {
+  // Предпросмотр владельца — своя дверь только для чтения (course/preview.ts).
+  if (isPreview()) return request(`/preview/me?lang=${previewLang()}`);
   return request("/me");
+}
+
+/**
+ * Обменять одноразовый билет из панели на куку предпросмотра. Один обмен на
+ * билет: повторный старт (двойной эффект React, повтор после сбоя сети) взял
+ * бы уже использованный билет и показал бы владельцу ложную ошибку.
+ */
+const previewStarts = new Map<string, Promise<{ ok: boolean }>>();
+export function startPreview(ticket: string): Promise<{ ok: boolean }> {
+  let started = previewStarts.get(ticket);
+  if (!started) {
+    started = request<{ ok: boolean }>("/preview/start", { method: "POST", body: JSON.stringify({ ticket }) }, true);
+    previewStarts.set(ticket, started);
+  }
+  return started;
+}
+
+/** Выйти из предпросмотра: сервер гасит куку. */
+export function endPreview(): Promise<{ ok: boolean }> {
+  return request("/preview/end", { method: "POST" }, true);
 }
 
 /** Знакомство: язык и имя. После него /me отдаёт уроки уже на нужном языке. */
@@ -328,11 +363,16 @@ export function saveProfile(input: {
   lastName: string;
   language: "ru" | "tg";
 }): Promise<{ ok: boolean }> {
+  if (isPreview()) return previewOnly();
   return request("/profile", { method: "POST", body: JSON.stringify(input) });
 }
 
-/** Смена языка без повторного ввода имени. */
+/** Смена языка без повторного ввода имени. В предпросмотре — только в этой вкладке. */
 export function saveLanguage(language: "ru" | "tg"): Promise<{ ok: boolean }> {
+  if (isPreview()) {
+    setPreviewLang(language);
+    return Promise.resolve({ ok: true });
+  }
   return request("/language", { method: "POST", body: JSON.stringify({ language }) });
 }
 
@@ -354,6 +394,7 @@ export function requestCertificate(input: {
   lastName: string;
   lang: "ru" | "tg";
 }): Promise<IssuedCertificate> {
+  if (isPreview()) return previewOnly();
   return request("/certificate", { method: "POST", body: JSON.stringify(input) });
 }
 
@@ -369,6 +410,7 @@ export function certificatePngUrl(courseId: string, lang: "ru" | "tg"): string {
 }
 
 export function manifestUrl(lessonId: string): string {
+  if (isPreview()) return `${BASE}/preview/lessons/${lessonId}/manifest`;
   return `${BASE}/lessons/${lessonId}/manifest`;
 }
 
@@ -381,10 +423,13 @@ export type OfflinePayload = {
 };
 
 export function offlinePayload(lessonId: string): Promise<OfflinePayload> {
+  if (isPreview()) return previewOnly();
   return request(`/lessons/${lessonId}/offline`);
 }
 
 export function saveProgress(lessonId: string, positionSec: number, percent: number): Promise<{ completed: boolean }> {
+  // Предпросмотр не пишет прогресс: иначе владелец «проходил» бы курс за ученицу.
+  if (isPreview()) return Promise.resolve({ completed: false });
   return request(`/lessons/${lessonId}/progress`, {
     method: "POST",
     body: JSON.stringify({ positionSec, percent }),
@@ -398,6 +443,7 @@ export function saveProgress(lessonId: string, positionSec: number, percent: num
  * обычный запрос. Куки с beacon уходят сами (same-origin).
  */
 export function saveProgressBeacon(lessonId: string, positionSec: number, percent: number): boolean {
+  if (isPreview()) return true;
   const body = JSON.stringify({ positionSec, percent });
   const url = `${BASE}/lessons/${lessonId}/progress`;
   if (typeof navigator.sendBeacon === "function") {
@@ -426,6 +472,7 @@ export type ChatMessage = {
 };
 
 export function loadChat(): Promise<{ messages: ChatMessage[] }> {
+  if (isPreview()) return Promise.resolve({ messages: [] });
   return request("/chat");
 }
 
@@ -434,5 +481,6 @@ export function sendChat(
   lessonId: string | null,
   queuedOffline = false,
 ): Promise<{ messages: ChatMessage[] }> {
+  if (isPreview()) return previewOnly();
   return request("/chat", { method: "POST", body: JSON.stringify({ text, lessonId, queuedOffline }) });
 }

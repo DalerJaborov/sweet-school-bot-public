@@ -1,8 +1,10 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink } from "./telegram.js";
+import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
+import { shouldSendAlert } from "./alertGate.js";
 import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryModeFor, issueCourseLink } from "./course/delivery.js";
+import { recordPanelInviteJoin, revokeInvitesForContact } from "./links/telegramInvites.js";
 
 /**
  * ДОСТУП В ЗАКРЫТЫЕ ГРУППЫ: кто вошёл и как отобрать.
@@ -111,17 +113,13 @@ async function alertUnexplainedJoin(update: ChatMemberUpdate, link: string | und
 
   // Те же двое получателей, что и в остальных алертах бота (askOwner в ai.ts,
   // maybeSendDailyReport в dailyReport.ts) — сестра и владелец, дубли отсечены.
-  const recipients = [
-    ...new Set(
-      [
-        (await getSetting("telegramOwnerChatId"))?.trim(),
-        (await getSetting("telegramReportChatId"))?.trim(),
-      ].filter((id): id is string => Boolean(id))
-    ),
-  ];
+  // Только владельцу (telegramTechChatId).
+  const recipients = await techChatIds();
   if (recipients.length === 0) return;
 
   const user = update.new_chat_member?.user;
+  // Один и тот же вход (человек + группа) — не чаще раза в 6 часов.
+  if (!(await shouldSendAlert(`join:${user?.id ?? "?"}:${update.chat?.id ?? "?"}`))) return;
   const who = user?.username ? `@${user.username}` : user?.first_name ?? "без имени";
   const group = (await courseNameForChat(update.chat?.id)) ?? `неизвестная группа (chat_id ${update.chat?.id ?? "?"})`;
   const how = link ? "по ссылке, которую не узнаём — возможно слитая" : "без ссылки вообще";
@@ -161,7 +159,19 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
     return;
   }
 
-  const contact = await prisma.contact.findFirst({ where: { inviteLink: link } });
+  // Ссылка выдана из панели (раздел «Ссылки»): бот создал её сам, но в
+  // Contact.inviteLink её нет — без этой проверки каждый такой вход поднимал бы
+  // тревогу «возможно слитая».
+  if (await recordPanelInviteJoin(link, update.new_chat_member?.user ?? { id: userId }, joined)) return;
+
+  // У Contact.inviteLink живёт только ПОСЛЕДНЯЯ ссылка; ссылка на первый из двух
+  // купленных курсов есть только на её покупке — ищем и там, иначе вход по ней
+  // поднимал тревогу «слитая ссылка» у честной ученицы.
+  const contact =
+    (await prisma.contact.findFirst({ where: { inviteLink: link } })) ??
+    (await prisma.purchase
+      .findFirst({ where: { inviteLink: link }, select: { contactId: true } })
+      .then((p) => (p ? prisma.contact.findUnique({ where: { id: p.contactId } }) : null)));
   if (!contact) {
     if (!joined) return;
     const botToken = (await getSetting("telegramBotToken"))?.trim() ?? "";
@@ -203,6 +213,11 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
     await prisma.purchase
       .updateMany({ where: { contactId: contact.id, inviteLink: link, joinedAt: null }, data: { joinedAt: new Date() } })
       .catch((err) => logError("groupAccess:purchaseJoined", err));
+    // Ссылка была на одного человека, он вошёл — гасим её. member_limit в
+    // Telegram ограничивает, сколько человек В ГРУППЕ одновременно, а не число
+    // входов: без отзыва вышедшая ученица могла бы переслать ссылку подруге.
+    const botToken = (await getSetting("telegramBotToken"))?.trim();
+    if (botToken && update.chat?.id != null) await revokeInviteLink(botToken, String(update.chat.id), link);
   }
 }
 
@@ -213,7 +228,10 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
  * человека в чёрном списке навсегда: если окажется, что чек был настоящий,
  * достаточно выдать ссылку заново.
  */
-export async function revokeAccess(contactId: string, reason = "фальшивый чек"): Promise<{ ok: boolean; details: string }> {
+export async function revokeAccess(
+  contactId: string,
+  reason = "фальшивый чек",
+): Promise<{ ok: boolean; details: string; warning?: string }> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { ok: false, details: "Клиент не найден" };
@@ -233,6 +251,17 @@ export async function revokeAccess(contactId: string, reason = "фальшивы
       await call(botToken, "revokeChatInviteLink", { chat_id: chatId, invite_link: contact.inviteLink });
     }
   }
+  // Ссылки, выданные этой ученице вручную из панели, — тоже гасим: иначе по
+  // ней можно было бы войти уже после отзыва доступа.
+  const notRevoked = await revokeInvitesForContact(contactId).catch((err) => {
+    logError("groupAccess:revoke:panelInvites", err);
+    return -1;
+  });
+  // Молча «готово» нельзя: по неотозванной ссылке можно войти и после отзыва.
+  const warning =
+    notRevoked !== 0
+      ? "Ссылка из раздела «Ссылки» не отозвана — отзовите её там вручную."
+      : undefined;
 
   const results: string[] = [];
   if (contact.telegramUserId) {
@@ -285,9 +314,9 @@ export async function revokeAccess(contactId: string, reason = "фальшивы
       });
   }
 
-  const details = results.length > 0 ? results.join("; ") : "ссылка отозвана";
+  const details = [results.length > 0 ? results.join("; ") : "ссылка отозвана", warning].filter(Boolean).join(". ");
   await notifyOwner(botToken, contact.username ?? contact.igUserId, reason, details);
-  return { ok: true, details };
+  return { ok: true, details, ...(warning ? { warning } : {}) };
 }
 
 /**
@@ -373,7 +402,7 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
 }
 
 async function notifyOwner(botToken: string, who: string, reason: string, details: string, mark = "🚫"): Promise<void> {
-  const chatId = (await ownerAlertChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
+  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!chatId) return;
   const title = mark === "🔓" ? `${mark} Доступ возвращён` : `${mark} Доступ отобран`;
   await sendTelegramMessage(botToken, chatId, `${title} у ${who}\nПричина: ${reason}\n${details}`).catch((err) =>

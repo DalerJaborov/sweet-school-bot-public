@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "../telegram.js";
+import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { courseDateLabel } from "./courseDate.js";
 
 /**
@@ -90,7 +90,7 @@ export async function registerOfflineSignup(
 
 async function notifySister(signupId: string, name: string, phone: string, username: string | null): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatIds = await ownerAlertChatIds();
+  const chatIds = await techChatIds();
   if (!botToken || chatIds.length === 0) return;
 
   const who = username ? `@${username}` : "";

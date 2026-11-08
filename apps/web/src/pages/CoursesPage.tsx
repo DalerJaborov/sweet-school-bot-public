@@ -124,6 +124,28 @@ export function CoursesPage({ onReview }: { onReview?: (lessonId: string | null)
     return () => clearInterval(timer);
   }, [courses]);
 
+  /**
+   * «Посмотреть как ученица»: приложение ученицы в новой вкладке, в режиме
+   * предпросмотра — только чтение, без покупки и без следов в статистике
+   * (apps/api/src/course/preview.ts). Вкладку открываем СРАЗУ по нажатию:
+   * открытую после ожидания сети браузер счёл бы всплывающим окном.
+   */
+  async function openAsStudent(courseId: string | null) {
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
+    try {
+      const r = await api<{ url: string }>("/admin/course-preview", {
+        method: "POST",
+        body: courseId ? { courseId } : {},
+      });
+      if (tab) tab.location.href = r.url;
+      else window.location.assign(r.url);
+    } catch (e) {
+      tab?.close();
+      toast(e instanceof Error ? e.message : "Не получилось открыть предпросмотр", "error");
+    }
+  }
+
   async function fillCatalog() {
     setBusy("backfill");
     try {
@@ -241,6 +263,17 @@ export function CoursesPage({ onReview }: { onReview?: (lessonId: string | null)
         у неё в телефоне.
       </p>
 
+      {courses && courses.length > 0 && (
+        <button
+          type="button"
+          className="btn ghost wide"
+          style={{ marginBottom: 14 }}
+          onClick={() => void openAsStudent(null)}
+        >
+          Посмотреть как ученица
+        </button>
+      )}
+
       {!storageReady && (
         <div className="msg err">
           Хранилище видео не настроено. Заполните ключи R2 в «Настройках» — без них видео некуда положить.
@@ -268,7 +301,15 @@ export function CoursesPage({ onReview }: { onReview?: (lessonId: string | null)
         <section key={course.id} style={{ marginBottom: 26 }}>
           <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
             <h3 style={{ margin: 0 }}>{course.title}</h3>
-            <div className="row" style={{ gap: 8 }}>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="btn quiet small"
+                aria-label={`Посмотреть «${course.title}» как ученица`}
+                onClick={() => void openAsStudent(course.id)}
+              >
+                Как ученица
+              </button>
               <button className="btn quiet small" onClick={() => setEditingTools(course)}>
                 Инструменты{course.toolsData.length > 0 ? ` (${course.toolsData.length})` : ""}
               </button>

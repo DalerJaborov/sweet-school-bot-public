@@ -8,7 +8,7 @@ vi.mock("../../src/db.js", () => ({
 const owners = vi.fn(async () => ["owner-1"]);
 const send = vi.fn(async () => 1);
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: () => owners(),
+  techChatIds: () => owners(),
   sendTelegramMessage: (...a: unknown[]) => send(...a),
 }));
 

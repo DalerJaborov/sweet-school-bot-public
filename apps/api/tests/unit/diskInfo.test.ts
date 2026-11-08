@@ -5,7 +5,7 @@ import path from "node:path";
 
 const sendTelegramMessage = vi.fn(async () => 1);
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
+  techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
 
 // MEDIA_DIR у upload.ts прибит к /data — на машине разработчика его нет, и
 // mkdirSync на верхнем уровне модуля упал бы. Подменяем на временную папку.
@@ -17,7 +17,7 @@ const { TMP_ROOT } = vi.hoisted(() => ({
 }));
 vi.mock("../../src/upload.js", () => ({ MEDIA_DIR: TMP_ROOT }));
 
-import { cleanupTempUploads, diskState } from "../../src/diskWatch.js";
+import { cleanupTempUploads, diskState } from "../../src/diskInfo.js";
 
 const TMP_DIR = path.join(TMP_ROOT, "course-tmp");
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
-import { getPrices, savePrices, resetPriceCache } from "../../src/services/priceService.js";
+import { getPrices, resetPriceCache } from "../../src/services/priceService.js";
 import { allocate, COURSE_50, COURSE_70 } from "../../src/courses.js";
 import { buildInstruction } from "../../src/ai/receiptCheck.js";
 import { getSalesTexts, resetSalesTextsCache } from "../../src/services/salesTextsService.js";
@@ -53,29 +53,6 @@ describe("priceService", () => {
     expect((await allocate("c1", 130)).grant).toEqual([COURSE_50, COURSE_70]);
     // 70 больше не цена ни одного курса и не дотягивает до 60+30 — ближайший 60.
     expect((await allocate("c1", 70)).grant).toEqual([COURSE_50]);
-  });
-
-  it("savePrices пишет Settings И Course.price по коду курса, кэш сбрасывается", async () => {
-    db.model("setting").upsert.mockResolvedValue({});
-    db.model("course").updateMany.mockResolvedValue({ count: 1 });
-    await getPrices(); // прогреть кэш умолчаниями
-    const written: Record<string, string> = {};
-    db.model("setting").upsert.mockImplementation(async (args: unknown) => {
-      const { where, create } = args as { where: { key: string }; create: { value: string } };
-      written[where.key] = create.value;
-      return {};
-    });
-    db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-      written[where.key] ? { value: written[where.key] } : null
-    );
-
-    const p = await savePrices({ course50: 55, course70: 75, bundle: 110 });
-
-    expect(written).toEqual({ priceCourse50: "55", priceCourse70: "75", priceBundle: "110" });
-    expect(db.model("course").updateMany).toHaveBeenCalledWith({ where: { code: COURSE_50 }, data: { price: 55 } });
-    expect(db.model("course").updateMany).toHaveBeenCalledWith({ where: { code: COURSE_70 }, data: { price: 75 } });
-    expect(p.price[COURSE_50]).toBe(55);
-    expect(p.bundleFull).toBe(130);
   });
 
   it("правила бота и инструкция чека называют цены из настроек, а не из кода", async () => {

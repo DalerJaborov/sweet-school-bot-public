@@ -40,6 +40,11 @@ export const SETTING_KEYS = [
   "telegramChatId70",
   "telegramOwnerChatId",
   "telegramReportChatId",
+  // Кому слать технику (сбои, токены) — только владельцу; и кому — вечернюю
+  // сводку и карточки чеков (владелец и сестра). Через запятую. НЕ путать с
+  // telegramAdminIds (вход в панель).
+  "telegramTechChatId",
+  "telegramSummaryChatIds",
   // Постоянные ссылки, которые владелец рассылает САМ (не через бота) — вход по
   // ним не должен пугать "непонятным входом"/"слитой ссылкой" (см. groupAccess.ts
   // alertUnexplainedJoin). По одной на строку. Не секрет уровня пароля, но и не
@@ -114,6 +119,8 @@ export const SETTING_KEYS = [
   "offlineCourseHours",
   "offlineCourseDesserts",
   "offlineCourseAddress",
+  // Мест в группе (08.11.2026, раздел «Цены и даты»). Пусто — число клиентам не называем.
+  "offlineCourseSeats",
   // ---- собственная платформа курсов ----
   // Хранилище видео: S3-совместимое (владелец выбрал Cloudflare R2, см.
   // docs/course-platform-design.md §5.2). Ключи вставляет сам владелец — они
@@ -134,11 +141,9 @@ export const SETTING_KEYS = [
   // рецепту и на половину вопросов зовёт Ширин.
   "lessonTranscribeEnabled",
   // ---- офлайн-курс в Душанбе ----
-  // Дата ближайшего набора и полное описание, которое бот пересказывает
-  // желающим записаться. Раньше дата читалась кодом, но в этом списке её не
-  // было — то есть поменять её из панели было нельзя, только правкой кода и
-  // деплоем. А дата меняется каждый набор.
-  "offlineCourseDate",
+  // Ручная надпись даты `offlineCourseDate` («3 октября») убрана 08.11.2026:
+  // она жила рядом с календарной датой и переживала прошедший набор. Дата
+  // теперь одна — offlineCourseStartDate ниже, надпись выводится из неё.
   // Карточка условий: две версии, по-русски и по-таджикски. Уходит клиентке
   // ДОСЛОВНО, отдельным сообщением — модель её не пересказывает, поэтому
   // вёрстка со значками и пустыми строками доходит как написана.
@@ -200,15 +205,43 @@ export async function readSettingsMasked(): Promise<Record<SettingKey, string | 
 }
 
 /**
+ * ЦЕНЫ И ДАТЫ — ТОЛЬКО ЧЕРЕЗ ОДНУ ДВЕРЬ (08.11.2026).
+ *
+ * Эти ключи — то, что бот и сайт называют клиентам. Пишет их только
+ * services/offerService.ts: там проверка (сумма > 0, дата не в прошлом, ЧЧ:ММ),
+ * подтверждение резкой смены цены и журнал «кто/когда/было→стало». Общий путь
+ * настроек их молча пропускает — раньше дату набора можно было поменять в трёх
+ * местах панели с тремя разными проверками. Сторож — offerSingleSource.test.ts.
+ */
+export const OFFER_SETTING_KEYS = [
+  "priceCourse50",
+  "priceCourse70",
+  "priceBundle",
+  "offlineCoursePrice",
+  "offlineCourseStartDate",
+  "offlineCourseHours",
+  "offlineCourseAddress",
+  "offlineCourseSeats",
+  "offlineCourseDays",
+  "offlineCourseDesserts",
+] as const satisfies readonly SettingKey[];
+
+export function isOfferKey(key: string): boolean {
+  return (OFFER_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+/**
  * Запись пачки настроек из панели. Неизвестные ключи молча пропускаются
  * (панель старой версии могла прислать лишнее), маска секрета не сохраняется —
  * иначе одно нажатие «Сохранить» затирало бы настоящий токен тремя точками.
+ * Цены и даты пропускаются тоже — их пишет только offerService.
  * Возвращает, сколько ключей реально записано.
  */
 export async function writeSettings(values: Record<string, string>): Promise<number> {
   let written = 0;
   for (const [key, value] of Object.entries(values)) {
     if (!isSettingKey(key)) continue;
+    if (isOfferKey(key)) continue;
     if (isSecretKey(key) && value === SECRET_MASK) continue;
     await setSetting(key, value);
     written += 1;
@@ -217,7 +250,9 @@ export async function writeSettings(values: Record<string, string>): Promise<num
 }
 
 /** Одна настройка — путь HTML-формы (/admin-form/setting). Значение обрезается
- *  по краям: маркеры Meta копируются с переносом строки в конце. */
+ *  по краям: маркеры Meta копируются с переносом строки в конце. Цены и даты
+ *  этим путём не пишутся (см. OFFER_SETTING_KEYS). */
 export async function writeSetting(key: SettingKey, value: string): Promise<void> {
+  if (isOfferKey(key)) throw new Error("Цены и даты меняются только в разделе «Цены и даты»");
   await setSetting(key, value.trim());
 }

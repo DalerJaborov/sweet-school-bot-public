@@ -87,8 +87,8 @@ type Status = {
 };
 
 const COURSES = [
-  { code: "COURSE50", label: "Курс за 50 сомони — Арт-десерты" },
-  { code: "COURSE70", label: "Курс за 70 сомони — 21 рецепт" },
+  { code: "COURSE50", label: "Арт-десерты" },
+  { code: "COURSE70", label: "21 рецепт" },
 ] as const;
 
 const TITLE_SOURCE: Record<Candidate["titleSource"], string> = {
@@ -285,7 +285,7 @@ export function ImportPage({ onGo }: { onGo: (tab: "courses" | "recipes") => voi
 
   return (
     <div className="card">
-      <h2>{Icons.media} Импорт уроков из Telegram</h2>
+      <h2>{Icons.media} Загрузка уроков из Telegram</h2>
       <p className="hint">
         Шаг {step + 1} из 6.{" "}
         {step === 0 && "Что подготовить, прежде чем начинать."}

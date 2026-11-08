@@ -53,6 +53,77 @@ const ICONS = {
     '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.6 2h-3.2v13.7a2.8 2.8 0 1 1-2-2.68V9.7a6 6 0 1 0 5.2 5.94V8.3a7.4 7.4 0 0 0 4.2 1.3V6.4a4.2 4.2 0 0 1-4.2-4.2z"/></svg>',
 };
 
+// ---------- факты очного курса: {{offline.*}} → Nginx SSI ----------
+
+/**
+ * ЦЕНА, ЧАСЫ, ДНИ И ДЕСЕРТЫ ОЧНОГО КУРСА — ИЗ ПАНЕЛИ, А НЕ ИЗ ТЕКСТА (08.11.2026).
+ *
+ * В текстах страниц пишется {{offline.price}}, {{offline.hours}} и т. п.
+ * Сборка превращает каждую подстановку в SSI-вставку: Nginx при отдаче
+ * страницы спрашивает API (/_site/offer-fact) и вставляет значение, которое
+ * владелец сохранил в «Цены и даты». Запасное значение (site.json → offline,
+ * сторож сверяет его с умолчаниями бота) стоит в блоке прямо перед вставкой:
+ * его видит статический предпросмотр и показывает Nginx, если API не ответил.
+ * Кавычки одинарные — вставка может оказаться внутри атрибута и JSON-LD.
+ */
+const OFFER_TOKEN = /\{\{(offline\.(?:price|days|daysRu|desserts|dessertsRu|timeFrom|timeTo|hours)|contact\.(?:address|street|mapsQuery))\}\}/g;
+
+/** Запасное «8 дней» / «21 десерт» — та же грамматика, что у API (offlineFacts.pluralRu). */
+function pluralRu(n, one, few, many) {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+const OFFER_INCLUDE = "<!--# include virtual='/_site/offer-fact?key=";
+
+/** Адрес без города — для JSON-LD (город там отдельным полем); как offlineFacts.streetAddress. */
+function streetOf(address) {
+  return String(address).replace(/^\s*Душанбе\s*,\s*/u, "").trim() || address;
+}
+
+export function offerFallback(site, key, lang = "ru") {
+  // Адрес очного курса (08.11.2026): то же поле панели, что у бота; запасное —
+  // site.json → contacts.address. Экранирование — под место вставки.
+  const address = site.contacts.address?.[lang] || site.contacts.address?.ru;
+  if (key === "contact.address") return esc(address);
+  if (key === "contact.street") return JSON.stringify(streetOf(address)).slice(1, -1).replace(/</g, "\\u003c").replace(/'/g, "\\u0027");
+  if (key === "contact.mapsQuery") return encodeURIComponent(site.contacts.address.ru);
+  const [from, to] = String(site.offline.hours).split("–");
+  const value = {
+    "offline.price": site.offline.price,
+    "offline.days": site.offline.days,
+    "offline.daysRu": `${site.offline.days} ${pluralRu(site.offline.days, "день", "дня", "дней")}`,
+    "offline.desserts": site.offline.desserts,
+    "offline.dessertsRu": `${site.offline.desserts} ${pluralRu(site.offline.desserts, "десерт", "десерта", "десертов")}`,
+    "offline.timeFrom": from,
+    "offline.timeTo": to,
+    "offline.hours": site.offline.hours,
+  }[key];
+  if (value === undefined || value === "") throw new Error(`site.json offline has no fallback for {{${key}}}`);
+  return esc(value);
+}
+
+export function applyOfferFacts(html, site, lang = "ru") {
+  let n = 0;
+  return html.replace(OFFER_TOKEN, (_m, key) => {
+    const name = `offer${++n}`;
+    const query = key.startsWith("contact.") ? `${key}&lang=${lang}` : key;
+    return `<!--# block name='${name}' -->${offerFallback(site, key, lang)}<!--# endblock -->${OFFER_INCLUDE}${query}' stub='${name}' -->`;
+  });
+}
+
+/** Страница с такими вставками должна отдаваться Nginx с `ssi on` (тест сверяет nginx.conf). */
+export function usesOfferFacts(html) {
+  return html.includes(OFFER_INCLUDE);
+}
+
+/** Что увидит человек без SSI (предпросмотр, проверка SEO): запасные значения. */
+export function resolveSsiFallback(html) {
+  return html.replace(/<!--# block name='(\w+)' -->([\s\S]*?)<!--# endblock --><!--# include [^>]*?-->/g, "$2");
+}
+
 /** Двуязычное поле {ru, tg} → строка нужного языка; строки и массивы — как есть. */
 function L(v, lang) {
   if (v && typeof v === "object" && !Array.isArray(v) && ("ru" in v || "tg" in v)) return v[lang] ?? v.ru ?? "";
@@ -214,7 +285,7 @@ function renderFooter(site, lang, ctx) {
       <p><strong>${esc(site.brand)}</strong> · ${esc(ui.tagline)}</p>
       <p style="margin-top:8px;max-width:60ch">${esc(ui.footerAbout)}</p>
       <p class="footer-phone"><a href="tel:${esc(site.contacts.phone)}">${esc(site.contacts.phoneDisplay)}</a></p>
-      ${site.contacts.address ? `<p class="footer-address"><a href="${esc(site.contacts.maps)}" target="_blank" rel="noopener">${esc(site.contacts.address[lang] || site.contacts.address.ru)}</a></p>` : ""}
+      ${site.contacts.address ? `<p class="footer-address"><a href="https://maps.google.com/?q={{contact.mapsQuery}}" target="_blank" rel="noopener">{{contact.address}}</a></p>` : ""}
       <ul class="social-row">
         <li><a class="social" href="${esc(site.contacts.whatsapp)}" rel="noopener" aria-label="WhatsApp">${ICONS.whatsapp}</a></li>
         <li><a class="social" href="${esc(site.contacts.telegram)}" rel="noopener" aria-label="Telegram">${ICONS.telegram}</a></li>
@@ -476,7 +547,7 @@ const SECTIONS = {
     const facts = `<ul class="facts">${s.facts
       .map((f) => `<li><span class="ico" aria-hidden="true">${contentIcon(f.icon)}</span><span>${esc(L(f.text, lang))}</span></li>`)
       .join("")}</ul>`;
-    const price = site.offline.price;
+    const price = "{{offline.price}}";
     const fallback = `<div class="card"><div class="price-tag">${price} ${lang === "tg" ? "сомонӣ" : "сомони"}<small>${esc(
       ui.priceIncluded,
     )}</small></div><p class="muted">${esc(ui.offlineFormFallback)}</p>
@@ -592,7 +663,7 @@ const SECTIONS = {
       )}<small>${esc(sub)}</small></span></a></li>`;
     const list = `<ul class="contacts">
       ${item(`tel:${c.phone}`, "phone", ui.phone, c.phoneDisplay, false)}
-      ${c.address ? item(c.maps, "map", lang === "tg" ? "Суроға" : "Адрес", c.address[lang] || c.address.ru) : ""}
+      ${c.address ? item("https://maps.google.com/?q={{contact.mapsQuery}}", "map", lang === "tg" ? "Суроға" : "Адрес", "{{contact.address}}") : ""}
       ${item(ctx.wa, "whatsapp", ui.whatsapp, c.phoneDisplay)}
       ${item(c.telegram, "telegram", ui.telegram, c.telegramHandle)}
       ${item(c.instagram, "instagram", ui.instagram, c.instagramHandle)}
@@ -631,7 +702,7 @@ function ldOrganization(site, lang) {
     telephone: site.contacts.phone,
     address: {
       "@type": "PostalAddress",
-      streetAddress: site.contacts.street,
+      streetAddress: "{{contact.street}}",
       addressLocality: "Душанбе",
       addressCountry: "TJ",
     },
@@ -682,7 +753,7 @@ function ldCourse(site, page, lang, mode) {
         name: "Shirin Sweets",
         address: {
           "@type": "PostalAddress",
-          streetAddress: site.contacts.street,
+          streetAddress: "{{contact.street}}",
           addressLocality: "Душанбе",
           addressCountry: "TJ",
         },
@@ -850,7 +921,7 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
     ? ""
     : `<div class="wrap" style="padding-top:24px"><h1 class="h1">${esc(L(page.h1, lang))}</h1></div>`;
 
-  return `<!doctype html>
+  return applyOfferFacts(`<!doctype html>
 <html lang="${lang}">
   <head>
     ${renderHead(site, page, lang, ctx)}
@@ -867,7 +938,7 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
     <script type="module" src="/src/site/main.tsx"></script>
   </body>
 </html>
-`;
+`, site, lang);
 }
 
 /**

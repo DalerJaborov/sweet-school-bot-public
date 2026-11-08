@@ -6,8 +6,8 @@ import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
  * нет доступа к WhatsApp Ширин, поэтому запись переносится командой.
  */
 const sendTelegramMessage = vi.fn(async () => 1);
-vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["111"]),
+vi.mock("../../src/telegram.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/telegram.js")>()),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
