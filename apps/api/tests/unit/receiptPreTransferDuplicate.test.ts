@@ -86,7 +86,7 @@ describe("несколько фото в одном сообщении", () => {
 describe("тот же перевод второй раз", () => {
   it("та же сумма уже открыла доступ за 48 ч — курс не выдаём, клиентке «уже приняли», владельцу на глаза", async () => {
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.linkSent === true && where.amount === 70 ? { createdAt: new Date() } : null
+      where.linkSent === true && typeof where.amount === "object" ? { createdAt: new Date() } : null
     );
     await handleReceiptVerdict(contact, valid70());
     expect(grantCourses).not.toHaveBeenCalled();

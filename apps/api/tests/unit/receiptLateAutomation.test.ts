@@ -86,7 +86,7 @@ describe("случай 2: отложенная автоматика после �
     expect(sendToContact).not.toHaveBeenCalled();
     expect(sendReceiptForReview).not.toHaveBeenCalled();
     expect(db.model("receiptCheck").update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "HANDLED", kind: "duplicate" }) }),
+      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "HANDLED", linkSent: true }) }),
     );
   });
 
@@ -94,7 +94,7 @@ describe("случай 2: отложенная автоматика после �
     db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
     db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE50" }]); // ссылка есть только на курс за 50
     db.model("message").findMany.mockResolvedValue([]);
-    await handleReceiptVerdict(contact, verdict(), "q1");
+    await handleReceiptVerdict(contact, verdict({ receiptAt: new Date() }), "q1");
     expect(grantCourses).toHaveBeenCalledTimes(1);
   });
 

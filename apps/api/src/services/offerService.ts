@@ -419,6 +419,8 @@ export async function saveOffer(
   const next = parsed.offer;
   const [{ offer: before }, today, version] = await Promise.all([readOffer(), localTodayIso(), offerVersion()]);
   if (version !== opts.version) return { status: "stale" };
+  // Старый экран без допуска не должен молча сбрасывать сохранённый.
+  next.payment ??= before.payment;
 
   const check = checkOffer(before, next, today);
   if (Object.keys(check.errors).length > 0) return { status: "invalid", errors: check.errors };

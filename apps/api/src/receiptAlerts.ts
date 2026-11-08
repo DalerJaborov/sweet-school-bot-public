@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError } from "./db.js";
 import { editCaption } from "./telegram.js";
-import { getPaymentTolerance, getPrices } from "./services/priceService.js";
+import { coursesForAmount } from "./courses.js";
+import { deliveredCoursesSince } from "./course/handedOut.js";
 
 /**
  * КАРТОЧКИ ЧЕКОВ В TELEGRAM: ЗАПОМНИТЬ И ЗАКРЫТЬ (08.11.2026).
@@ -86,7 +87,7 @@ async function closeRows(where: { id?: string; contactId?: string; ownerDecision
   for (const row of rows) {
     const claim = await prisma.receiptCheck.updateMany({
       where: { id: row.id, ownerDecision: "PENDING" },
-      data: { ownerDecision: "HANDLED", decidedAt: new Date(), reason: `${row.reason} (${how})` },
+      data: { ownerDecision: "HANDLED", linkSent: true, decidedAt: new Date(), reason: `${row.reason} (${how})` },
     });
     if (claim.count === 0) continue;
     closed += 1;
@@ -122,25 +123,17 @@ export async function closeSettledReceiptAlerts(now = Date.now()): Promise<numbe
     take: 100,
   });
   if (pending.length === 0) return 0;
-  const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
   const used = new Set<string>();
   let closed = 0;
   for (const r of pending) {
-    const need = (r.amount ?? 0) >= prices.bundle - tol.down ? 2 : 1;
-    const bought = await prisma.purchase.findMany({
-      where: {
-        contactId: r.contactId,
-        revokedAt: null,
-        accessDeliveryUncertainAt: null,
-        createdAt: { gte: r.createdAt },
-        OR: [{ inviteLink: { not: null } }, { accessIssuedAt: { not: null } }],
-      },
-      select: { id: true },
-      orderBy: { createdAt: "asc" },
-    });
-    const free = (bought ?? []).filter((b) => !used.has(b.id));
-    if (free.length < need) continue;
-    for (const b of free.slice(0, need)) used.add(b.id);
+    // Покупки именно на те курсы, которые даёт сумма ЭТОГО чека; одна покупка
+    // закрывает только один чек (чек за 50 не закрывается выдачей курса за 70).
+    const courses = await coursesForAmount(r.amount ?? 0);
+    if (courses.length === 0) continue;
+    const delivered = await deliveredCoursesSince(r.contactId, r.createdAt);
+    const keys = courses.map((c) => `${r.contactId}:${c}`);
+    if (!courses.every((c) => delivered.includes(c)) || keys.some((k) => used.has(k))) continue;
+    for (const k of keys) used.add(k);
     closed += await closeReceiptById(r.id, "доступ уже выдан другим способом");
   }
   return closed;

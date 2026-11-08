@@ -4,10 +4,11 @@ import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automation.js";
-import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
+import { sendReceiptForReview, sendTelegramMessage, summaryChatIds } from "../telegram.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
-import { allocate, coursesForAmount, type Course } from "../courses.js";
+import { allocate, coursesForAmount, ownedCourses, type Course } from "../courses.js";
+import { getPrices } from "../services/priceService.js";
 import { toSomoni } from "../exchangeRates.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
@@ -130,6 +131,25 @@ export const SAME_TRANSFER_WINDOW_MS = 15 * 60_000;
 /** Одна сумма на двух экранах может отличаться (списано 650 ₽ ≈ 73, зачислено 71.45). */
 const SAME_TRANSFER_AMOUNT_GAP = 5;
 
+/** Тот же скриншот уже лежит у ДРУГОГО человека: строку не создать (отпечаток
+ *  уникален), но молча отбрасывать нельзя - владельцу и сестре уходит текст
+ *  (без кнопок: решать по чужой строке нельзя). */
+async function notifyHashTaken(contact: Contact, otherContactId: string, amount: number | null, imageUrl: string | null): Promise<void> {
+  try {
+    const botToken = (await getSetting("telegramBotToken"))?.trim();
+    if (!botToken) return;
+    const other = await prisma.contact.findUnique({ where: { id: otherContactId }, select: { username: true, igUserId: true } });
+    const name = (c: { username: string | null; igUserId: string } | null) => (c ? (c.username ? `@${c.username}` : c.igUserId) : "?");
+    const text =
+      `Чек требует проверки: этот же скриншот уже присылал другой человек (${name(other)}).\n` +
+      `Сейчас прислал: ${name(contact)}\nСумма: ${amount != null ? `${Math.round(amount * 100) / 100} сомони` : "не разобрана"}\n` +
+      `Доступ не выдан.${imageUrl ? `\nКартинка: ${imageUrl}` : ""}`;
+    for (const chatId of await summaryChatIds()) await sendTelegramMessage(botToken, chatId, text);
+  } catch (err) {
+    logError("receiptVerdict:hashTaken", err);
+  }
+}
+
 async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<void> {
   const lastIn = lastText?.trim()
     ? { text: lastText }
@@ -239,7 +259,8 @@ export async function handleReceiptVerdict(
           await prisma.receiptCheck.update({
             where: { id: existingId },
             data: {
-              kind: "duplicate",
+              kind: "valid",
+              linkSent: true,
               confidence: verdict.confidence,
               reason: `${verdict.reason} (доступ на эти курсы уже выдан - автоматика не сработала)`,
               amount: Math.round(verdict.amount as number),
@@ -267,7 +288,7 @@ export async function handleReceiptVerdict(
   // строку не трогаем: принятый — «уже приняли», ждущий владельца — молчим
   // (человек уже знает, что чек у Ширин), отклонённый — решение владельца в силе.
   if (!existingId && previous && previous.contactId === contact.id && previous.kind !== "unchecked") {
-    if (previous.linkSent || previous.ownerDecision === "APPROVED" || previous.ownerDecision === "HANDLED" || previous.kind === "duplicate") {
+    if (previous.linkSent || previous.ownerDecision === "APPROVED" || previous.ownerDecision === "HANDLED" || (previous.kind === "duplicate" && /доступ уже открыт/.test(previous.reason))) {
       await tellAlreadyAccepted(contact);
       return;
     }
@@ -398,7 +419,7 @@ export async function handleReceiptVerdict(
       where: {
         contactId: contact.id,
         linkSent: true,
-        amount: Math.round(amount),
+        amount: { gte: Math.round(amount) - SAME_TRANSFER_AMOUNT_GAP, lte: Math.round(amount) + SAME_TRANSFER_AMOUNT_GAP },
         imageHash: { not: verdict.imageHash },
         createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) },
       },
@@ -413,20 +434,34 @@ export async function handleReceiptVerdict(
     }
   }
 
-  // Из рублей и других валют банк конвертирует по своему курсу (единого нет):
-  // пересчёт по нашему курсу сравниваем с ценами с запасом 5 %.
-  const converted = verdict.amount != null && currency !== "TJS";
   if (maybeServed) {
     if (kind === "valid") kind = "suspicious";
     hard = true;
     doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
   }
-  const plan = amount != null ? await allocate(contact.id, converted ? amount * 1.05 : amount) : null;
+  const plan = amount != null ? await allocate(contact.id, amount) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
     hard = true;
     reason = `${reason} (${plan.note})`;
     doubts.push(plan.note);
+  }
+
+  // СУММА БЛИЖЕ К ЦЕНЕ УЖЕ КУПЛЕННОГО КУРСА: у клиентки есть курс за 70, пришёл
+  // чек на 70 (старый, пересохранённый) - полоса курса за 50 его тоже вмещает,
+  // и бот открыл бы второй курс бесплатно. Такой чек идёт владельцу.
+  let ownedCache: Course[] | null = null;
+  const getOwned = async (): Promise<Course[]> => (ownedCache ??= await ownedCourses(contact.id).catch(() => []));
+  if (kind === "valid" && plan && plan.grant.length === 1 && amount != null && !sameTransfer) {
+    const owned = await getOwned();
+    const { price } = await getPrices();
+    const target = plan.grant[0];
+    if (owned.some((y) => Math.abs(amount - price[y]) < Math.abs(amount - price[target]))) {
+      kind = "suspicious";
+      hard = true;
+      reason = `${reason} (сумма ближе к цене уже купленного курса - возможно, повтор старой оплаты)`;
+      doubts.push("сумма ближе к цене уже купленного курса - возможно, повтор старой оплаты");
+    }
   }
 
   // ЧТО МЕШАЕТ АВТОПРИНЯТИЮ у чека, который сам по себе выглядит настоящим.
@@ -437,6 +472,11 @@ export async function handleReceiptVerdict(
   if (!conversionFailed && !(amount != null && Number.isFinite(amount) && amount > 0)) causes.push("сумма не прочиталась");
   if (verdict.recipientMatches !== true) causes.push("не удалось подтвердить получателя (наш номер)");
   if (!verdict.currency) causes.push("не определена валюта");
+  // Ни даты, ни номера операции: у новой клиентки (первая покупка) это не повод
+  // для проверки, а вот у той, кто уже покупала, - да (пересохранённый старый чек).
+  if (kind === "valid" && !sameTransfer && !verdict.receiptAt && !(txn && txn.length >= 6) && (await getOwned()).length > 0) {
+    causes.push("нет ни даты, ни номера операции, а у клиентки уже есть курс");
+  }
   const isClean = kind === "valid" && causes.length === 0 && !sameTransfer;
   if (kind === "valid" && !sameTransfer) doubts.push(...causes);
   if (await isBotFrozen()) return;
@@ -513,6 +553,7 @@ export async function handleReceiptVerdict(
       } else {
         logError("receiptVerdict:hashRace", new Error(`imageHash уже занят другим контактом (${existing.contactId} vs ${contact.id})`));
         saved = null;
+        await notifyHashTaken(contact, existing.contactId, amount, verdict.imageUrl);
       }
     }
   }

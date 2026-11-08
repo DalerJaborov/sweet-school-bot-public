@@ -142,7 +142,7 @@ describe("автозакрытие тревоги", () => {
   it("уборка: покупка заведена после чека — тревога закрывается", async () => {
     db.model("receiptCheck").findMany.mockResolvedValue([row()]);
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
-    db.model("purchase").findMany.mockResolvedValue([{ id: "p1" }]);
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     expect(await closeSettledReceiptAlerts()).toBe(1);
     expect(editCaption).toHaveBeenCalledTimes(1);
   });
@@ -159,14 +159,31 @@ describe("автозакрытие тревоги", () => {
       where.id ? [row({ id: where.id })] : [row({ id: "a" }), row({ id: "b" })]
     );
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
-    db.model("purchase").findMany.mockResolvedValue([{ id: "p1" }]);
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     expect(await closeSettledReceiptAlerts()).toBe(1);
   });
 
   it("уборка: комплект закрывается только когда доставлены оба курса", async () => {
     db.model("receiptCheck").findMany.mockResolvedValue([row({ amount: 100 })]);
-    db.model("purchase").findMany.mockResolvedValue([{ id: "p1" }]);
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     expect(await closeSettledReceiptAlerts()).toBe(0);
+  });
+
+  it("уборка: чек за 50 ждёт Ширин, курс за 70 выдан другим чеком - чек за 50 НЕ закрывается", async () => {
+    db.model("receiptCheck").findMany.mockResolvedValue([row({ amount: 50 })]);
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
+    expect(await closeSettledReceiptAlerts()).toBe(0);
+    expect(editCaption).not.toHaveBeenCalled();
+  });
+
+  it("уборка: закрытый чек получает linkSent, чтобы проверки повторов видели платёж", async () => {
+    db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
+    await closeSettledReceiptAlerts();
+    expect(db.model("receiptCheck").updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "HANDLED", linkSent: true }) }),
+    );
   });
 
   it("уборка: у клиентки только старая покупка и обычное сообщение — тревога остаётся", async () => {

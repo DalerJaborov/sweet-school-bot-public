@@ -10,12 +10,13 @@ import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../help
  */
 const sendToContact = vi.fn(async (..._a: unknown[]) => "mid-1");
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[]) => sendToContact(...a) }));
+const sendTelegramMessage = vi.fn(async (..._a: unknown[]) => 1);
 const sendReceiptForReview = vi.fn(async (..._a: unknown[]) => ({ chatId: "owner-1", messageId: 77 }));
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: vi.fn(async () => ["owner-1"]),
   summaryChatIds: vi.fn(async () => ["owner-1"]),
   sendReceiptForReview: (...a: unknown[]) => sendReceiptForReview(...a),
-  sendTelegramMessage: vi.fn(async () => 1),
+  sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
   editCaption: vi.fn(async () => undefined),
 }));
 const grantCourses = vi.fn(async (..._a: unknown[]) => ["COURSE70"]);
@@ -73,6 +74,7 @@ beforeEach(() => {
   sendToContact.mockClear();
   sendReceiptForReview.mockClear();
   grantCourses.mockClear();
+  sendTelegramMessage.mockClear();
 });
 afterEach(() => {
   restorePrisma();
@@ -330,5 +332,66 @@ describe("номер операции и рубли", () => {
   it("только рубли: 650 RUB пересчитываются по курсу и проходят", async () => {
     await handleReceiptVerdict(contact, verdict({ amount: 650, currency: "RUB", imageHash: "rub" }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("мошеннические сценарии (ревью)", () => {
+  it("курс за 70 уже куплен, пришёл старый чек на 70 без даты и номера: курс за 50 НЕ открывается", async () => {
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70" }]);
+    await handleReceiptVerdict(contact, verdict({ amount: 70, receiptAt: null, imageHash: "old70" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+    expect((sendReceiptForReview.mock.calls[0][2] as { caption: string }).caption).toMatch(/уже купленного курса/);
+  });
+
+  it("то же с датой: сумма ближе к цене купленного курса - всё равно владельцу", async () => {
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70" }]);
+    await handleReceiptVerdict(contact, verdict({ amount: 71.45, receiptAt: new Date(), imageHash: "old71" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("курс за 50 уже куплен, честный чек на 70 со свежей датой: выдаётся курс за 70", async () => {
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE50" }]);
+    await handleReceiptVerdict(contact, verdict({ amount: 70, receiptAt: new Date(), imageHash: "second-course" }));
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+
+  it("повтор с суммой 71.45 против прежних 70 спустя часы: запас 5 сомони, владельцу", async () => {
+    db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.linkSent === true && typeof where.amount === "object" ? { createdAt: new Date() } : null
+    );
+    await handleReceiptVerdict(contact, verdict({ amount: 71.45, receiptAt: new Date(), imageHash: "again" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("первая покупка, ни даты, ни номера: проходит (сумма и получатель в порядке)", async () => {
+    await handleReceiptVerdict(contact, verdict({ amount: 70, receiptAt: null, imageHash: "first" }));
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+
+  it("чек с номером операции без даты у покупавшей клиентки проходит", async () => {
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE50" }]);
+    await handleReceiptVerdict(contact, verdict({ amount: 70, receiptAt: null, transactionId: "TX998877665", imageHash: "withtx" }));
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+
+  it("тот же скриншот от другого человека: карточка не молчит, владельцу уходит уведомление, доступ не выдан", async () => {
+    db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.OR && where.imageHash === "hash-ds" ? { createdAt: new Date() } : null
+    );
+    db.model("receiptCheck").create.mockRejectedValue(
+      Object.assign(Object.create((await import("@prisma/client")).Prisma.PrismaClientKnownRequestError.prototype), { code: "P2002" })
+    );
+    db.model("receiptCheck").findUnique.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.imageHash ? (where.imageHash === "hash-ds" && db.model("receiptCheck").create.mock.calls.length > 0 ? { id: "x", contactId: "someone-else" } : null) : null
+    );
+    db.model("contact").findUnique.mockResolvedValue({ username: "other", igUserId: "ig-o" });
+    settings.telegramBotToken = "t";
+    await handleReceiptVerdict(contact, verdict());
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toMatch(/уже присылал другой человек/);
   });
 });

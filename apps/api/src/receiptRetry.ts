@@ -186,6 +186,7 @@ async function runQueue(): Promise<void> {
         receiptAt: verdict.receiptAt,
         tamperingSuspected: verdict.tamperingSuspected,
         recipientMatches: verdict.recipientMatches,
+        transactionId: verdict.transactionId,
         reason: verdict.reason,
         imageHash: row.imageHash,
         imageUrl: row.imageUrl,

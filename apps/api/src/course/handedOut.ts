@@ -80,6 +80,9 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
   }
   if (settled.length === 0) return false;
   await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false } });
+  // Ссылка Ширин не привязана к курсу (и может вести в бесплатную группу): после
+  // снятия вопроса владельцу уходит напоминание проверить, что ссылка нужная.
+  if (waiting.some((p) => settled.includes(p.id) && !p.inviteLink)) await tellOwnerChoiceSettled(contactId);
   if (settled.length === waiting.length) {
     await prisma.receiptCheck.updateMany({
       where: { contactId, awaitingDeliveryChoice: true },
@@ -88,4 +91,19 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
     return true;
   }
   return false;
+}
+
+async function tellOwnerChoiceSettled(contactId: string): Promise<void> {
+  try {
+    const tg = await import("../telegram.js");
+    const { getSetting } = await import("../db.js");
+    const botToken = (await getSetting("telegramBotToken"))?.trim();
+    if (!botToken) return;
+    const c = await prisma.contact.findUnique({ where: { id: contactId }, select: { username: true, igUserId: true } });
+    const who = c ? (c.username ? `@${c.username}` : c.igUserId) : contactId;
+    const text = `${who}: вы прислали ссылку вручную, поэтому бот не стал спрашивать про Telegram. Проверьте, что это ссылка на оплаченный курс.`;
+    for (const chatId of await tg.summaryChatIds()) await tg.sendTelegramMessage(botToken, chatId, text);
+  } catch {
+    // уведомление необязательно: главное - бот не пишет клиентке второй раз
+  }
 }
