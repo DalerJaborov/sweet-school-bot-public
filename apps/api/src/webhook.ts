@@ -53,6 +53,8 @@ export type MessagingEvent = {
   };
   /** Отдельное событие messaging_referrals: человек открыл переписку из рекламы. */
   referral?: unknown;
+  /** Кнопка «Начать» в Messenger из рекламы приносит referral здесь. */
+  postback?: { payload?: string; referral?: unknown };
   /**
    * Реакция на сообщение (сердечко и прочие). Приходит отдельным событием, БЕЗ
    * message — поэтому раньше проваливалась мимо обработки целиком.
@@ -395,13 +397,23 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // Метка рекламы — до всех фильтров ниже: даже если на само сообщение бот
   // промолчит, знать, что человек пришёл из объявления, нужно для отчёта о
   // продажах и для передачи оплаты в Meta.
-  const referral = senderId && senderId !== selfId && !msg?.is_echo ? referralFromMeta(msg?.referral ?? event.referral) : null;
+  // Отдельное событие без сообщения (открыл переписку, кнопка «Начать») контакт
+  // НЕ создаёт — иначе счётчик новых заявок вырос бы на тех, кто не написал.
+  // Сбой здесь не должен задержать само сообщение: только запись в журнал.
+  const referral = senderId && senderId !== selfId && !msg?.is_echo
+    ? referralFromMeta(msg?.referral ?? event.referral ?? event.postback?.referral) : null;
   if (referral && senderId) {
-    const ref = await prisma.contact.upsert({
-      where: { channel_igUserId: { channel, igUserId: senderId } },
-      create: { channel, igUserId: senderId }, update: {}, select: { id: true },
-    });
-    await recordAdReferral(ref.id, referral).catch((err) => logError("webhook:adReferral", err));
+    try {
+      const existing = msg
+        ? await prisma.contact.upsert({
+            where: { channel_igUserId: { channel, igUserId: senderId } },
+            create: { channel, igUserId: senderId }, update: {}, select: { id: true },
+          })
+        : await prisma.contact.findUnique({ where: { channel_igUserId: { channel, igUserId: senderId } }, select: { id: true } });
+      if (existing) await recordAdReferral(existing.id, referral);
+    } catch (err) {
+      logError("webhook:adReferral", err);
+    }
   }
   if (!msg) return;
   if (msg.is_echo || senderId === selfId) {

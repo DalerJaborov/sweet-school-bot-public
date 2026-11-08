@@ -9,7 +9,7 @@ import { toSomoni } from "./exchangeRates.js";
  * Зачем. Реклама «клик в переписку» учится на том, о чём ей сообщают. Без
  * сигнала об оплате она ищет тех, кто охотно пишет; с ним — тех, кто платит.
  * Единственная дверь: оплату в очередь кладёт только enqueuePurchaseConversion,
- * в Meta отправляет только runMetaConversions. Сторож — metaConversionsDoor.test.ts.
+ * в Meta отправляет только runMetaConversions. Сторож — describe «сторож» в tests/unit/metaConversions.test.ts.
  *
  * Первоисточник (developers.facebook.com/documentation/ads-commerce/conversions-api/
  * business-messaging, проверено 08.11.2026):
@@ -103,10 +103,11 @@ export async function enqueuePurchaseConversion(contactId: string, purchaseIds: 
     if ((await getSetting("metaCapiEnabled"))?.trim() !== "true") return;
     // Только то, что реально осталось оплаченным: при заморозке бота свежие
     // покупки откатываются, отозванные (фальшивый чек) — не покупка.
-    const rows = (await prisma.purchase.findMany({
-      where: { id: { in: purchaseIds }, contactId, revokedAt: null },
-      select: { id: true, amount: true },
-    })) ?? [];
+    const rows =
+      (await prisma.purchase.findMany({
+        where: { id: { in: purchaseIds }, contactId, revokedAt: null },
+        select: { id: true, amount: true },
+      })) ?? [];
     if (rows.length === 0) return;
     const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { channel: true } });
     if (!contact) return;
@@ -114,8 +115,11 @@ export async function enqueuePurchaseConversion(contactId: string, purchaseIds: 
     await prisma.metaConversion.upsert({
       where: { eventId: purchaseEventId(ids) },
       create: {
-        eventId: purchaseEventId(ids), contactId, channel: contact.channel,
-        purchaseIds: JSON.stringify(ids), valueTjs: rows.reduce((s, r) => s + r.amount, 0),
+        eventId: purchaseEventId(ids),
+        contactId,
+        channel: contact.channel,
+        purchaseIds: JSON.stringify(ids),
+        valueTjs: rows.reduce((s, r) => s + r.amount, 0),
       },
       update: {},
     });
@@ -126,7 +130,8 @@ export async function enqueuePurchaseConversion(contactId: string, purchaseIds: 
 
 /* --------------------------- кодирование события --------------------------- */
 
-export type BuiltEvent = { ok: true; body: Record<string, unknown> } | { ok: false; skip: string };
+/** retry: не хватает настройки — строка ждёт в очереди, после исправления уйдёт сама. */
+export type BuiltEvent = { ok: true; body: Record<string, unknown> } | { ok: false; skip: string; retry?: boolean };
 
 const sha256 = (v: string) => createHash("sha256").update(v).digest("hex");
 
@@ -152,12 +157,12 @@ export function buildPurchaseEvent(
   let userData: Record<string, unknown>;
   switch (row.channel) {
     case "INSTAGRAM":
-      if (!s.igAccountId) return { ok: false, skip: "Не задан id аккаунта Instagram" };
+      if (!s.igAccountId) return { ok: false, skip: "Не задан id аккаунта Instagram", retry: true };
       messagingChannel = "instagram";
       userData = { instagram_business_account_id: s.igAccountId, ig_sid: contact.igUserId };
       break;
     case "MESSENGER":
-      if (!s.pageId) return { ok: false, skip: "Не задан id страницы Facebook" };
+      if (!s.pageId) return { ok: false, skip: "Не задан id страницы Facebook", retry: true };
       messagingChannel = "messenger";
       userData = { page_id: s.pageId, page_scoped_user_id: contact.igUserId };
       break;
@@ -191,9 +196,19 @@ export function buildPurchaseEvent(
 
 /* ------------------------------ отправка ------------------------------ */
 
-/** Ошибки, при которых повтор не поможет: неверный параметр, нет прав, не тот dataset. */
-function isPermanent(status: number): boolean {
-  return status === 400 || status === 403 || status === 404;
+/**
+ * Что делать с отказом Meta. Graph отдаёт 400 и на истёкший маркер, и на часть
+ * лимитов — по одному HTTP-коду решать нельзя, смотрим error.code (ревью 08.11.2026):
+ *  — маркер/права (190, 102, 10, 200, 3): оплата не виновата — ждём новый маркер, очередь стоит;
+ *  — неверный параметр (100) и 404 (нет такого набора данных): окончательно failed;
+ *  — остальное (лимиты 4/17/32/613, 5xx, сеть): повтор позже.
+ */
+export function classifyMetaFailure(status: number, body: string): "auth" | "permanent" | "retry" {
+  let code: number | undefined;
+  try { code = (JSON.parse(body) as { error?: { code?: number } }).error?.code; } catch { /* не JSON */ }
+  if (code !== undefined && [190, 102, 10, 200, 3].includes(code)) return "auth";
+  if (code === 100 || status === 404) return "permanent";
+  return "retry";
 }
 
 function backoffMs(attempt: number): number {
@@ -209,26 +224,43 @@ export async function runMetaConversions(now = new Date()): Promise<void> {
   try {
     const s = await readConversionSettings();
     if (!s.enabled || !s.datasetId || !s.token) return;
+    // Пока задан проверочный код, настоящие оплаты НЕ отправляем: с ним они
+    // ушли бы только в «Тестовые события» и пропали для рекламы. Ждут в очереди.
+    if (s.testEventCode) return;
     const due = await prisma.metaConversion.findMany({
       where: { status: "pending", nextAttemptAt: { lte: now } },
       orderBy: { createdAt: "asc" },
       take: 20,
       include: { contact: { select: { igUserId: true, name: true, adCtwaClid: true } } },
     });
-    for (const row of due) await sendOne(row, s, now);
+    for (const row of due) {
+      // Маркер умер — остальные строки бессмысленно жечь: стоп до следующего прогона.
+      if ((await sendOne(row, s, now)) === "auth") break;
+    }
   } finally {
     running = false;
   }
 }
 
 async function sendOne(
-  row: { id: string; eventId: string; createdAt: Date; channel: string; valueTjs: number; attempts: number;
-    contact: Pick<Contact, "igUserId" | "name" | "adCtwaClid"> },
+  row: {
+    id: string;
+    eventId: string;
+    createdAt: Date;
+    channel: string;
+    valueTjs: number;
+    purchaseIds: string;
+    attempts: number;
+    contact: Pick<Contact, "igUserId" | "name" | "adCtwaClid">;
+  },
   s: ConversionSettings,
   now: Date,
-): Promise<void> {
+): Promise<"ok" | "auth" | void> {
   if (now.getTime() - row.createdAt.getTime() > MAX_AGE_MS) {
-    await prisma.metaConversion.update({ where: { id: row.id }, data: { status: "expired", lastError: "Старше 7 дней — Meta не примет" } });
+    await prisma.metaConversion.update({
+      where: { id: row.id },
+      data: { status: "expired", lastError: "Старше 7 дней — Meta не примет" },
+    });
     return;
   }
   const somoniPerUsd = await toSomoni(1, "USD");
@@ -236,9 +268,20 @@ async function sendOne(
     await retryLater(row, "Нет курса доллара — повторим позже", now);
     return;
   }
-  const built = buildPurchaseEvent(row, row.contact, row.valueTjs / somoniPerUsd, s);
+  // Перечитываем покупки: между оплатой и отправкой Ширин могла отозвать доступ
+  // (фальшивый чек) — отозванное не покупка, сумма — только по живым.
+  let purchaseIds: string[] = [];
+  try { purchaseIds = JSON.parse(row.purchaseIds) as string[]; } catch { /* битая строка — ниже уйдёт в revoked */ }
+  const alive = (await prisma.purchase.findMany({ where: { id: { in: purchaseIds }, revokedAt: null }, select: { amount: true } })) ?? [];
+  if (alive.length === 0) {
+    await prisma.metaConversion.update({ where: { id: row.id }, data: { status: "revoked", lastError: "Доступ отозван до отправки" } });
+    return;
+  }
+  const valueTjs = alive.reduce((sum, p) => sum + p.amount, 0);
+  const built = buildPurchaseEvent(row, row.contact, valueTjs / somoniPerUsd, s);
   if (!built.ok) {
-    await prisma.metaConversion.update({ where: { id: row.id }, data: { status: "skipped", lastError: built.skip } });
+    if (built.retry) await retryLater(row, built.skip, now);
+    else await prisma.metaConversion.update({ where: { id: row.id }, data: { status: "skipped", lastError: built.skip } });
     return;
   }
   // Маркер — в теле, а не в адресе: адреса попадают в журналы прокси и ошибок.
@@ -254,14 +297,30 @@ async function sendOne(
     status = res.status;
     detail = (await res.text()).slice(0, 300);
     if (res.ok) {
-      await prisma.metaConversion.update({ where: { id: row.id }, data: { status: "sent", sentAt: now, attempts: row.attempts + 1, lastError: null } });
+      await prisma.metaConversion.update({
+        where: { id: row.id },
+        data: { status: "sent", sentAt: now, attempts: row.attempts + 1, lastError: null },
+      });
       return;
     }
   } catch (err) {
     detail = err instanceof Error ? err.message : String(err);
   }
-  if (isPermanent(status) || row.attempts + 1 >= MAX_ATTEMPTS) {
-    await prisma.metaConversion.update({ where: { id: row.id }, data: { status: "failed", attempts: row.attempts + 1, lastError: `${status || "сеть"}: ${detail}` } });
+  const kind = status ? classifyMetaFailure(status, detail) : "retry";
+  if (kind === "auth") {
+    // Попытку не засчитываем: виновата не оплата, а маркер. Тревога одна на прогон.
+    await prisma.metaConversion.update({
+      where: { id: row.id },
+      data: { lastError: `Маркер Meta не принят — нужен новый: ${status} ${detail}`, nextAttemptAt: new Date(now.getTime() + 3_600_000) },
+    });
+    logError("metaConversions:token", new Error(`Маркер для передачи оплат в Meta не принят: ${status} ${detail}`));
+    return "auth";
+  }
+  if (kind === "permanent" || row.attempts + 1 >= MAX_ATTEMPTS) {
+    await prisma.metaConversion.update({
+      where: { id: row.id },
+      data: { status: "failed", attempts: row.attempts + 1, lastError: `${status || "сеть"}: ${detail}` },
+    });
     logError("metaConversions:failed", new Error(`Meta отказала в событии ${row.eventId}: ${status} ${detail}`));
     return;
   }
@@ -271,7 +330,11 @@ async function sendOne(
 async function retryLater(row: { id: string; attempts: number }, reason: string, now: Date): Promise<void> {
   await prisma.metaConversion.update({
     where: { id: row.id },
-    data: { attempts: row.attempts + 1, lastError: reason, nextAttemptAt: new Date(now.getTime() + backoffMs(row.attempts)) },
+    data: {
+      attempts: row.attempts + 1,
+      lastError: reason,
+      nextAttemptAt: new Date(now.getTime() + backoffMs(row.attempts)),
+    },
   });
 }
 
@@ -283,7 +346,8 @@ export async function conversionStatus(now = new Date()) {
   const grouped = await prisma.metaConversion.groupBy({ by: ["status"], _count: { _all: true } });
   const counts = Object.fromEntries(grouped.map((g) => [g.status, g._count._all]));
   const lastProblem = await prisma.metaConversion.findFirst({
-    where: { status: { in: ["failed", "skipped"] } },
+    // Только настоящие сбои: skipped (WhatsApp через мост, сайт) — ожидаемо и не тревога.
+    where: { OR: [{ status: "failed" }, { status: "pending", lastError: { not: null } }] },
     orderBy: { createdAt: "desc" },
     select: { status: true, lastError: true, createdAt: true },
   });
@@ -310,7 +374,8 @@ export async function conversionStatus(now = new Date()) {
  */
 export async function sendTestEvent(): Promise<{ ok: boolean; detail: string }> {
   const s = await readConversionSettings();
-  if (!s.testEventCode) return { ok: false, detail: "Сначала вставьте проверочный код из Events Manager → Тестовые события" };
+  if (!s.testEventCode)
+    return { ok: false, detail: "Сначала вставьте проверочный код из Events Manager → Тестовые события" };
   if (!s.datasetId || !s.token) return { ok: false, detail: "Не заданы набор данных или маркер" };
   const buyer = await prisma.purchase.findFirst({
     where: { revokedAt: null, contact: { channel: { in: ["INSTAGRAM", "MESSENGER"] } } },
@@ -322,7 +387,9 @@ export async function sendTestEvent(): Promise<{ ok: boolean; detail: string }> 
   if (somoniPerUsd <= 0) return { ok: false, detail: "Нет курса доллара" };
   const built = buildPurchaseEvent(
     { eventId: `test:${Date.now()}`, createdAt: new Date(), channel: buyer.contact.channel },
-    buyer.contact, buyer.amount / somoniPerUsd, s,
+    buyer.contact,
+    buyer.amount / somoniPerUsd,
+    s,
   );
   if (!built.ok) return { ok: false, detail: built.skip };
   try {
