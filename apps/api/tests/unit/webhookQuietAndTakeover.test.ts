@@ -107,9 +107,9 @@ describe("умный перехват хозяйки в вебхуке", () => {
   it("Ширин молчит 40 минут: бот отвечает, перехват снят", async () => {
     contactRef.current.humanTakenOverAt = ago(40);
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(40), text: "x" });
-    db.model("contact").update.mockImplementation(async () => {
+    db.model("contact").updateMany.mockImplementation(async () => {
       contactRef.current.humanTakenOverAt = null;
-      return contactRef.current;
+      return { count: 1 };
     });
     await handleMessage(text("а адрес какой?"));
     expect(debounceMessage).toHaveBeenCalled();

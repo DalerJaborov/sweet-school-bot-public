@@ -23,7 +23,7 @@ describe("resolveTakeover (с базой)", () => {
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(30) });
     const d = await resolveTakeover(contact, { text: "Алло?", at: ago(0) }, now);
     expect(d).toMatchObject({ action: "answer", why: "cold" });
-    expect(db.model("contact").update).toHaveBeenCalledWith(expect.objectContaining({ data: { humanTakenOverAt: null, humanTakeoverMid: null } }));
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith({ where: { id: "c1", humanTakenOverAt: contact.humanTakenOverAt }, data: { humanTakenOverAt: null, humanTakeoverMid: null } });
   });
   it("сутки без реплик: перехват снят совсем", async () => {
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(25 * 60) });
@@ -34,7 +34,7 @@ describe("resolveTakeover (с базой)", () => {
     db.model("purchase").count.mockResolvedValue(1);
     const d = await resolveTakeover(contact, { text: "курс не открывается, дайте ссылку заново", at: ago(0) }, now);
     expect(d).toEqual({ action: "answer", why: "safe_intent" });
-    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
   });
   it("рубильник выключен: молчим без срока", async () => {
     db.model("setting").findUnique.mockImplementation(async (a: { where: { key: string } }) => (a.where.key === "smartTakeoverEnabled" ? { value: "false" } : null));

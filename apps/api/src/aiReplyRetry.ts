@@ -5,8 +5,10 @@ import { detectClientLanguage } from "./ai/clientLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
-import { isBotFrozen } from "./messaging/automation.js";
+import { isBotFrozen, withTakeoverOverride } from "./messaging/automation.js";
 import { resolveTakeover } from "./ai/ownerTakeover.js";
+import { isPureThanks } from "./ai/reactions.js";
+import { QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
 
 /**
  * Очередь ответов, которые ИИ НИ РАЗУ не дал — все ключи/модели Gemini отказали.
@@ -41,6 +43,16 @@ const DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000]; // 1, 2, 5, 10, 
 const TRAILING_DELAY_MS = 20 * 60_000;
 const TRAILING_ATTEMPTS = 40; // ещё ~13 часов
 const MAX_ATTEMPTS = DELAYS_MS.length + TRAILING_ATTEMPTS;
+
+/** Исходящее после snapshotAt, кроме уведомлений о задержке. Пустой текст (фото без подписи) — тоже ответ. */
+function outgoingAnswerSince(contactId: string, snapshotAt: Date) {
+  return {
+    contactId,
+    direction: "OUT" as const,
+    createdAt: { gt: snapshotAt },
+    OR: [{ text: null }, { text: { notIn: Object.values(DELAY_NOTICES) } }],
+  };
+}
 
 function delayFor(attempt: number): number {
   return DELAYS_MS[attempt] ?? TRAILING_DELAY_MS;
@@ -92,9 +104,16 @@ async function runQueue(): Promise<void> {
     // Пришло более свежее входящее с момента постановки — эта попытка устарела:
     // новое сообщение либо уже своя запись в очереди, либо на него уже ответили
     // обычным ходом. Повторять СТАРЫЙ текст поверх нового разговора нельзя.
-    const newerIn = await prisma.message.findFirst({
+    // Не считаем «новым разговором»: тихий ответ на историю (мы на него молчим осознанно)
+    // и чистое «спасибо» (вопрос под ним остаётся без ответа и должен получить его).
+    const newerRows = await prisma.message.findMany({
       where: { contactId: row.contactId, direction: "IN", createdAt: { gt: row.snapshotAt } },
+      select: { text: true, payload: true },
+      take: 20,
     });
+    const newerIn = (newerRows ?? []).some(
+      (m) => m.payload !== QUIET_STORY_PAYLOAD && !(m.text && isPureThanks(m.text)),
+    );
     if (newerIn) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
       continue;
@@ -103,7 +122,7 @@ async function runQueue(): Promise<void> {
     // Кто-то (хозяйка руками, обычный ход) уже ответил после — сдачу засчитываем
     // как успех, а не как повод пробовать снова поверх готового ответа.
     const answeredSince = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", text: { notIn: Object.values(DELAY_NOTICES) }, createdAt: { gt: row.snapshotAt } },
+      where: outgoingAnswerSince(row.contactId, row.snapshotAt),
     });
     if (answeredSince) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
@@ -122,6 +141,7 @@ async function runQueue(): Promise<void> {
 
     // Умный перехват: ответ отложен, пока Ширин на связи; ушла — отвечаем сами.
     let contactNow = row.contact;
+    let safeIntentOnly = false;
     if (contactNow.humanTakenOverAt) {
       const verdict = await resolveTakeover(contactNow, { text: row.text, at: row.snapshotAt });
       if (verdict.action === "hold") {
@@ -129,11 +149,14 @@ async function runQueue(): Promise<void> {
         else await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
         continue;
       }
-      if (verdict.why !== "safe_intent") contactNow = { ...contactNow, humanTakenOverAt: null, humanTakeoverMid: null };
+      if (verdict.why === "safe_intent") safeIntentOnly = true;
+      else contactNow = { ...contactNow, humanTakenOverAt: null, humanTakeoverMid: null };
     }
 
     try {
-      await aiReply(contactNow, row.text, [], []);
+      // Безопасный запрос под паузой хозяйки — то же разовое разрешение, что и в webhook.ts.
+      if (safeIntentOnly) await withTakeoverOverride(contactNow.id, () => aiReply(contactNow, row.text, [], []));
+      else await aiReply(contactNow, row.text, [], []);
     } catch (err) {
       logError("aiReplyRetry:attempt", err);
       if (!canRetryMetaFailure(err)) {
@@ -145,7 +168,7 @@ async function runQueue(): Promise<void> {
 
     if (await isBotFrozen()) return;
     const sentNow = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", text: { notIn: Object.values(DELAY_NOTICES) }, createdAt: { gt: row.snapshotAt } },
+      where: outgoingAnswerSince(row.contactId, row.snapshotAt),
     });
     if (sentNow) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);

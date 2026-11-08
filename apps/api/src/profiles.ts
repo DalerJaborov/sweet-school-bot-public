@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError } from "./db.js";
-import { isListedPersonal } from "./ai/personalList.js";
+import { isListedPersonal, readPersonalList, LIST_REASON } from "./ai/personalList.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { env } from "./env.js";
 
@@ -62,6 +62,30 @@ async function fetchProfile(igUserId: string, channel: string): Promise<Profile 
   } catch (err) {
     logError("profiles:fetch", err);
     return null;
+  }
+}
+
+/**
+ * Первое сообщение родни приходит раньше, чем фоновый тик узнаёт ник контакта, и бот успел бы
+ * ответить. Для Instagram без ника, при непустом списке, профиль запрашивается сразу (с таймаутом);
+ * совпало со списком — контакт помечается личным. Возвращает true, если пометили.
+ */
+export async function markListedPersonalNow(contact: {
+  id: string; igUserId: string; channel: string; username: string | null; personal: boolean;
+}): Promise<boolean> {
+  if (contact.personal || contact.username || contact.channel !== "INSTAGRAM") return false;
+  try {
+    if ((await readPersonalList()).length === 0) return false;
+    const profile = await fetchProfile(contact.igUserId, contact.channel);
+    if (!profile?.username || !(await isListedPersonal(profile.username))) return false;
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { personal: true, personalReason: LIST_REASON, username: profile.username, name: profile.name ?? undefined },
+    });
+    return true;
+  } catch (err) {
+    logError("profiles:markListedNow", err);
+    return false;
   }
 }
 

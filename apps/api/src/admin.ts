@@ -1,5 +1,5 @@
 import { freeLessonAdminRouter } from "./site/freeLessonAdmin.js";
-import { importPersonalList } from "./ai/personalList.js";
+import { importPersonalList, removePersonalEntry } from "./ai/personalList.js";
 import express, { Router, type Request, type Response, type NextFunction } from "express";
 import nodeCrypto from "node:crypto";
 import { adminAccessConfig } from "./adminAccess.js";
@@ -1298,6 +1298,21 @@ adminRouter.post("/admin/personal/import", async (req, res) => {
   }
 });
 
+/** Убрать ник или номер из списка личных контактов (и снять пометку у контактов этого списка). */
+adminRouter.post("/admin/personal/remove", async (req, res) => {
+  const parsed = z.object({ entry: z.string().min(1).max(200) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Укажите ник или номер" });
+    return;
+  }
+  try {
+    res.json(await removePersonalEntry(parsed.data.entry));
+  } catch (err) {
+    logError("admin:removePersonal", err);
+    res.status(500).json({ error: "Не удалось обновить список" });
+  }
+});
+
 /** Пометить/снять «личный контакт». Бот с такими не разговаривает вообще: это
  *  родня и знакомые хозяйки, а не клиенты. */
 adminRouter.post("/admin/contacts/:id/personal", async (req, res) => {
@@ -1307,13 +1322,20 @@ adminRouter.post("/admin/contacts/:id/personal", async (req, res) => {
     return;
   }
   try {
-    await prisma.contact.update({
+    const updated = await prisma.contact.update({
       where: { id: req.params.id },
       data: {
         personal: parsed.data.personal,
         personalReason: parsed.data.personal ? (parsed.data.reason ?? "Отмечен вручную") : null,
       },
     });
+    // Сняли пометку — убираем и запись из списка, иначе тик профилей пометит человека заново.
+    if (!parsed.data.personal) {
+      const phone = updated?.channel === "WHATSAPP" ? updated.igUserId?.match(/:(\d{7,15})@c\.us$/)?.[1] : null;
+      for (const entry of [updated?.username, phone]) {
+        if (entry) await removePersonalEntry(entry).catch((err) => logError("admin:unlistPersonal", err));
+      }
+    }
     res.json({ ok: true });
   } catch (err) {
     logError("admin:setPersonal", err);

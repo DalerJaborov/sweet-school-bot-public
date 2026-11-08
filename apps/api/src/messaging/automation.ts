@@ -54,7 +54,11 @@ type ContactPolicy = {
 export function contactAutomationBlocked(contact: ContactPolicy, purpose: MessagePurpose = "reply"): boolean {
   if (purpose === "human") return false;
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return true;
-  if (contact.id && takeoverOverride.getStore() === contact.id) return false;
+  // Разовое разрешение снимает только перехват (humanTakenOverAt); таймер паузы
+  // (реакция хозяйки, «позовите человека») обойти им нельзя.
+  if (contact.id && takeoverOverride.getStore() === contact.id) {
+    return Boolean(contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now());
+  }
   return (
     purpose !== "verified_receipt_access" &&
     Boolean(

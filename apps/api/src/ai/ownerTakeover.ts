@@ -102,9 +102,17 @@ export async function ownerAnchor(contact: TakeoverContact): Promise<Date | null
   return last?.createdAt ?? contact.humanTakenOverAt ?? null;
 }
 
-/** Снять постоянный перехват (в базе). Мост WhatsApp снимает свой флаг отдельно (whatsapp/worker.ts). */
-export async function releaseTakeover(contactId: string): Promise<void> {
-  await prisma.contact.update({ where: { id: contactId }, data: { humanTakenOverAt: null, humanTakeoverMid: null } });
+/**
+ * Снять постоянный перехват (в базе). Мост WhatsApp снимает свой флаг отдельно (whatsapp/worker.ts).
+ * `expectedAt` — момент перехвата, который мы видели при решении: если за это время хозяйка
+ * написала снова (перехват переставлен), снимать его нельзя. Возвращает false, если перехват уже другой.
+ */
+export async function releaseTakeover(contactId: string, expectedAt?: Date | null): Promise<boolean> {
+  const res = await prisma.contact.updateMany({
+    where: expectedAt ? { id: contactId, humanTakenOverAt: expectedAt } : { id: contactId },
+    data: { humanTakenOverAt: null, humanTakeoverMid: null },
+  });
+  return !(res && res.count === 0);
 }
 
 /**
@@ -131,8 +139,23 @@ export async function resolveTakeover(
     safeIntent: isSafeIntent(incoming.text, hasPurchase),
     now,
   });
+  // «Спасибо» бот отвечает только реакцией. Если реакции выключены, свободный ИИ-ответ
+  // под паузой хозяйки не нужен (разовое разрешение шире задуманного) — молчим.
+  if (
+    decision.action === "answer" &&
+    decision.why === "safe_intent" &&
+    !(hasPurchase && looksLikeAccessRequest(incoming.text ?? "")) &&
+    (await getSetting("reactionsEnabled")) === "false"
+  ) {
+    return { action: "hold", until: null };
+  }
   if (decision.action === "answer" && decision.why !== "safe_intent") {
-    await releaseTakeover(contact.id).catch((err) => logError("ownerTakeover:release", err));
+    // Хозяйка могла написать снова между чтением и снятием: тогда перехват уже новый — молчим.
+    const released = await releaseTakeover(contact.id, contact.humanTakenOverAt).catch((err) => {
+      logError("ownerTakeover:release", err);
+      return true;
+    });
+    if (!released) return { action: "hold", until: null };
   }
   return decision;
 }
@@ -156,6 +179,7 @@ export async function releaseExpiredTakeovers(now = new Date()): Promise<number>
     where: { humanTakenOverAt: { lt: cutoff } },
     select: { id: true, humanTakenOverAt: true },
     take: 100,
+    orderBy: { humanTakenOverAt: "asc" },
   });
   let released = 0;
   for (const c of rows) {
@@ -164,8 +188,11 @@ export async function releaseExpiredTakeovers(now = new Date()): Promise<number>
       select: { id: true },
     });
     if (recent) continue;
-    await releaseTakeover(c.id).catch((err) => logError("ownerTakeover:expire", err));
-    released += 1;
+    const ok = await releaseTakeover(c.id, c.humanTakenOverAt).catch((err) => {
+      logError("ownerTakeover:expire", err);
+      return false;
+    });
+    if (ok) released += 1;
   }
   return released;
 }

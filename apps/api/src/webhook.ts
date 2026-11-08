@@ -9,7 +9,9 @@ import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
 import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
-import { storyReplyWorthAnswer } from "./ai/storyRelevance.js";
+import { storyReplyWorthAnswer, QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
+import { noteDeliberateSilence } from "./ai/deliberateSilence.js";
+import { markListedPersonalNow } from "./profiles.js";
 import { looksPersonal, startsWithFamilyAddress } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
@@ -390,6 +392,11 @@ const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> =
   spam: "рекламный спам",
 };
 
+/** Пауза по таймеру (реакция хозяйки, просьба позвать человека) — отдельно от перехвата. */
+function timerSilenced(contact: { humanSilencedUntil: Date | null }): boolean {
+  return !!contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now();
+}
+
 function isHumanSilenced(contact: { humanSilencedUntil: Date | null; humanTakenOverAt?: Date | null }): boolean {
   return (
     Boolean(contact.humanTakenOverAt) ||
@@ -470,10 +477,13 @@ export async function handleMessage(
     if (msg.reply_to?.story && !storyReplyWorthAnswer({ storyCaption: own.caption, replyText: text })) {
       const quietContact = await upsertContact(senderId, null, channel);
       if (msg.mid && text) {
+        // Метка нужна очереди повторов: тихий ответ на историю не должен стирать отложенный ответ на вопрос.
         await prisma.message
-          .create({ data: { contactId: quietContact.id, direction: "IN", mid: msg.mid, text, payload } })
+          .create({ data: { contactId: quietContact.id, direction: "IN", mid: msg.mid, text, payload: QUIET_STORY_PAYLOAD } })
           .catch((err) => { if ((err as { code?: string })?.code !== "P2002") logError("webhook:storyRecord", err); });
       }
+      // Молчим сознательно: сторож неотвеченных не должен поднимать тревогу.
+      noteDeliberateSilence(quietContact.id, "ответ на историю не про курсы");
       return;
     }
     // Обложку отдаём модели глазами, подпись — текстом: вместе они объясняют,
@@ -533,6 +543,8 @@ export async function handleMessage(
   // То же для заблокированных за спам/флирт (владелец 05.09.2026) — снять
   // блок можно из панели «Ученицы».
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return;
+  // Первое сообщение родни приходит раньше, чем фоновый тик узнаёт ник: сверяем со списком сразу.
+  if (await markListedPersonalNow(contact)) return;
   if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
 
   // ФЛИРТ / ОСКОРБЛЕНИЯ / РЕКЛАМНЫЙ СПАМ / ВИДЕО БЕЗ ТЕКСТА в директе от того,
@@ -641,10 +653,10 @@ export async function handleMessage(
       Object.assign(contact, refreshed);
     }
   }
+  // Разовое разрешение даёт только ответ ИИ (доступ купившей, реакция на «спасибо»):
+  // воронка по ключевому слову под паузой хозяйки не запускается.
   return safeOverride
-    ? withTakeoverOverride(contact.id, () =>
-        replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint),
-      )
+    ? withTakeoverOverride(contact.id, () => replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint, true))
     : replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint);
 }
 
@@ -660,6 +672,8 @@ async function isFirstIncoming(contactId: string): Promise<boolean> {
 async function gateHumanTakeover(contact: Contact, text: string | null): Promise<"hold" | "safe" | "free"> {
   // Пауза по таймеру (реакция хозяйки, просьба «позови человека») не из этой цепочки.
   if (!contact.humanTakenOverAt) return "hold";
+  // Реакция хозяйки / «позови человека» (таймер) разовым разрешением не обходится.
+  if (timerSilenced(contact)) return "hold";
   const lastIn = await prisma.message.findFirst({
     where: { contactId: contact.id, direction: "IN" },
     orderBy: { createdAt: "desc" },
@@ -681,8 +695,9 @@ async function replyToClient(
   attachments: Attachment[],
   rescuedImages: RescuedImage[],
   ownMediaHint: string | undefined,
+  skipFunnel = false,
 ): Promise<void> {
-  const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload);
+  const handledByFunnel = skipFunnel ? false : await handleIncomingDm(contact, textOrVoice, payload);
   if (handledByFunnel || (!textOrVoice && attachments.length === 0)) return;
 
   // Человеческий тайминг: ждём, вдруг человек допишет ещё пузырь — отвечаем на
@@ -701,6 +716,7 @@ async function replyToClient(
       if (!fresh) return;
       // За время ожидания подключилась хозяйка — картинки уже спасены выше. Безопасный
       // запрос (разовое разрешение выше) под её паузу не подпадает.
+      if (timerSilenced(fresh)) return;
       if (isHumanSilenced(fresh) && !takeoverOverrideActive(fresh.id)) return;
       await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
     },
