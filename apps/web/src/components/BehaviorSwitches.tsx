@@ -8,7 +8,9 @@ import { toast } from "./Toast";
  * Каждый тумблер = одна настройка на сервере, по умолчанию всё включено
  * (значение «false» выключает). Меняются без пересборки и перезапуска.
  */
-const SWITCHES: { key: string; label: string; hint: string }[] = [
+type SettingSwitch = { key: string; label: string; hint: string };
+
+const SWITCHES: SettingSwitch[] = [
   {
     key: "replyGateEnabled",
     label: "Не отвечать, если пишут не про курсы",
@@ -46,15 +48,32 @@ const SWITCHES: { key: string; label: string; hint: string }[] = [
   },
 ];
 
+/** Рубильники экрана «Автосообщения» — то же устройство, что выше. */
+const FUNNEL_SWITCHES: SettingSwitch[] = [
+  {
+    key: "commentPublicReplyEnabled",
+    label: "Отвечать под комментарием «написали вам в директ»",
+    hint: "Когда автосообщение ушло в директ, под комментарием появляется короткий ответ по-таджикски. Выключите — директ всё равно придёт, просто без ответа под постом.",
+  },
+];
+
 export function BehaviorSwitches() {
+  return <SettingSwitches title="Поведение помощника" switches={SWITCHES} testId="behavior-switches" />;
+}
+
+export function FunnelSwitches() {
+  return <SettingSwitches title="Ответ под комментарием" switches={FUNNEL_SWITCHES} testId="funnel-switches" />;
+}
+
+function SettingSwitches({ title, switches, testId }: { title: string; switches: SettingSwitch[]; testId: string }) {
   const [values, setValues] = useState<Record<string, boolean> | null>(null);
   const busy = useRef(new Set<string>());
 
   useEffect(() => {
     api<Record<string, string | null>>("/admin/settings")
-      .then((s) => setValues(Object.fromEntries(SWITCHES.map((x) => [x.key, s[x.key] !== "false"]))))
+      .then((s) => setValues(Object.fromEntries(switches.map((x) => [x.key, s[x.key] !== "false"]))))
       .catch(() => setValues(null));
-  }, []);
+  }, [switches]);
 
   if (!values) return null;
 
@@ -73,9 +92,9 @@ export function BehaviorSwitches() {
   }
 
   return (
-    <div className="behavior-switches" data-testid="behavior-switches">
-      <h4 className="more-title">Поведение помощника</h4>
-      {SWITCHES.map((s) => (
+    <div className="behavior-switches" data-testid={testId}>
+      <h4 className="more-title">{title}</h4>
+      {switches.map((s) => (
         <Switch
           key={s.key}
           checked={values[s.key] !== false}
