@@ -285,7 +285,10 @@ class Bridge {
     const timestamp = Number(message.timestamp) * 1000;
     if (!messageId || !directId(chatId) || !Number.isFinite(timestamp)
       || timestamp < Math.floor(this.liveSince / 1000) * 1000 || timestamp > this.now() + 60_000
-      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) { this.trace('drop:early(ts/status/ready)', message); return; }
+      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) {
+      this.trace(`drop:early noId=${!messageId} badChat=${!directId(chatId)} badTs=${!Number.isFinite(timestamp)} old=${timestamp < Math.floor(this.liveSince / 1000) * 1000} future=${timestamp > this.now() + 60_000} contacts=${!this.contactsReady} noAccount=${!this.accountId} chatLen=${String(chatId).replace(/@.*$/, '').length} chatSuffix=${String(chatId).replace(/^[^@]*/, '')}`, message);
+      return;
+    }
     if (message.fromMe) {
       // A library send emits its own echo before its promise returns on some versions.
       const active = this.sending.get(chatId);
