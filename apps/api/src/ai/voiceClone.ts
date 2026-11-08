@@ -37,11 +37,44 @@ export async function voiceEnabled(): Promise<boolean> {
   return voiceConfigured() && (await getSetting("voiceCloneEnabled")) === "true";
 }
 
+/** Версия пост-обработки звука: меняем при смене фильтра, чтобы кеш не отдавал старое звучание. */
+const VOICE_POST = "phone-v1";
 const VOICE_SETTINGS = { stability: 0.45, similarity_boost: 0.85, style: 0.3, use_speaker_boost: true };
 const MEDIA_DIR = "/data/uploads";
 export const DEFAULT_MONTHLY_CAP_USD = 20;
 /** Цена, присланная владельцем (ElevenLabs Business, v4: $0.08 за 1000 знаков; не проверена на официальной странице). Меняется настройкой voicePricePer1kUsd. */
 export const DEFAULT_PRICE_PER_1K_USD = 0.08;
+
+/** Один кусок голосом - примерно до 9-10 секунд речи (~150 знаков), всего не больше 4 кусков. */
+export const VOICE_CHUNK_CHARS = 150;
+export const VOICE_MAX_CHUNKS = 4;
+
+/**
+ * Режет ответ на короткие голосовые по границам предложений (как человек: фраза - пауза - фраза).
+ * Слишком длинное предложение режется по запятым/пробелам. Больше VOICE_MAX_CHUNKS - null (отвечаем текстом).
+ */
+export function splitForVoice(text: string): string[] | null {
+  const sentences = text.trim().split(/(?<=[.!?…])\s+/u).filter(Boolean);
+  const pieces: string[] = [];
+  for (const s of sentences) {
+    if (s.length <= VOICE_CHUNK_CHARS) { pieces.push(s); continue; }
+    let rest = s;
+    while (rest.length > VOICE_CHUNK_CHARS) {
+      const cut = Math.max(rest.lastIndexOf(", ", VOICE_CHUNK_CHARS), rest.lastIndexOf(" ", VOICE_CHUNK_CHARS));
+      const at = cut > 40 ? cut + 1 : VOICE_CHUNK_CHARS;
+      pieces.push(rest.slice(0, at).trim());
+      rest = rest.slice(at).trim();
+    }
+    if (rest) pieces.push(rest);
+  }
+  const chunks: string[] = [];
+  for (const piece of pieces) {
+    const last = chunks[chunks.length - 1];
+    if (last && last.length + 1 + piece.length <= VOICE_CHUNK_CHARS) chunks[chunks.length - 1] = `${last} ${piece}`;
+    else chunks.push(piece);
+  }
+  return chunks.length > 0 && chunks.length <= VOICE_MAX_CHUNKS ? chunks : null;
+}
 
 export function normalizeVoiceText(text: string): string {
   return text.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
@@ -50,7 +83,7 @@ export function normalizeVoiceText(text: string): string {
 /** Ключ кеша: тот же текст + голос + модель + настройки = тот же файл, повторно не платим. */
 export function voiceCacheKey(text: string): string {
   return createHash("sha256")
-    .update(JSON.stringify([normalizeVoiceText(text), env.elevenLabsVoiceId, env.elevenLabsModel, VOICE_SETTINGS]))
+    .update(JSON.stringify([normalizeVoiceText(text), env.elevenLabsVoiceId, env.elevenLabsModel, VOICE_SETTINGS, VOICE_POST]))
     .digest("hex")
     .slice(0, 32);
 }
@@ -129,7 +162,7 @@ export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
   await chargeOrRefuse(text.length);
   const mp3 = await synthesizeSpeech(text);
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
-  const opus = await toOpusOgg(mp3);
+  const opus = await toOpusOgg(mp3, 30_000, true);
   const name = `tts-${key}.${opus ? "ogg" : "mp3"}`;
   // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».
   const target = path.join(MEDIA_DIR, name);

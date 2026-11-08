@@ -7,7 +7,15 @@ import { spawn } from "node:child_process";
  * Перекодируем через ffmpeg (он уже стоит на сервере для видео уроков); если ffmpeg
  * недоступен или упал — возвращаем null, и вызывающий оставляет исходный файл.
  */
-export function toOpusOgg(input: Buffer, timeoutMs = 30_000): Promise<Buffer | null> {
+/**
+ * Звук «записано на телефон в комнате»: срезаем студийные края частот, слегка сжимаем
+ * громкость и подмешиваем очень тихий фон. Чем студийнее голос, тем быстрее он выдаёт бота.
+ */
+export const HUMANIZE_FILTER =
+  "[0:a]highpass=f=110,lowpass=f=7500,acompressor=threshold=-18dB:ratio=3:attack=20:release=250[v];" +
+  "anoisesrc=color=pink:amplitude=0.006:sample_rate=48000[n];[v][n]amix=inputs=2:duration=first:normalize=0[o]";
+
+export function toOpusOgg(input: Buffer, timeoutMs = 30_000, humanize = false): Promise<Buffer | null> {
   return new Promise((resolve) => {
     let done = false;
     const finish = (value: Buffer | null) => {
@@ -16,7 +24,7 @@ export function toOpusOgg(input: Buffer, timeoutMs = 30_000): Promise<Buffer | n
       resolve(value);
     };
     try {
-      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1"], {
+      const ff = spawn("ffmpeg", [...["-v", "error", "-i", "pipe:0", "-vn"], ...(humanize ? ["-filter_complex", HUMANIZE_FILTER, "-map", "[o]"] : []), "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", "-f", "ogg", "pipe:1"], {
         stdio: ["pipe", "pipe", "ignore"],
       });
       const chunks: Buffer[] = [];

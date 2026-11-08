@@ -33,3 +33,9 @@ Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 af
 4. Delete her original sample files wherever they were kept (not in git).
 
 Revocation also: purge the /media cache at the CDN (files are served `immutable` for a year) and delete approved library audio rows (the reuse path does not check `voiceCloneEnabled`).
+
+## Chunked, humanised voice (08.11.2026)
+- A voice reply is split on sentence boundaries into chunks of <= 150 chars (~9 s each), max 4 chunks (more -> text). Chunks are synthesised in parallel, each cached by its own hash, then sent one by one; the bridge keeps its 4-9 s anti-ban gap and shows "recording audio".
+- Post-processing (ffmpeg, `HUMANIZE_FILTER`): high/low-pass like a phone mic, light compression, very quiet pink-noise room tone. Bump `VOICE_POST` in `voiceClone.ts` when changing it (invalidates cache).
+- Default model `eleven_v4_turbo` (set `ELEVENLABS_MODEL` to change). v4 vs v4 Turbo emotional range: NO DATA in docs - judge by ear.
+- Not done: real laugh/breath clips from Shirin's recordings spliced between chunks; v3 audio tags ([laughs]) for emotion.

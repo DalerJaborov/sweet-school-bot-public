@@ -1,6 +1,6 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendAttachmentToContact } from "../messaging/send.js";
-import { synthesizeToFile, voiceEnabled } from "./voiceClone.js";
+import { splitForVoice, synthesizeToFile, voiceEnabled } from "./voiceClone.js";
 
 /**
  * ГДЕ БОТ ОТВЕЧАЕТ ГОЛОСОМ, А ГДЕ ТЕКСТОМ (владелец 08.11.2026, «бот сам решает»).
@@ -47,7 +47,7 @@ export async function trySendVoiceReply(
   text: string,
   clientSentVoice: boolean,
 ): Promise<boolean> {
-  let url: string;
+  let urls: string[];
   try {
     if ((await getSetting("voiceReplyEnabled")) !== "true" || !(await voiceEnabled())) return false;
     const last = await prisma.message.findFirst({
@@ -60,7 +60,10 @@ export async function trySendVoiceReply(
       lastReplyWasVoice: Boolean(last?.text?.startsWith(VOICE_MARK)),
     });
     if (choice !== "voice") return false;
-    ({ url } = await synthesizeToFile(text));
+    const chunks = splitForVoice(text);
+    if (!chunks) return false;
+    // Куски озвучиваются параллельно (у каждого свой кеш), но уходят строго по очереди.
+    urls = (await Promise.all(chunks.map((chunk) => synthesizeToFile(chunk)))).map((r) => r.url);
   } catch (err) {
     // До отправки ничего не ушло - безопасно ответить текстом.
     logError("voiceReply", err);
@@ -68,7 +71,9 @@ export async function trySendVoiceReply(
   }
   // После вызова моста исход мог остаться неизвестным: текстом НЕ дублируем,
   // ошибку отдаём вызывающему (мост запрещает автоповтор при неопределённом исходе).
-  const mid = await sendAttachmentToContact(contact, url, "audio");
+  // Паузы между кусками (4-9 с) держит мост: это его антибан-темп, он же показывает «записывает аудио».
+  let mid: string | null = null;
+  for (const url of urls) mid = await sendAttachmentToContact(contact, url, "audio");
   await recordOutgoingMessage(contact.id, `${VOICE_MARK}${text.trim()}`, mid);
   return true;
 }
