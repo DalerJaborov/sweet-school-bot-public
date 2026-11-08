@@ -303,9 +303,15 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
   if (approve && query.id && chatId) {
     const done = await approveTransferByOwner(approve[1]).catch((err) => {
       logError("telegramMenu:approveTransfer", err);
-      return false;
+      return "failed" as const;
     });
-    await answerCallback(botToken, query.id, done ? "Перенос разрешён, ей написали" : "Не получилось");
+    const answer = {
+      ok: "Перенос разрешён, ей написали",
+      expired: "Карточка устарела или уже использована: пусть напишет боту снова",
+      blocked: "Устройство заблокировано: сначала разблокируйте его в панели",
+      failed: "Не получилось отправить ссылку, попробуйте ещё раз",
+    }[done];
+    await answerCallback(botToken, query.id, answer);
     return;
   }
   const switchCard = /^mn:sw:([0-9a-f-]{36}):([wt])$/.exec(query.data ?? "");

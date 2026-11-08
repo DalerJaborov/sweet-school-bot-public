@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
-import { handlePhoneChange, isAwaitingProof } from "./phoneChange.js";
+import { handlePhoneChange, isAwaitingProof, phoneChangeProof } from "./phoneChange.js";
 import { ownerOfExpiredLink } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
@@ -61,7 +61,7 @@ const WINDOW_DAYS = 30;
  */
 const ACCESS_SUBJECT = /(ссылк|доступ|кабинет|курс|урок[иов]*|линк|дастрас|дарс)/iu;
 const ACCESS_PROBLEM = /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
-const NEW_DEVICE = /(смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
+const NEW_DEVICE = /(это\s+мой\s+телефон|телефони\s+ман|смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
@@ -126,6 +126,10 @@ export async function maybeRestoreAccess(
   if (confirmTarget && !confirming) clearPendingSwitch(contact.id);
   const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
   if (!confirming && !waiting && !looksLikeAccessRequest(text)) return { handled: false };
+  // Ждём доказательство, а пришло просто фото (домашка) или чужой код: это не наш случай.
+  if (waiting && !looksLikeAccessRequest(text) && !(await phoneChangeProof(contact, text, imageHashes))) {
+    return { handled: false };
+  }
 
   // Код из ссылки: покупка могла быть сделана в другом чате. Бот выдаёт ссылку
   // САМ только когда код указывает на ЭТОТ ЖЕ контакт; на чужой — только владельцу.
@@ -475,22 +479,19 @@ async function tellOwner(
   reissues: number,
   opts: { always?: boolean } = {},
 ): Promise<void> {
-  const who = contact.username ? `@${contact.username}` : opts.always ? contact.name || contact.igUserId : contact.igUserId;
-  await sendOwnerAlert(
-    `recovery:${contact.id}`,
-    `🔑 ${who}: ${what}
-Курсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`,
-    opts.always,
-  );
+  const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
+  const text = `🔑 ${who}: ${what}
+Курсов куплено: ${purchases}, перевыдач за ${WINDOW_DAYS} дней: ${reissues}`;
+  // always — случай, где кроме хозяйки помочь некому (покупательница с сайта):
+  // суточное глушение не действует. От двойного нажатия защищает relinkBySiteToken.
+  await sendOwnerAlert(`recovery:${contact.id}`, text, opts.always === true);
 }
 
 async function sendOwnerAlert(gateKey: string, text: string, always = false): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!botToken || !chatId) return;
-  // always — случай, где кроме хозяйки помочь некому (покупательница с сайта):
-  // суточное глушение не действует. От двойного нажатия защищает relinkBySiteToken.
-  // Иначе одно и то же — не чаще раза в сутки (08.11.2026).
+  // Одно и то же — не чаще раза в сутки (08.11.2026), кроме always.
   if (!always && !(await shouldSendAlert(gateKey, { cooldownMs: 24 * 3_600_000 }))) return;
   await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("recovery:tellOwner", err));
 }

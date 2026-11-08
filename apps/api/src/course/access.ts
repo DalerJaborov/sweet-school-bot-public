@@ -548,13 +548,17 @@ export async function occupiedPhoneLabel(contactId: string): Promise<string | nu
 
 /** Сообщение «курс открыт на другом телефоне» (русский запасной текст сервера). */
 export function devicePhoneMessage(label: string | null): string {
-  return `Этот курс открывается на ${label ? `телефоне ${label}` : "вашем основном телефоне"}. Чтобы смотреть на другом телефоне, купите курс для него`;
+  void label;
+  return "Для второго телефона нужен отдельный доступ, он оформляется на другой аккаунт или номер, напишите Ширин";
 }
 
 export async function deviceLimitFor(_contactId: string): Promise<number> {
-  // Политика «один телефон» одна на всех. Столбец Course.deviceLimit больше не
-  // читается: прежний «запас 2–3» как раз и позволял пользоваться вдвоём.
-  return ONE_PHONE_LIMIT;
+  // Политика «один телефон» одна на всех (владелец 08.11.2026), рубильник —
+  // настройка courseDeviceLimit. Столбец Course.deviceLimit не читается:
+  // прежний «запас 2–3» как раз и позволял пользоваться вдвоём. Знакомые
+  // устройства (в том числе у учениц, у которых их уже два) лимит не трогает.
+  const raw = Number((await getSetting("courseDeviceLimit"))?.trim());
+  return Number.isInteger(raw) && raw >= 1 && raw <= 5 ? raw : ONE_PHONE_LIMIT;
 }
 
 /** Занятые места. Заблокированные СЧИТАЮТСЯ: иначе блокировка освобождала бы место. */

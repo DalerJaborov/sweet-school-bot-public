@@ -25,6 +25,16 @@ import type { Contact } from "@prisma/client";
  * по нему повторно не выдаётся, разбор чеков (receiptVerdict) не меняется.
  */
 
+/** Карточка владельцу живёт сутки и срабатывает один раз (старая и повторное нажатие не меняют ссылку). */
+const APPROVAL_TTL_MS = 24 * 3_600_000;
+const approvals = new Map<string, number>();
+
+/** Только для тестов: сбросить запомненные карточки и ожидания. */
+export function resetPhoneChangeState(): void {
+  approvals.clear();
+  awaiting.clear();
+}
+
 /** Бот попросил доказательство: ответ (код, картинка, имя с номером) в течение суток разбираем как продолжение. */
 const AWAIT_PROOF_MS = 24 * 3_600_000;
 const awaiting = new Map<string, number>();
@@ -39,7 +49,7 @@ export function isAwaitingProof(contactId: string): boolean {
 }
 
 export type ProofKind = "link_code" | "receipt" | "name_phone";
-export type PhoneChangeOutcome = "changed" | "no_proof" | "limit" | "send_failed" | "no_link";
+export type PhoneChangeOutcome = "changed" | "no_proof" | "limit" | "send_failed" | "no_link" | "blocked";
 
 type Lang = "ru" | "tg" | "en";
 
@@ -155,17 +165,19 @@ export async function phoneChangeProof(
 export async function performPhoneChange(
   contact: Contact,
   kind: "bot" | "owner",
-): Promise<"changed" | "send_failed" | "no_link"> {
+  opts: { ignoreLimit?: boolean; proof?: string } = {},
+): Promise<"changed" | "send_failed" | "no_link" | "blocked"> {
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh || fresh.accessRevokedAt || fresh.spamBlockedAt) return "no_link";
   // Выдача идёт через Telegram-группу: сайтовую ссылку здесь не воскрешаем (одна ссылка на человека).
   if (fresh.courseDeliveryChoice === "telegram") return "no_link";
   const { url, jti } = issueMagicLink(fresh.id);
   if (!url.startsWith("http")) return "no_link";
-  // Заблокированное устройство тоже занимает единственное место. Бот его не
-  // снимает (блокировка — решение владельца): отдаём владельцу кнопкой.
-  if (kind === "bot" && (await prisma.device.count({ where: { contactId: fresh.id, blockedAt: { not: null } } })) > 0) {
-    return "send_failed";
+  // Заблокированное устройство тоже занимает единственное место, но блокировка
+  // выше переноса: ни бот, ни кнопка владельца его не снимают. Сначала
+  // владелец разблокирует устройство в панели.
+  if ((await prisma.device.count({ where: { contactId: fresh.id, blockedAt: { not: null } } })) > 0) {
+    return "blocked";
   }
   const claimed = await prisma.contact.updateMany({
     where: {
@@ -201,11 +213,13 @@ export async function performPhoneChange(
       .catch((err) => logError("phoneChange:restoreLink", err));
     return "send_failed";
   }
-  const result = await transferToNewPhone(fresh, kind === "owner", kind === "owner" ? "owner" : "bot").catch((err) => {
+  // Лимит владелец снимает только на этот перенос: счётчик растёт ПОСЛЕ доставки ссылки.
+  const forTransfer = opts.ignoreLimit ? ({ ...fresh, deviceSwaps: 0, deviceSwapAt: null } as Contact) : fresh;
+  const result = await transferToNewPhone(forTransfer, false, kind === "owner" ? "owner" : "bot").catch((err) => {
     logError("phoneChange:transfer", err);
     return "nothing" as const;
   });
-  logInfo("course:phoneChange", `контакт ${fresh.id}: смена телефона (${kind}), устройства: ${result}`);
+  logInfo("course:phoneChange", `контакт ${fresh.id}: смена телефона (${kind}), доказательство: ${opts.proof ?? "решение владельца"}, устройства: ${result}`);
   return "changed";
 }
 
@@ -244,13 +258,19 @@ export async function handlePhoneChange(
     return "limit";
   }
   awaiting.delete(contact.id);
-  const done = await performPhoneChange(contact, "bot");
+  const done = await performPhoneChange(contact, "bot", { proof: PROOF_NAME[proof] });
   if (done === "changed") {
     await notifyOwner(contact, `бот перенёс доступ на новый телефон (доказательство: ${PROOF_NAME[proof]})`);
     return "changed";
   }
   await replyTo(contact, TEXT[language].failed);
-  await askOwner(contact, "доказательство есть, но ссылку на новый телефон отправить не удалось", "failed");
+  await askOwner(
+    contact,
+    done === "blocked"
+      ? "доказательство есть, но её устройство заблокировано: сначала разблокируйте его в панели"
+      : "доказательство есть, но ссылку на новый телефон отправить не удалось",
+    "failed",
+  );
   return done;
 }
 
@@ -289,6 +309,7 @@ async function askOwner(contact: Contact, what: string, key = "ask"): Promise<vo
   const chat = await ownerChat();
   if (!chat) return;
   if (!(await shouldSendAlert(`phone-change:${key}:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
+  approvals.set(contact.id, Date.now() + APPROVAL_TTL_MS);
   const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "переносов не было";
   await sendTelegramMessage(
     chat.botToken,
@@ -312,11 +333,23 @@ async function notifyOwner(contact: Contact, what: string): Promise<void> {
  * Владелец нажал «Разрешить перенос»: месячный лимит снимается и перенос
  * делается сразу (новая ссылка в чат, старые устройства и ссылка аннулируются).
  */
-export async function approveTransferByOwner(contactId: string): Promise<boolean> {
+export async function approveTransferByOwner(contactId: string): Promise<"ok" | "expired" | "blocked" | "failed"> {
+  const until = approvals.get(contactId);
+  if (!until || until < Date.now()) {
+    approvals.delete(contactId);
+    return "expired";
+  }
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  if (!contact) return false;
-  await prisma.contact.update({ where: { id: contactId }, data: { deviceSwaps: 0, deviceSwapAt: null } });
-  const done = await performPhoneChange({ ...contact, deviceSwaps: 0, deviceSwapAt: null }, "owner");
+  if (!contact) return "failed";
+  // Одноразово: гасим карточку до отправки, чтобы второе нажатие не успело.
+  approvals.delete(contactId);
+  const done = await performPhoneChange(contact, "owner", { ignoreLimit: true });
   logInfo("course:phoneChange", `контакт ${contactId}: владелец разрешил перенос, итог ${done}`);
-  return done === "changed";
+  if (done === "changed") return "ok";
+  if (done === "blocked") {
+    approvals.set(contactId, until);
+    return "blocked";
+  }
+  approvals.set(contactId, until);
+  return "failed";
 }

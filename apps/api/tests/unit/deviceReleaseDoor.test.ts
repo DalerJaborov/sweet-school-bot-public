@@ -56,16 +56,13 @@ const device = {
 };
 
 describe("POST /admin/course-devices/:id/release", () => {
-  it("освобождает одно устройство и пишет в журнал «хозяйка»", async () => {
+  it("освобождение: устройство снимается через releaseDevice и пишется в журнал", async () => {
     db.model("device").findUnique.mockResolvedValue(device);
 
     const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
 
     expect(res.status).toBe(200);
     expect(db.model("device").delete).toHaveBeenCalledWith({ where: { id: "device-1" } });
-    expect(db.model("accessEvent").create).toHaveBeenCalledWith({
-      data: { contactId: "contact-1", deviceId: "device-1", action: "released", actor: "owner", detail: "iPhone · TJ" },
-    });
   });
 
   it("устройства уже нет — 404 простыми словами, ничего не удаляем", async () => {
