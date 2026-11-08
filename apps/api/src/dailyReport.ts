@@ -260,19 +260,9 @@ export async function buildReport(offset: number): Promise<string> {
     lines.push(`     ${learning.byChannel.map((b) => `${CHANNEL_TITLE[b.channel]} ${b.sum} с. (${b.count})`).join(" · ")}`);
   }
 
-  const study = [`📚 ${learning.started} начали учиться`];
-  if (learning.finished > 0) study.push(`🏁 ${learning.finished} закончили`);
-  if (learning.certificates > 0) study.push(`🎓 ${learning.certificates}`);
-  lines.push(study.join(" · "));
-
   if (offlineSignups.length > 0) {
     lines.push(`📝 офлайн: ${offlineSignups.map((s) => `${s.name} ${s.phone}`).join(", ")}`);
   }
-
-  const waiting: string[] = [];
-  if (pendingAll > 0) waiting.push(`⏳ ${pendingAll} ${plural(pendingAll, "чек", "чека", "чеков")} ждут решения${longPending > 0 ? ` (⏰ ${longPending} дольше ${LONG_PENDING_HOURS} ч)` : ""}`);
-  if (learning.unanswered > 0) waiting.push(`❓ ${learning.unanswered} без ответа`);
-  if (waiting.length > 0) lines.push(waiting.join(" · "));
 
   if (spamBlocked.length > 0) lines.push(`🚫 спам: ${spamBlocked.map((c) => handleOfContact(c)).join(", ")}`);
 

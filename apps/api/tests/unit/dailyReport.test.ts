@@ -88,9 +88,6 @@ describe("Вечерняя сводка v2", () => {
     expect(text).toContain("💬 1 написали · 🆕 1 новых · 🎯 1 с рилсов");
     expect(text).toContain("💰 1 оплата · 70 сомони");
     expect(text).toContain("Instagram 70 с. (1)");
-    expect(text).toContain("📚 2 начали учиться · 🎓 1");
-    expect(text).not.toContain("🏁"); // до конца сегодня никто не дошёл — строки нет
-    expect(text).toContain("❓ 3 без ответа");
     expect(text).not.toContain("Gemini");
     expect(text).not.toContain("Где бот застрял");
     expect(text.split(String.fromCharCode(10)).length).toBeLessThanOrEqual(8);
@@ -99,8 +96,8 @@ describe("Вечерняя сводка v2", () => {
   it("тихий день: учёба есть, Gemini и необязательные строки молчат", async () => {
     const text = await buildReport(OFFSET);
     expect(text).toContain("💰 оплат нет");
-    expect(text).toContain("📚 0 начали учиться");
     expect(text).not.toContain("Gemini");
+    expect(text).not.toContain("📚");
     expect(text).not.toContain("❓");
     expect(text).not.toContain("🎓");
     expect(text).not.toContain("⏳");
