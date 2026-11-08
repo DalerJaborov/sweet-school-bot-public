@@ -278,3 +278,64 @@ describe("настоящая база: поток «нечёткий чек, п�
     expect(rows.every((r) => r.ownerDecision === "HANDLED")).toBe(true);
   });
 });
+
+describe("настоящая база: ревью 4", () => {
+  it("50 -> 70 у клиентки без выбора доставки: выдача по чеку 70 включает курс 70 (повтор доставки не подменяет)", async () => {
+    const c = await newContact("d1");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, source: "RECEIPT" } });
+    const r = await db.receiptCheck.create({
+      data: { contactId: c.id, kind: "suspicious", confidence: 90, reason: "r", imageHash: "b70", amount: 70, ownerDecision: "PENDING" },
+    });
+    grantCourses.mockResolvedValueOnce(["COURSE70"]);
+    await decideReceipt(r.id, "approve");
+    expect((grantCourses.mock.calls[0][1] as { grant: string[] }).grant).toEqual(["COURSE70"]);
+  });
+
+  it("есть курс 70, чек 100 с подозрением: карточка обещает курс за 50 и кнопка не 'дубль'", async () => {
+    const c = await newContact("d2");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, inviteLink: "https://x/l/abc" } });
+    await handleReceiptVerdict(c, verdict("b100", { amount: 100, tamperingSuspected: true }));
+    const args = sendReceiptForReview.mock.calls[0][2] as { caption: string; closeAsDuplicate: boolean };
+    expect(args.caption).toMatch(/Подтвердить откроет: Арт-десерты/);
+    expect(args.closeAsDuplicate).toBe(false);
+  });
+
+  it("недоплата 40 у новой клиентки: не 'дубль', причина - сумма не сходится", async () => {
+    const c = await newContact("d3");
+    await handleReceiptVerdict(c, verdict("u40", { amount: 40 }));
+    const args = sendReceiptForReview.mock.calls[0][2] as { caption: string; closeAsDuplicate: boolean };
+    expect(args.closeAsDuplicate).toBe(false);
+    expect(args.caption).toMatch(/сумма не сходится/);
+  });
+
+  it("второй платёж, пока ждём ответа про Telegram: клиентке уходит 'передаю Ширин', а не тишина", async () => {
+    const c = await db.contact.create({
+      data: { id: "d4", igUserId: "ig-d4", username: "d4", deliveryChoicePromptState: "WAITING" },
+    });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    await db.receiptCheck.create({
+      data: {
+        contactId: c.id, kind: "valid", confidence: 95, reason: "ok", imageHash: "first70", amount: 70,
+        awaitingDeliveryChoice: true, createdAt: new Date(Date.now() - 40 * 60_000),
+      },
+    });
+    await handleReceiptVerdict(c, verdict("second70", { amount: 70 }));
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+    expect(sendToContact).toHaveBeenCalledTimes(1);
+    expect(String(sendToContact.mock.calls[0][1])).toMatch(/Ширин/);
+  });
+
+  it("округление: 43.6 автоматика и панель считают одинаково (оба - курс 50)", async () => {
+    const c = await newContact("d5");
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await handleReceiptVerdict(c, verdict("r436", { amount: 43.6 }));
+    expect((grantCourses.mock.calls[0][1] as { grant: string[] }).grant).toEqual(["COURSE50"]);
+    const c2 = await newContact("d6");
+    const r = await db.receiptCheck.create({
+      data: { contactId: c2.id, kind: "suspicious", confidence: 90, reason: "r", imageHash: "p44", amount: 44, ownerDecision: "PENDING" },
+    });
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await decideReceipt(r.id, "approve");
+    expect((grantCourses.mock.calls[1][1] as { grant: string[] }).grant).toEqual(["COURSE50"]);
+  });
+});

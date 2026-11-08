@@ -118,3 +118,22 @@ export async function coursesForAmount(amount: number): Promise<Course[]> {
     .sort((a, b) => Math.abs(amount - price[a]) - Math.abs(amount - price[b]));
   return fits.length > 0 ? [fits[0]] : [];
 }
+
+/**
+ * ОДНА ФУНКЦИЯ "ЧТО ОТКРОЕТ ЭТА СУММА" для решения владельца, для строки в
+ * карточке и для автоматики (ревью PR 67): курсы суммы минус уже купленное.
+ * Сумма округляется ОДИН раз, здесь: чек хранит Math.round(сумма), и панель
+ * решает по сохранённой - автоматика обязана считать так же.
+ *  - wanted: курсы, которые вообще даёт сумма;
+ *  - grant: что осталось выдать;
+ *  - duplicate: курсы суммы уже куплены (а не "сумма ни на что не похожа").
+ */
+export async function planForAmount(
+  contactId: string,
+  rawAmount: number
+): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; amount: number }> {
+  const amount = Math.round(rawAmount);
+  const [wanted, owned] = await Promise.all([coursesForAmount(amount), ownedCourses(contactId).catch(() => [] as Course[])]);
+  const grant = wanted.filter((c) => !owned.includes(c));
+  return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0, amount };
+}

@@ -3,6 +3,7 @@ import { deviceLimitFor, deviceCountFor, releaseDevice, ownerOfExpiredLink } fro
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
+import { ACCEPTED_WHERE } from "../receiptAccepted.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact, Purchase } from "@prisma/client";
@@ -326,7 +327,7 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
 /** Есть ли в данных след реальной оплаты. */
 async function hasPaymentProof(contactId: string): Promise<boolean> {
   const approved = await prisma.receiptCheck.count({
-    where: { contactId, OR: [{ ownerDecision: "APPROVED" }, { linkSent: true }] },
+    where: { contactId, OR: ACCEPTED_WHERE },
   });
   if (approved > 0) return true;
   // Владелец мог выдать курс руками, без чека — это тоже законный путь.

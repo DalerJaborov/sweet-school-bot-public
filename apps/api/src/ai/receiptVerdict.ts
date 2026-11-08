@@ -7,7 +7,7 @@ import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automatio
 import { sendReceiptForReview, sendTelegramMessage, summaryChatIds } from "../telegram.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
-import { allocate, COURSE_TITLE, coursesForAmount, ownedCourses, type Course } from "../courses.js";
+import { allocate, COURSE_TITLE, coursesForAmount, ownedCourses, planForAmount, type Course } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
@@ -163,12 +163,11 @@ async function notifyHashTaken(contact: Contact, otherContactId: string, amount:
   }
 }
 
-async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<void> {
+async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<boolean> {
   // Ссылки ещё нет (ждём ответа про Telegram) - не обещаем "ссылка выше", а
   // спрашиваем снова.
   if (await awaitingDeliveryChoice(contact.id)) {
-    await askDeliveryChoice(contact);
-    return;
+    return askDeliveryChoice(contact);
   }
   const lastIn = lastText?.trim()
     ? { text: lastText }
@@ -178,10 +177,15 @@ async function tellAlreadyAccepted(contact: Contact, lastText: string | null = n
         select: { text: true },
       });
   const text = DUPLICATE_PAYMENT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
-  if (await isBotFrozen()) return;
+  if (await isBotFrozen()) return false;
+  let sent = false;
   await sendToContact(contact, text)
-    .then((mid) => (mid ? recordOutgoingMessage(contact.id, text, mid) : undefined))
+    .then((mid) => {
+      if (mid) sent = true;
+      return mid ? recordOutgoingMessage(contact.id, text, mid) : undefined;
+    })
     .catch((err) => logError("receiptVerdict:alreadyAccepted", err));
+  return sent;
 }
 
 /** Курсы уже реально доставлены человеку (ссылка выдана) — например, соседним
@@ -465,7 +469,7 @@ export async function handleReceiptVerdict(
     hard = true;
     doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
   }
-  const plan = amount != null ? await allocate(contact.id, amount) : null;
+  const plan = amount != null ? await allocate(contact.id, Math.round(amount)) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
     hard = true;
@@ -479,7 +483,8 @@ export async function handleReceiptVerdict(
   // у суммы не осталось своих курсов - чек идёт владельцу.
   let ownedCache: Course[] | null = null;
   const getOwned = async (): Promise<Course[]> => (ownedCache ??= await ownedCourses(contact.id).catch(() => []));
-  const wanted = amount != null ? await coursesForAmount(amount) : [];
+  const own = amount != null ? await planForAmount(contact.id, amount) : null;
+  const wanted = own?.wanted ?? [];
   const safeGrant = plan ? plan.grant.filter((c) => wanted.includes(c)) : [];
   if (kind === "valid" && plan && plan.grant.length > 0 && !sameTransfer && safeGrant.length !== plan.grant.length) {
     kind = "suspicious";
@@ -531,8 +536,15 @@ export async function handleReceiptVerdict(
     doubts.push("доступ автоматически выдать не удалось");
   }
 
-  const willOpenText = plan ? (safeGrant.length > 0 ? safeGrant.map((c) => COURSE_TITLE[c]).join(", ") : "ничего - этот курс у клиентки уже есть") : null;
-  const closeAsDuplicate = Boolean(plan) && safeGrant.length === 0;
+  // Строка в карточке и кнопка считаются ТОЙ ЖЕ функцией, что решение владельца.
+  const willOpenText = own
+    ? own.grant.length > 0
+      ? own.grant.map((c) => COURSE_TITLE[c]).join(", ")
+      : own.duplicate
+        ? "ничего - курс по этой сумме у клиентки уже есть"
+        : "ничего - сумма не сходится с ценами курсов"
+    : null;
+  const closeAsDuplicate = Boolean(own?.duplicate);
   const waitingForChoice = isClean && (await awaitingDeliveryChoice(contact.id));
   const needsOwner = !linkSent && !waitingForChoice && !closedAsDuplicate;
   const knownFraud = Boolean(blocked) || Boolean(reused);
@@ -620,7 +632,10 @@ export async function handleReceiptVerdict(
       logError("receiptVerdict:setAltFlag", err);
     });
   } else if (saved && duplicatePayment) {
-    await tellAlreadyAccepted(contact);
+    // Если клиентка ждёт вопроса про Telegram и вопрос уже задан, "принято" не
+    // скажешь - ссылки ещё нет: тогда обычное "чек получила, передаю Ширин".
+    const told = await tellAlreadyAccepted(contact);
+    if (!told) await notifyCustomerReceiptForwarded(contact, saved);
     if (await isBotFrozen()) return;
     await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
   } else if (saved && needsOwner) {

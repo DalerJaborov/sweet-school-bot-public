@@ -4,7 +4,7 @@ import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { sendToContact } from "./messaging/send.js";
 import { markExamplesAsSuccessful } from "./ai/styleLearning.js";
-import { coursesForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
+import { planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
 import { closeCards } from "./receiptAlerts.js";
 import { getPrices } from "./services/priceService.js";
 import { grantCourses } from "./ai.js";
@@ -166,9 +166,8 @@ async function decideReceiptInner(
     // ТОЛЬКО курсы, которые даёт сама сумма чека, и только те, которых у клиентки
     // ещё нет (ревью PR 67): allocate() ради удобства раскладки мог выдать
     // "второй курс" за повторный чек на ту же сумму - то есть бесплатно.
-    const wanted = await coursesForAmount(amount);
-    const owned = await ownedCourses(receipt.contactId);
-    const grant = wanted.filter((c) => !owned.includes(c));
+    const own = await planForAmount(receipt.contactId, amount);
+    const grant = own.grant;
     plan = {
       grant,
       note: grant.length > 0 ? `по сумме: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "этот курс у клиентки уже есть - ничего не выдано",
@@ -214,14 +213,16 @@ async function decideReceiptInner(
   // A previous send failure preserves the paid purchase. Retry its delivery,
   // rather than allocating another course from the same payment amount.
   const pending = await prisma.purchase.findMany({
-    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null },
+    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null, deliveryAwaitingChoice: false },
   });
   if (pending.some((p) => p.accessDeliveryUncertainAt)) {
     await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });
     return { ok: false, reason: "no_access_configured", message: "Неизвестно, доставлена ли прежняя ссылка. Проверьте переписку и доступ ученицы; повторная отправка автоматически заблокирована." };
   }
   if (pending.length > 0) {
-    plan = { ...plan, grant: pending.map((p) => p.course).filter((c): c is Course => c === COURSE_50 || c === COURSE_70), note: "повтор доставки оплаченного доступа" };
+    // Повтор доставки ДОБАВЛЯЕТСЯ к курсам суммы, а не подменяет их (ревью PR 67).
+    const retry = pending.map((p) => p.course).filter((c): c is Course => c === COURSE_50 || c === COURSE_70);
+    plan = { ...plan, grant: [...new Set([...plan.grant, ...retry])], note: "повтор доставки оплаченного доступа" };
   }
   if (plan.grant.length === 0) {
     await prisma.receiptCheck.update({

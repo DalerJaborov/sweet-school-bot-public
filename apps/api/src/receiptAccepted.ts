@@ -1,7 +1,7 @@
 /**
  * ОДНО ПОНЯТИЕ "ЧЕК ПРИНЯТ" (ревью PR 67, 08.11.2026): все проверки повторов,
  * уборка тревог и защита от второго платежа берут его ОТСЮДА. Сторож -
- * tests/unit/receiptAcceptedSingleSource.test.ts: свои копии условия запрещены.
+ * tests/unit/receiptAlerts.test.ts (сторож): свои копии условия запрещены.
  */
 export function receiptAccepted(r: {
   linkSent: boolean;
