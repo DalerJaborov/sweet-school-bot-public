@@ -63,6 +63,18 @@ describe("issueCourseLink", () => {
     expect(await issueCourseLink("contact-1")).toContain("/l/Ab3kQ9xZpm");
     expect(db.model("contact").update).not.toHaveBeenCalled();
   });
+  it("ссылку, которой жить меньше суток, не пересылаем — выдаём свежую (аудит 08.11.2026)", async () => {
+    // 6,5 дней из 7: переслать её значит завтра встретить ученицу словами «ссылка устарела».
+    db.model("contact").findUnique.mockResolvedValue({
+      id: "contact-1",
+      accessTokenId: "Ab3kQ9xZpm",
+      accessIssuedAt: new Date(Date.now() - 6.5 * 86_400_000),
+    });
+    const url = await issueCourseLink("contact-1");
+    expect(url).not.toContain("/l/Ab3kQ9xZpm");
+    expect(url).toMatch(/\/l\/[A-Za-z0-9]{10}/);
+    expect(db.model("contact").updateMany).toHaveBeenCalledOnce();
+  });
   it("automatic delivery cannot reactivate revoked access", async () => {
     db.model("contact").findUnique.mockResolvedValue({ accessRevokedAt: new Date() });
     expect(await issueCourseLink("contact-1")).toBeNull();

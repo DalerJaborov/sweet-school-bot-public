@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { issueMagicLink, LINK_TTL_DAYS, looksLikeShortCode } from "./access.js";
+import { issueMagicLink, linkExpired, LINK_RESEND_MIN_LEFT_MS, looksLikeShortCode } from "./access.js";
 import { courseByCode } from "../services/courseCatalog.js";
 import type { Course } from "../courses.js";
 import { assertAutomationAllowed } from "../messaging/automation.js";
@@ -36,9 +36,13 @@ export async function deliveryMode(): Promise<DeliveryMode> {
  * поэтому канал WEB всегда получает ссылку на платформу, какой бы режим ни
  * стоял в настройках. Для Instagram/Messenger — как настроил владелец.
  */
-export async function deliveryModeFor(contact: { channel: string; courseDeliveryChoice?: string | null }): Promise<DeliveryMode> {
+export async function deliveryModeFor(contact: {
+  channel: string;
+  courseDeliveryChoice?: string | null;
+}): Promise<DeliveryMode> {
   // Явный выбор человека (в том числе переключение канала, channelSwitch.ts) сильнее канала.
-  if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web") return contact.courseDeliveryChoice;
+  if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web")
+    return contact.courseDeliveryChoice;
   if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
   return deliveryMode();
 }
@@ -49,7 +53,10 @@ export async function deliveryModeFor(contact: { channel: string; courseDelivery
  * Automatic delivery reuses a valid link. Only explicit owner rotation invalidates
  * a previous link; ordinary delivery and purchase retries preserve existing access.
  */
-export async function issueCourseLink(contactId: string, opts: { automatic?: boolean; preserveExisting?: boolean } = {}): Promise<string | null> {
+export async function issueCourseLink(
+  contactId: string,
+  opts: { automatic?: boolean; preserveExisting?: boolean } = {},
+): Promise<string | null> {
   const base = await courseLinkBase();
   if (!base) return null;
   // Fail closed for forgotten flags in future automated callers. Only an
@@ -61,15 +68,26 @@ export async function issueCourseLink(contactId: string, opts: { automatic?: boo
     for (let attempt = 0; attempt < 3; attempt++) {
       const current = await prisma.contact.findUnique({ where: { id: contactId } });
       if (!current || current.accessRevokedAt || current.spamBlockedAt) return null;
-      if (current.accessTokenId && looksLikeShortCode(current.accessTokenId) && current.accessIssuedAt &&
-          Date.now() - current.accessIssuedAt.getTime() < LINK_TTL_DAYS * 86_400_000) {
+      // Пересылаем прежнюю ссылку, только если ей жить ещё хотя бы сутки:
+      // ссылка, которой осталось три часа, завтра встретит ученицу словами
+      // «ссылка устарела» (аудит 08.11.2026). Иначе — свежая.
+      if (
+        current.accessTokenId &&
+        looksLikeShortCode(current.accessTokenId) &&
+        !linkExpired(current.accessIssuedAt, LINK_RESEND_MIN_LEFT_MS)
+      ) {
         return `${base.replace(/\/$/, "")}/l/${current.accessTokenId}`;
       }
       if (opts.automatic !== false) await assertAutomationAllowed();
       const { url, jti } = issueMagicLink(contactId);
       const claimed = await prisma.contact.updateMany({
-        where: { id: contactId, accessTokenId: current.accessTokenId ?? null,
-          accessIssuedAt: current.accessIssuedAt ?? null, accessRevokedAt: null, spamBlockedAt: null },
+        where: {
+          id: contactId,
+          accessTokenId: current.accessTokenId ?? null,
+          accessIssuedAt: current.accessIssuedAt ?? null,
+          accessRevokedAt: null,
+          spamBlockedAt: null,
+        },
         data: { accessTokenId: jti, accessIssuedAt: new Date() },
       });
       if (claimed.count === 1) return url;
@@ -154,7 +172,7 @@ export function accessMessage(opts: {
       tg ? "Курси дуюм илова шуд 🎉" : "Второй курс добавлен 🎉",
       "",
       tg ? "Он аллакай дар кабинети шумост — ҳамон линкро кушоед:" : "Он уже в вашем кабинете — откройте ту же ссылку:",
-      opts.webLink
+      opts.webLink,
     );
     return lines.join("\n");
   }
@@ -167,7 +185,7 @@ export function accessMessage(opts: {
       opts.webLink,
       "",
       "Или в Telegram-группе:",
-      opts.telegramLink
+      opts.telegramLink,
     );
   } else if (opts.webLink) {
     lines.push(
@@ -178,7 +196,7 @@ export function accessMessage(opts: {
       "",
       tg
         ? "Ин линк шахсии шумост: бо он ҳамаи курсҳои харидаатон кушода мешаванд. Саҳифаро ба экрани «Домой» илова кунед — дарсҳо бе интернет ҳам кор мекунанд."
-        : "Эта ссылка ваша личная: по ней откроются все купленные курсы. Добавьте страницу на экран «Домой» — уроки будут открываться без интернета."
+        : "Эта ссылка ваша личная: по ней откроются все купленные курсы. Добавьте страницу на экран «Домой» — уроки будут открываться без интернета.",
     );
   } else if (opts.telegramLink) {
     lines.push(opts.telegramLink);

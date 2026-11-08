@@ -4,7 +4,7 @@ import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { chatIdFor, COURSE_TITLE, COURSE_50, COURSE_70, type Course } from "../courses.js";
-import { canTransferNow, issueMagicLink, recentTransfers, shortCode } from "./access.js";
+import { canTransferNow, issueMagicLink, recentTransfers, releaseAllDevices, shortCode } from "./access.js";
 import { coursePlatformReady } from "./delivery.js";
 import { revokeInvitesForContact } from "../links/telegramInvites.js";
 
@@ -431,8 +431,9 @@ async function toTelegram(
   const previous = new Set<string>();
   for (const p of purchases) if (isTelegramLink(p.inviteLink)) previous.add(p.inviteLink);
   if (isTelegramLink(fresh.inviteLink)) previous.add(fresh.inviteLink);
+  // Сначала гасим сайтовые сессии: если запись ниже оборвётся, открытым останется только Telegram.
+  await releaseAllDevices(fresh.id, kind === "owner" ? "owner" : "bot");
   await prisma.$transaction(async (tx) => {
-    await tx.device.deleteMany({ where: { contactId: fresh.id, blockedAt: null } });
     for (const c of created) {
       await tx.purchase.update({
         where: { id: c.purchase.id },

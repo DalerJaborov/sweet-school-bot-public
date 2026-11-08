@@ -118,6 +118,7 @@ function wireDb(db: PrismaMock) {
     return {};
   });
   db.model("device").deleteMany.mockResolvedValue({ count: 2 });
+  db.model("device").findMany.mockResolvedValue([{ id: "d-1", contactId: "c-1", userAgent: "Android" }, { id: "d-2", contactId: "c-1", userAgent: "Android" }]);
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
     where.key === "telegramBotToken" ? { value: "token" } : null,
   );
@@ -198,14 +199,14 @@ describe("одна действующая ссылка на человека", (
     expect((contactRow.accessIssuedAt as Date).getTime()).toBe(0);
     expect(String(sendText.mock.calls[0][1])).toContain("https://t.me/+NEWINVITE");
     expect(String(sendText.mock.calls[0][1])).toContain("Ссылка на сайт больше не открывает уроки");
-    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { contactId: "c-1", blockedAt: null } });
+    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["d-1", "d-2"] } } });
     expect(purchaseRows[0].inviteLink).toBe("https://t.me/+NEWINVITE");
     // Старая сайтовая ссылка из переписки больше не находит владельца.
-    const res = await openByLink({} as Request, {} as Response, OLD_CODE);
+    const res = await openByLink({ headers: {} } as Request, {} as Response, OLD_CODE);
     expect(res).toMatchObject({ ok: false, reason: "not_found" });
     // «Мёртвый» код тоже не открывает, даже угаданный (срок выставлен в 1970).
-    const dead = await openByLink({} as Request, {} as Response, String(contactRow.accessTokenId));
-    expect(dead).toMatchObject({ ok: false, reason: "not_found" });
+    const dead = await openByLink({ headers: {} } as Request, {} as Response, String(contactRow.accessTokenId));
+    expect(dead).toMatchObject({ ok: false, reason: "link_expired" });
   });
 
   it("Telegram -> сайт: приглашение отозвано, выдана новая ссылка, она записана и работает как единственная", async () => {

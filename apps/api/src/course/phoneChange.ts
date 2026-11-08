@@ -201,7 +201,7 @@ export async function performPhoneChange(
       .catch((err) => logError("phoneChange:restoreLink", err));
     return "send_failed";
   }
-  const result = await transferToNewPhone(fresh, kind === "owner").catch((err) => {
+  const result = await transferToNewPhone(fresh, kind === "owner", kind === "owner" ? "owner" : "bot").catch((err) => {
     logError("phoneChange:transfer", err);
     return "nothing" as const;
   });

@@ -355,6 +355,18 @@ function openRequest(token: string): Promise<{ ok: boolean; contactId: string }>
   });
 }
 
+/** Исход кнопки «Получить новую ссылку» (сервер: course/router.ts /relink). */
+export type RelinkOutcome = "sent" | "write_first" | "escalated" | "revoked" | "unknown";
+export type RelinkResult = { outcome: RelinkOutcome; channel: string | null };
+
+/**
+ * Просроченная ссылка → новая уходит в переписку ученицы. Ссылку сервер не
+ * возвращает никогда: только исход, по которому экран выбирает слова.
+ */
+export function requestNewLink(token: string): Promise<RelinkResult> {
+  return request("/relink", { method: "POST", body: JSON.stringify({ token }) });
+}
+
 /**
  * Спаривание: те же сессионные куки для ТОГО ЖЕ устройства, нового места в
  * лимите не занимает. Вызывается по `?pair=` из start_url личного манифеста

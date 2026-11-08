@@ -565,7 +565,10 @@ h1, h2, h3 { line-height: 1.25; }
 .list-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .list-chips:empty { display: none; }
 
-.list-actions { display: flex; gap: 6px; flex: none; }
+.list-actions { display: flex; gap: 6px; flex: none; flex-wrap: wrap; }
+/* Журнал мест под устройствами: тихие строки, без маркеров списка. */
+.device-events { list-style: none; padding: 0; margin: 12px 0 0; }
+.device-events .hint { margin: 0 0 4px; }
 
 /* На узком экране действия уходят под текст — иначе они сжимают имя. */
 @media (max-width: 560px) {
