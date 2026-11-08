@@ -294,7 +294,8 @@ export async function aiReply(
 
     // Библиотека видео (ai/videoLibrary.ts): ролик названного десерта, подборка или «как смотреть
     // онлайн-урок». Рубильник videoLibraryEnabled; не больше одного показа каждого вида за разговор.
-    if (await maybeSendVideos(contact, text)) {
+    // Явная просьба показать — ролик вместо ответа модели; просто упомянули десерт — ролик вдобавок.
+    if ((await maybeSendVideos(contact, text, { hasAttachments: attachments.length > 0 })) === "replace") {
       notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       return;
     }
