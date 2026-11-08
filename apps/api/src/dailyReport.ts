@@ -135,7 +135,7 @@ export async function buildReport(offset: number): Promise<string> {
   const range = { gte: from, lte: new Date() };
   const longPendingSince = new Date(Date.now() - LONG_PENDING_HOURS * 3_600_000);
 
-  const [inMessages, funnelStarts, paidToday, offlineSignups, pendingAll, unchecked, longPending, learning, spamBlocked] = await Promise.all([
+  const [inMessages, funnelStarts, paidToday, offlineSignups, pendingAll, longPending, learning, spamBlocked] = await Promise.all([
     // Не distinct: полный список нужен и для «написали», и для поиска застрявших
     // разговоров ниже (3+ сообщений от одного человека за окно).
     prisma.message.findMany({
@@ -153,7 +153,6 @@ export async function buildReport(offset: number): Promise<string> {
     }),
     prisma.offlineSignup.findMany({ where: { createdAt: range }, select: { name: true, phone: true } }),
     prisma.receiptCheck.count({ where: { ownerDecision: "PENDING" } }),
-    prisma.receiptCheck.count({ where: { kind: "unchecked" } }),
     // Не «сегодня» — чек, пришедший вчера вечером и всё ещё не решённый, тревожнее
     // любого сегодняшнего, поэтому без границы суток, просто дольше двух часов.
     prisma.receiptCheck.count({ where: { ownerDecision: "PENDING", createdAt: { lte: longPendingSince } } }),
@@ -226,20 +225,6 @@ export async function buildReport(offset: number): Promise<string> {
       });
   }
 
-  // Ники для «Долго висят без решения» — отдельным запросом и только когда
-  // счётчик выше нуля, тем же принципом, что и у «застрял» чуть выше: не тянуть
-  // лишнее, когда сводке нечего показывать.
-  let longPendingHandles: string[] = [];
-  if (longPending > 0) {
-    const rows = await prisma.receiptCheck.findMany({
-      where: { ownerDecision: "PENDING", createdAt: { lte: longPendingSince } },
-      include: { contact: { select: { username: true, igUserId: true } } },
-      orderBy: { createdAt: "asc" },
-      take: 5,
-    });
-    longPendingHandles = rows.map((r) => (r.contact.username ? `@${r.contact.username}` : r.contact.igUserId));
-  }
-
   const amounts = paidToday.map((c) => c.receiptChecks[0]?.amount ?? null);
   const known = amounts.filter((a): a is number => a != null);
   const revenue = known.reduce((sum, a) => sum + a, 0);
@@ -254,74 +239,45 @@ export async function buildReport(offset: number): Promise<string> {
     month: "long",
     timeZone: "UTC",
   });
-  const lines = [`🌙 Итог за ${day}`, ``];
+  // КОМПАКТНАЯ СВОДКА (08.11.2026): 5–8 строк, цифры и значки, без техники.
+  // Пустые разделы не показываются — тихий день занимает три строки.
+  const lines = [`🌙 ${day}`];
 
-  lines.push(`💬 Написали — ${wroteCount} ${plural(wroteCount, "человек", "человека", "человек")}`);
-  if (newAmongThem > 0) lines.push(`🆕 Новых — ${newAmongThem}`);
-  if (funnelStarts > 0) lines.push(`🎯 Пришли с комментария под роликом — ${funnelStarts}`);
-  if (spamBlocked.length > 0) {
-    lines.push(`🚫 Заблокированы за спам/флирт — ${spamBlocked.length}: ${spamBlocked.map((c) => handleOfContact(c)).join(", ")}`);
-  }
-  lines.push(``);
+  lines.push(
+    `💬 ${wroteCount} написали` +
+      (newAmongThem > 0 ? ` · 🆕 ${newAmongThem} новых` : "") +
+      (funnelStarts > 0 ? ` · 🎯 ${funnelStarts} с рилсов` : "")
+  );
 
   if (paidToday.length === 0) {
-    lines.push(`💰 Оплат сегодня нет`);
+    lines.push(`💰 оплат нет`);
   } else {
-    lines.push(`💰 Оплатили онлайн-курс — ${paidToday.length}`);
-    if (revenue > 0) lines.push(`     на ${revenue} сомони`);
-    if (unknownAmount > 0) {
-      lines.push(`     ещё ${unknownAmount} без суммы (доступ выдан вручную)`);
-    }
+    const sum = revenue > 0 ? ` · ${revenue} сомони` : "";
+    const manual = unknownAmount > 0 ? ` (${unknownAmount} вручную, без суммы)` : "";
+    lines.push(`💰 ${paidToday.length} ${plural(paidToday.length, "оплата", "оплаты", "оплат")}${sum}${manual}`);
   }
-  // Откуда пришли деньги — по покупкам (Purchase), канал выводится из контакта
-  // (metrics.ts). Одна строка, только когда есть что делить.
   if (learning.byChannel.length > 0) {
     lines.push(`     ${learning.byChannel.map((b) => `${CHANNEL_TITLE[b.channel]} ${b.sum} с. (${b.count})`).join(" · ")}`);
   }
 
-  // УЧЁБА — то, чего в сводке не было вовсе: платформа живёт, а хозяйка
-  // видела только деньги и чеки.
-  lines.push(``);
-  lines.push(`📚 Начали учиться — ${learning.started}`);
-  if (learning.finished > 0) lines.push(`🏁 Дошли до конца — ${learning.finished}`);
-  if (learning.certificates > 0) {
-    lines.push(`🎓 Сертификатов — ${learning.certificates}`);
-  }
-  if (learning.unanswered > 0) {
-    lines.push(`❓ Вопросов учениц без ответа сейчас — ${learning.unanswered}`);
-  }
-  // Расход Gemini в сводке владельцу непонятен («что это решает?») — остаётся
-  // в панели и в тревоге на 80/100 % (ai/dailyBudget.ts).
-  if (learning.gemini.limit > 0 && learning.gemini.calls >= learning.gemini.limit * 0.8) {
-    lines.push(`⚠️ ИИ почти исчерпал дневной лимит (${learning.gemini.calls} из ${learning.gemini.limit}) — ночью бот может замолчать`);
+  const study = [`📚 ${learning.started} начали учиться`];
+  if (learning.finished > 0) study.push(`🏁 ${learning.finished} закончили`);
+  if (learning.certificates > 0) study.push(`🎓 ${learning.certificates}`);
+  lines.push(study.join(" · "));
+
+  if (offlineSignups.length > 0) {
+    lines.push(`📝 офлайн: ${offlineSignups.map((s) => `${s.name} ${s.phone}`).join(", ")}`);
   }
 
-  lines.push(``);
-  if (offlineSignups.length === 0) {
-    lines.push(`📝 На офлайн-курс сегодня не записывались`);
-  } else {
-    lines.push(`📝 Записались на офлайн-курс — ${offlineSignups.length}:`);
-    for (const s of offlineSignups) lines.push(`     ${s.name} — ${s.phone}`);
-  }
+  const waiting: string[] = [];
+  if (pendingAll > 0) waiting.push(`⏳ ${pendingAll} ${plural(pendingAll, "чек", "чека", "чеков")} ждут решения${longPending > 0 ? ` (⏰ ${longPending} дольше ${LONG_PENDING_HOURS} ч)` : ""}`);
+  if (learning.unanswered > 0) waiting.push(`❓ ${learning.unanswered} без ответа`);
+  if (waiting.length > 0) lines.push(waiting.join(" · "));
 
-  if (pendingAll > 0 || unchecked > 0) {
-    lines.push(``);
-    if (pendingAll > 0) lines.push(`⏳ Ждут вашего решения — ${pendingAll} ${plural(pendingAll, "чек", "чека", "чеков")}`);
-    if (unchecked > 0) lines.push(`🔄 Перепроверяются — ${unchecked}`);
-  }
+  if (spamBlocked.length > 0) lines.push(`🚫 спам: ${spamBlocked.map((c) => handleOfContact(c)).join(", ")}`);
 
-  if (longPending > 0) {
-    lines.push(``);
-    lines.push(`⏰ Долго висят без решения — ${longPending} ${plural(longPending, "чек", "чека", "чеков")}`);
-    for (const h of longPendingHandles) lines.push(`     ${h}`);
-    if (longPending > longPendingHandles.length) lines.push(`     …и ещё ${longPending - longPendingHandles.length}`);
-  }
-
-  // «Где бот застрял» владелец из сводки убрал (05.09.2026): те же разговоры
-  // видны в панели («Сегодня» → вопросы, «Ученицы»), в вечернем письме это шум.
+  // «Где бот застрял» и расход ИИ в сводку не входят (панель и отдельные тревоги).
   void stuck;
-
-  if (wroteCount === 0) lines.push(``, `Сегодня никто не писал.`);
   return lines.join("\n");
 }
 
