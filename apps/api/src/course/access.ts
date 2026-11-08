@@ -58,6 +58,8 @@ type SessionClaims = { kind: "course-session"; contactId?: string; purchaseId?: 
 /** Алфавит короткого кода: без 0/O, 1/l/I — их путают, диктуя по телефону. */
 const CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 10;
+/** Сколько телефонов открывает курс (владелец 08.11.2026). */
+export const ONE_PHONE_LIMIT = 1;
 
 /** Случайный код ссылки. 54^10 ≈ 2·10^17 — перебирать бессмысленно. */
 export function shortCode(): string {
@@ -328,35 +330,48 @@ export function purchaseFor(purchases: Purchase[], courseId: string | null | und
  * безопасности 03.09.2026). Запас 3, как в схеме: браузер внутри Instagram
  * считается отдельным устройством.
  */
-/** Сколько раз в месяц ученица сама может заменить старое устройство. */
-export const MAX_DEVICE_SWAPS_PER_MONTH = 2;
-const SWAP_WINDOW_MS = 30 * 86_400_000;
+/**
+ * ПОЛИТИКА «ОДИН ТЕЛЕФОН» (владелец 08.11.2026: «нельзя на двух устройствах;
+ * один телефон — с него в любом браузере можно открывать, а с другого
+ * телефона надо аннулировать старый телефон; максимум один раз в месяц»).
+ *
+ * Перенос на другой телефон = аннулирование старого: удаляются ВСЕ записи
+ * устройств человека (а с ними сессии, метки и офлайн-ключи — сервер больше
+ * не узнаёт ни один браузер старого телефона). Не чаще одного раза в 30 дней.
+ */
+export const MAX_DEVICE_SWAPS_PER_MONTH = 1;
+export const SWAP_WINDOW_MS = 30 * 86_400_000;
+
+/** Сколько переносов уже сделано в окне 30 дней. */
+export function recentTransfers(contact: Pick<Contact, "deviceSwaps" | "deviceSwapAt">): number {
+  const at = contact.deviceSwapAt?.getTime() ?? 0;
+  return at > Date.now() - SWAP_WINDOW_MS ? (contact.deviceSwaps ?? 0) : 0;
+}
+
+/** Можно ли сейчас перенести доступ на другой телефон. */
+export function canTransferNow(contact: Pick<Contact, "deviceSwaps" | "deviceSwapAt">): boolean {
+  return recentTransfers(contact) < MAX_DEVICE_SWAPS_PER_MONTH;
+}
 
 /**
- * «ЭТО МОЙ НОВЫЙ ТЕЛЕФОН» — самообслуживание вместо письма владельцу.
- *
- * Лимит устройств упёрся — ученица одной кнопкой заменяет самое давнее
- * незаблокированное устройство новым. Не больше двух замен в месяц: третья —
- * уже похоже на раздачу, и решать её будет человек (исследование рынка
- * 03.09.2026: так устроены GetCourse и Netflix — выкидывают самое старое).
- * Возвращает false, если замены исчерпаны или заменять нечего.
+ * «ЭТО МОЙ НОВЫЙ ТЕЛЕФОН» — перенос доступа. Возвращает:
+ *  - "transferred" — старые устройства удалены, месячный перенос потрачен;
+ *  - "nothing" — переносить нечего (ничего не открывали), перенос НЕ тратится;
+ *  - "limit" — в этом месяце перенос уже был, решает владелец.
+ * Заблокированные владельцем устройства не удаляем: их блокировка — его решение.
  */
-export async function swapOldestDevice(contact: Contact): Promise<boolean> {
-  const windowStart = Date.now() - SWAP_WINDOW_MS;
-  const recent = contact.deviceSwapAt && contact.deviceSwapAt.getTime() > windowStart ? contact.deviceSwaps : 0;
-  if (recent >= MAX_DEVICE_SWAPS_PER_MONTH) return false;
-  const oldest = await prisma.device.findFirst({
-    where: { contactId: contact.id, blockedAt: null },
-    orderBy: { lastSeenAt: "asc" },
-  });
-  if (!oldest) return false;
-  await prisma.device.delete({ where: { id: oldest.id } });
+export async function transferToNewPhone(contact: Contact): Promise<"transferred" | "nothing" | "limit"> {
+  if (!canTransferNow(contact)) return "limit";
+  const old = await prisma.device.findMany({ where: { contactId: contact.id, blockedAt: null }, select: { id: true } });
+  if (old.length === 0) return "nothing";
+  await prisma.device.deleteMany({ where: { id: { in: old.map((d) => d.id) } } });
+  const used = recentTransfers(contact);
   await prisma.contact.update({
     where: { id: contact.id },
-    data: { deviceSwaps: recent + 1, deviceSwapAt: new Date() },
+    data: { deviceSwaps: used + 1, deviceSwapAt: new Date() },
   });
-  logInfo("course:deviceSwap", `контакт ${contact.id}: заменено устройство ${oldest.id} (${recent + 1}-я замена за месяц)`);
-  return true;
+  logInfo("course:deviceSwap", `контакт ${contact.id}: перенос на новый телефон, снято устройств: ${old.length}`);
+  return "transferred";
 }
 
 /** Устройства человека для экрана «какое заменить» — без секретов. */
@@ -382,16 +397,10 @@ export function describeDevice(ua: string | null): string {
   return "Устройство";
 }
 
-export async function deviceLimitFor(contactId: string): Promise<number> {
-  const purchases = await prisma.purchase.findMany({
-    where: { contactId, revokedAt: null, courseId: { not: null } },
-    select: { courseId: true },
-  });
-  const ids = purchases.map((p) => p.courseId).filter((id): id is string => Boolean(id));
-  if (ids.length === 0) return 3;
-  const courses = await prisma.course.findMany({ where: { id: { in: ids } }, select: { deviceLimit: true } });
-  // Окно одно на все курсы — берём самый щедрый лимит из купленных.
-  return courses.reduce((max, c) => Math.max(max, c.deviceLimit), 0) || 3;
+export async function deviceLimitFor(_contactId: string): Promise<number> {
+  // Политика «один телефон» одна на всех. Столбец Course.deviceLimit больше не
+  // читается: прежний «запас 2–3» как раз и позволял пользоваться вдвоём.
+  return ONE_PHONE_LIMIT;
 }
 
 /** Занятые места. Заблокированные СЧИТАЮТСЯ: иначе блокировка освобождала бы место. */
@@ -474,17 +483,35 @@ export async function registerDevice(
   // Заблокированные СЧИТАЮТСЯ занятыми: иначе блокировка сама освобождала бы
   // место, и обойти лимит можно было бы, просто нарвавшись на блокировку.
   let used = await deviceCountFor(contact.id);
-  // Ученица нажала «это мой новый телефон» — освобождаем место сами, в
-  // пределах месячного лимита замен.
-  if (used >= limit && replaceOldest && (await swapOldestDevice(contact))) {
+
+  // Место занято. Прежде чем отказать, выясняем, не тот ли это телефон в другом
+  // браузере (см. samePhoneVerdict). Сомнительное НЕ блокируем — пускаем на
+  // запись того же устройства и сообщаем владельцу.
+  if (used >= limit) {
+    const existing = await prisma.device.findMany({ where: { contactId: contact.id, blockedAt: null } });
+    const doubtful = existing.find((d) => samePhoneVerdict(d, req, ip) === "unsure");
+    if (doubtful) {
+      await alertUnsurePhone(contact, doubtful);
+      const device = await prisma.device.update({
+        where: { id: doubtful.id },
+        data: { lastSeenAt: new Date(), lastIp: ip, lastCity: country ?? doubtful.lastCity, offlineKeyExpiresAt },
+      });
+      return { ok: true, contact, purchases, purchase, device };
+    }
+  }
+
+  // Ученица нажала «это мой новый телефон» — переносим доступ (старый
+  // аннулируется), если в этом месяце ещё не переносила.
+  if (used >= limit && replaceOldest && (await transferToNewPhone(contact)) === "transferred") {
     used = await deviceCountFor(contact.id);
   }
   if (used >= limit) {
-    logInfo("course:deviceLimit", `контакт ${contact.id}: попытка входа с ${used + 1}-го устройства`);
+    logInfo("course:deviceLimit", `контакт ${contact.id}: попытка входа с другого телефона`);
     return {
       ok: false,
       reason: "device_limit",
-      message: `Курс уже открыт на ${limit} устройствах. Напишите нам, и мы освободим место`,
+      message:
+        "Курс уже открыт на другом телефоне. Если это ваш новый телефон, перенесите доступ: старый телефон перестанет открывать уроки",
     };
   }
 
@@ -504,6 +531,82 @@ export async function registerDevice(
     },
   });
   return { ok: true, contact, purchases, purchase, device };
+}
+
+/**
+ * ТОТ ЖЕ ТЕЛЕФОН ИЛИ ДРУГОЙ — по тому, что реально видит сервер.
+ *
+ * Знакомое устройство уже узнаётся по метке в куке и по отпечатку аппарата
+ * (экран, ядра, часовой пояс, платформа — см. deviceFingerprint). Сюда мы
+ * попадаем, когда ни то ни другое не совпало и место занято. Чего у сервера
+ * НЕТ: модели iPhone (в User-Agent её нет), стабильной модели Android (Chrome
+ * режет её до «K»), постоянного IP (Wi-Fi и мобильная сеть меняют адрес).
+ *
+ * Правило:
+ *  - другая ОС (Android / iOS / Windows / Mac) — "different", точно;
+ *  - у обоих Android известна модель и она разная — "different";
+ *  - модель Android совпала, а отпечаток нет, ЛИБО тот же сегмент сети (/24,
+ *    /64 для IPv6), что при прошлом заходе, меньше 30 минут назад — "unsure":
+ *    это похоже на тот же телефон в другом браузере или в другой сети. Не
+ *    блокируем, а пускаем на то же устройство и сообщаем владельцу;
+ *  - всё остальное — "different".
+ */
+export type PhoneVerdict = "different" | "unsure";
+const UNSURE_NET_WINDOW_MS = 30 * 60_000;
+
+function osFamily(ua: string | null | undefined): string {
+  const u = ua ?? "";
+  if (/android/i.test(u)) return "android";
+  if (/iphone|ipad|ipod/i.test(u)) return "ios";
+  if (/windows/i.test(u)) return "windows";
+  if (/mac os/i.test(u)) return "mac";
+  return "other";
+}
+
+/** Модель Android из User-Agent; «K», пустое и общие слова — неизвестна. */
+export function androidModel(ua: string | null | undefined): string | null {
+  const m = /Android[^;)]*;\s*([^;)]+?)\s*(?:Build\/|[;)])/i.exec(ua ?? "");
+  const model = m?.[1]?.trim();
+  if (!model || model.length < 3 || /^(k|mobile|wv|linux)$/i.test(model)) return null;
+  return model.toLowerCase();
+}
+
+function subnetOf(ip: string | null | undefined): string | null {
+  if (!ip) return null;
+  if (ip.includes(":")) return ip.split(":").slice(0, 4).join(":");
+  const parts = ip.split(".");
+  return parts.length === 4 ? parts.slice(0, 3).join(".") : null;
+}
+
+export function samePhoneVerdict(
+  known: Pick<Device, "userAgent" | "lastIp" | "lastSeenAt">,
+  req: Request,
+  ip: string | null
+): PhoneVerdict {
+  const ua = req.header("user-agent");
+  if (osFamily(known.userAgent) !== osFamily(ua)) return "different";
+  const a = androidModel(known.userAgent);
+  const b = androidModel(ua);
+  if (a && b) return a === b ? "unsure" : "different";
+  const net = subnetOf(ip);
+  const sameNet = net !== null && net === subnetOf(known.lastIp);
+  const fresh = Date.now() - known.lastSeenAt.getTime() < UNSURE_NET_WINDOW_MS;
+  return sameNet && fresh ? "unsure" : "different";
+}
+
+async function alertUnsurePhone(contact: Contact, device: Device): Promise<void> {
+  const botToken = (await getSetting("telegramBotToken"))?.trim();
+  const chatId = (await techChatIds())[0];
+  if (!botToken || !chatId) return;
+  if (!(await shouldSendAlert(`phone-unsure:${contact.id}`, { cooldownMs: 24 * 3_600_000 }))) return;
+  const who = contact.username ? `@${contact.username}` : contact.igUserId;
+  await sendTelegramMessage(
+    botToken,
+    chatId,
+    `Возможно, второй телефон у ${who}: вход не по метке и не по отпечатку, но похож на то же устройство ` +
+      `(${describeDevice(device.userAgent)}, ${device.lastCity ?? "страна неизвестна"}). Пустили без блокировки. ` +
+      `Если это не она, заблокируйте устройство в панели.`
+  ).catch((err) => logError("course:unsurePhoneAlert", err));
 }
 
 /**

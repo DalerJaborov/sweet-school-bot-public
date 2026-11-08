@@ -52,7 +52,7 @@ describe("DeviceLimitScreen", () => {
     render(<DeviceLimitScreen t={t} limit={limit()} onReplace={onReplace} />);
     fireEvent.click(screen.getByRole("button", { name: t.replaceOldest }));
     expect(onReplace).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Осталось замен: 1")).toBeTruthy();
+    expect(screen.getByText("Перенос на новый телефон можно сделать один раз в месяц. Сейчас доступно: 1")).toBeTruthy();
   });
 
   it("пока запрос идёт — кнопка выключена, чтобы не заменить дважды", () => {

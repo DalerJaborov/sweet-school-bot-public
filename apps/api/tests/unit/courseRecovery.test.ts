@@ -125,52 +125,58 @@ describe("maybeRestoreAccess", () => {
     expect(counted).toBeTruthy();
   });
 
-  it("места на устройствах нет — самое давнее освобождается, чтобы новый телефон влез", async () => {
+  it("«сменила телефон»: ссылка выдаётся, а ВСЕ старые устройства аннулируются, перенос тратится", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    db.model("device").findMany.mockResolvedValue([{ id: "old-1" }, { id: "old-2" }]);
+
+    const result = await maybeRestoreAccess(contact, "я сменила телефон, дайте ссылку");
+
+    expect(result).toMatchObject({ handled: true, outcome: "reissued" });
+    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["old-1", "old-2"] } } });
+    const upd = db.model("contact").update.mock.calls[0][0] as { data: { deviceSwaps: number } };
+    expect(upd.data.deviceSwaps).toBe(1);
+  });
+
+  it("ГЛАВНОЕ: второй перенос в этом месяце бот не делает — ссылки нет, владельцу сводка", async () => {
+    const twice = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date("2026-11-01") } as unknown as Contact;
+    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    db.model("device").findMany.mockResolvedValue([
+      { id: "d1", userAgent: "Android", lastCity: "TJ", lastSeenAt: new Date("2026-11-07"), blockedAt: null },
+    ]);
+
+    const result = await maybeRestoreAccess(twice, "сменила телефон, пишет что открыт на 2 устройствах");
+
+    expect(result).toMatchObject({ handled: true, outcome: "escalated" });
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(String(sendText.mock.calls[0][1])).toContain("один раз в месяц");
+    const alert = String(sendTelegramMessage.mock.calls[0][2]);
+    expect(alert).toContain("ВТОРОЙ раз");
+    expect(alert).toContain("2026-11-01");
+    expect(alert).toContain("Android");
+  });
+
+  it("обычная просьба о ссылке устройства не трогает", async () => {
     db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
     db.model("receiptCheck").count.mockResolvedValue(1);
-    // Лимит и занятость — ТЕ ЖЕ функции, что в access.ts (deviceLimitFor,
-    // deviceCountFor), и считаются по ЧЕЛОВЕКУ: раньше recovery считал по-своему
-    // и по покупке, и место не освобождал.
-    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
-    db.model("course").findMany.mockResolvedValue([{ id: "course-1", deviceLimit: 3 }]);
-    db.model("device").count.mockResolvedValue(3);
-    db.model("device").findFirst.mockResolvedValue({ id: "old", lastSeenAt: new Date("2026-01-01") });
+    db.model("purchase").findUnique.mockResolvedValue({ courseRef: { deviceLimit: 3 } });
 
-    await maybeRestoreAccess(contact, "пишет что открыт на 2 устройствах");
+    const result = await maybeRestoreAccess(contact, "потеряла ссылку");
 
-    // Освобождаем ровно одно место, и именно самое старое из НЕзаблокированных.
-    expect(db.model("device").delete).toHaveBeenCalledTimes(1);
-    expect(db.model("device").delete).toHaveBeenCalledWith({ where: { id: "old" } });
-    expect(db.model("device").findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { contactId: contact.id, blockedAt: null } })
-    );
+    expect(result).toMatchObject({ handled: true, outcome: "reissued" });
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
   });
 
-  it("ЗАБЛОКИРОВАННЫЕ СЧИТАЮТСЯ занятыми, но место за их счёт не освобождается", async () => {
-    // Раньше recovery считал только незаблокированные: одно заблокировано +
-    // одно живое = «места есть», ничего не удалял, а access видел 2 из 2 и не
-    // пускал. Бот отвечал «вот новая ссылка», ученица упиралась в тот же отказ.
-    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
+  it("переносить нечего (ни одного устройства) — перенос не тратится", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
     db.model("receiptCheck").count.mockResolvedValue(1);
-    db.model("course").findMany.mockResolvedValue([{ id: "course-1", deviceLimit: 2 }]);
-    db.model("device").count.mockResolvedValue(2); // одно из них заблокировано
-    db.model("device").findFirst.mockResolvedValue({ id: "live", lastSeenAt: new Date("2026-06-01") });
+    db.model("device").findMany.mockResolvedValue([]);
 
-    await maybeRestoreAccess(contact, "не открывается на новом телефоне");
+    await maybeRestoreAccess(contact, "сменила телефон");
 
-    expect(db.model("device").delete).toHaveBeenCalledWith({ where: { id: "live" } });
-  });
-
-  it("все места заняты заблокированными — автомат отступает, не удаляя ничего", async () => {
-    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
-    db.model("receiptCheck").count.mockResolvedValue(1);
-    db.model("course").findMany.mockResolvedValue([{ id: "course-1", deviceLimit: 2 }]);
-    db.model("device").count.mockResolvedValue(2);
-    db.model("device").findFirst.mockResolvedValue(null);
-
-    await maybeRestoreAccess(contact, "не открывается ссылка");
-
-    expect(db.model("device").delete).not.toHaveBeenCalled();
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(db.model("contact").update).not.toHaveBeenCalled();
   });
 
   it("ЗАЩИТА ОТ РАЗДАЧИ: четвёртая просьба за месяц уходит владельцу", async () => {

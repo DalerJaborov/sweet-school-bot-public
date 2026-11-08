@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
-import { deviceLimitFor, deviceCountFor } from "./access.js";
+import { canTransferNow, transferToNewPhone, listDevicesFor } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
@@ -54,10 +54,13 @@ const NEW_DEVICE = /(смен(ил|ила)\s*телефон|нов(ый|ом)\s*
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
-const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ/iu;
+const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ|на\s+другом\s+телефоне|дар\s+телефони\s+дигар/iu;
 
-const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string }> = {
+const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string; transferDenied: string }> = {
   ru: {
+    transferDenied:
+      "Перенос доступа на другой телефон можно сделать один раз в месяц, и в этом месяце он уже был. " +
+      "Передала Ширин: она посмотрит и ответит вам.",
     sent: "Вот новая ссылка на ваши уроки 🌸 Откройте её на том телефоне, где будете смотреть:\n",
     pending:
       "Вижу вашу покупку 🌸 Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
@@ -66,6 +69,9 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
       "По вашей оплате есть вопрос, доступ пока закрыт 🙏 Ширин посмотрит и напишет вам сама.",
   },
   tg: {
+    transferDenied:
+      "Интиқоли дастрасӣ ба телефони дигар як бор дар як моҳ мумкин аст ва дар ин моҳ он аллакай шуда буд. " +
+      "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
     sent: "Мана линки нави дарсҳоятон 🌸 Дар ҳамон телефоне кушоед, ки тамошо мекунед:\n",
     pending:
       "Хариди шуморо дидам 🌸 Линк чанд бор фиристода шуд, барои ҳамин ба Ширин расондам — " +
@@ -73,6 +79,7 @@ const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: st
     revoked: "Оид ба пардохти шумо савол ҳаст, дастрасӣ ҳоло пӯшида 🙏 Ширин месанҷад ва худаш менависад.",
   },
   en: {
+    transferDenied: "Access can be moved to another phone once a month, and this month it was already moved. I passed this to Shirin.",
     sent: "Here is a fresh link to your lessons 🌸 Open it on the phone you will watch on:\n",
     pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
     revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
@@ -150,15 +157,21 @@ export async function maybeRestoreAccess(contact: Contact, text: string): Promis
   // старое устройство ему больше недоступно. Самое давнее уходит первым.
   // Устройства и ссылка — на человека, поэтому по одному разу, не по курсам.
   if (await isBotFrozen()) return { handled: false };
-  // A request for a link never implicitly removes another device.
-  const releaseDevice = DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text);
+  // Просто ссылка никогда сама не снимает устройства. Перенос на другой телефон
+  // (старый аннулируется) — только по явной просьбе и не чаще раза в 30 дней.
+  const wantsTransfer = DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text);
+  if (wantsTransfer && !canTransferNow(contact)) {
+    await reply(contact, TEXTS[language].transferDenied);
+    await tellOwner(contact, await transferDeniedSummary(contact), active.length, reissuesUsed);
+    return { handled: true, outcome: "escalated" };
+  }
   if (await isBotFrozen()) return { handled: false };
   const url = await issueCourseLink(contact.id, { automatic: true });
   if (!url || !(await reply(contact, TEXTS[language].sent + url))) {
     await tellOwner(contact, "ссылка НЕ доставлена — нужна ручная помощь; прежняя действующая ссылка сохранена", active.length, reissuesUsed);
     return { handled: true, outcome: "escalated" };
   }
-  if (releaseDevice && !(await isBotFrozen())) await releaseOldestDevice(contact.id);
+  if (wantsTransfer && !(await isBotFrozen())) await transferToNewPhone(contact).catch((err) => logError("recovery:transfer", err));
   for (const purchase of active) {
     await prisma.purchase.update({
       where: { id: purchase.id },
@@ -192,32 +205,16 @@ function countRecentReissues(purchases: { linkReissueCount: number; linkReissued
 }
 
 /**
- * Освободить место под новое устройство. Удаляем самое давно не появлявшееся:
- * это либо потерянный телефон, либо браузер, которым больше не пользуются.
- * Заблокированные владельцем не трогаем — их сняли осознанно.
+ * Сводка для владельца, когда второй перенос за месяц просят уже в этом месяце:
+ * кто, когда был прошлый перенос, какое устройство занято сейчас.
  */
-async function releaseOldestDevice(contactId: string): Promise<void> {
-  // Лимит и счёт занятых — ТЕ ЖЕ функции, что решают «пускать или нет» в
-  // access.ts. Раньше здесь было своё представление (запас 3 и только
-  // незаблокированные), и место не освобождалось ровно тогда, когда было
-  // нужно.
-  const limit = await deviceLimitFor(contactId);
-  const used = await deviceCountFor(contactId);
-  if (used < limit) return;
-
-  // Освобождаем ровно одно место — самое давно не появлявшееся из
-  // НЕзаблокированных: заблокированные считаются занятыми, но сняли их
-  // осознанно, и оживлять место за их счёт нельзя.
-  const oldest = await prisma.device.findFirst({
-    where: { contactId, blockedAt: null },
-    orderBy: { lastSeenAt: "asc" },
-  });
-  if (!oldest) {
-    // Все места заняты заблокированными — это уже к владельцу, а не к автомату.
-    logError("recovery:releaseDevice", new Error(`контакт ${contactId}: все устройства заблокированы, место не освободить`));
-    return;
-  }
-  await prisma.device.delete({ where: { id: oldest.id } }).catch((err) => logError("recovery:releaseDevice", err));
+async function transferDeniedSummary(contact: Contact): Promise<string> {
+  const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "дата неизвестна";
+  const devices = await listDevicesFor(contact.id).catch(() => []);
+  const now = devices
+    .map((d) => `${d.label}${d.city ? `, ${d.city}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}${d.blocked ? ", заблокировано" : ""}`)
+    .join("; ");
+  return `просит перенос на другой телефон ВТОРОЙ раз за месяц (прошлый перенос ${last}). Сейчас занято: ${now || "нет данных"}. Бот ничего не менял`;
 }
 
 async function reply(contact: Contact, text: string): Promise<boolean> {

@@ -78,6 +78,7 @@ function arrange(db: PrismaMock, over: { contact?: Partial<typeof contact>; purc
   db.model("course").findMany.mockResolvedValue([{ id: "course-1", deviceLimit: over.limit ?? 3 }]);
   db.model("device").findFirst.mockResolvedValue(null);
   db.model("device").count.mockResolvedValue(0);
+  db.model("device").findMany.mockResolvedValue([]);
   db.model("purchase").updateMany.mockResolvedValue({ count: 1 });
 }
 
@@ -168,19 +169,18 @@ describe("openByLink", () => {
     }
   });
 
-  it("лимит устройств — самый щедрый из купленных курсов", async () => {
+  it("лимит — ОДИН телефон: столбец Course.deviceLimit больше не читается", async () => {
     const { token } = issueMagicLink("contact-1");
     arrange(db, { purchases: [{ ...purchase }, { ...purchase2 }] });
     db.model("course").findMany.mockResolvedValue([
       { id: "course-1", deviceLimit: 2 },
       { id: "course-2", deviceLimit: 4 },
     ]);
-    db.model("device").count.mockResolvedValue(3);
-    db.model("device").create.mockResolvedValue({ id: "device-1", blockedAt: null, secret: "s", contactId: "contact-1" });
+    db.model("device").count.mockResolvedValue(1);
 
     const result = await openByLink(fakeReq(), fakeRes() as never, token);
 
-    expect(result.ok).toBe(true); // 3 < 4
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
   });
 
   it("подделанный отпечаток НЕ выдаёт себя за знакомое устройство", async () => {
@@ -189,7 +189,7 @@ describe("openByLink", () => {
     // это всегда новое устройство.
     const { token } = issueMagicLink("contact-1");
     arrange(db);
-    db.model("device").count.mockResolvedValue(3); // места уже заняты
+    db.model("device").count.mockResolvedValue(1); // единственное место занято
 
     const result = await openByLink(fakeReq(), fakeRes() as never, token, "чужой-отпечаток-подруги");
 
@@ -200,7 +200,7 @@ describe("openByLink", () => {
   it("заблокированные устройства ЗАНИМАЮТ место — считаем все устройства человека", async () => {
     const { token } = issueMagicLink("contact-1");
     arrange(db);
-    db.model("device").count.mockResolvedValue(3);
+    db.model("device").count.mockResolvedValue(1);
 
     await openByLink(fakeReq(), fakeRes() as never, token);
 
@@ -229,13 +229,13 @@ describe("openByLink", () => {
 
   it("лишнее устройство при исчерпанном лимите — стоп с понятным текстом", async () => {
     const { token } = issueMagicLink("contact-1");
-    arrange(db, { limit: 2 });
-    db.model("device").count.mockResolvedValue(2);
+    arrange(db);
+    db.model("device").count.mockResolvedValue(1);
 
     const result = await openByLink(fakeReq(), fakeRes() as never, token);
 
     expect(result).toMatchObject({ ok: false, reason: "device_limit" });
-    expect((result as { message: string }).message).toContain("2 устройствах");
+    expect((result as { message: string }).message).toContain("другом телефоне");
     expect(db.model("device").create).not.toHaveBeenCalled();
   });
 
@@ -434,5 +434,105 @@ describe("statusFor", () => {
     expect(statusFor("revoked")).toBe(403);
     expect(statusFor("blocked")).toBe(403);
     expect(statusFor("not_found")).toBe(404);
+  });
+});
+
+
+describe("политика «один телефон»", () => {
+  let db: PrismaMock;
+  beforeEach(() => {
+    db = mockPrisma();
+    sendTelegramMessage.mockClear();
+    db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
+      where.key === "telegramBotToken" ? { value: "token" } : null
+    );
+  });
+  afterEach(restorePrisma);
+
+  const ANDROID_A = "Mozilla/5.0 (Linux; Android 13; SM-A546B Build/TP1A) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36";
+  const ANDROID_B = "Mozilla/5.0 (Linux; Android 12; Pixel 7 Build/SQ3A) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36";
+  const ANDROID_REDUCED = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36";
+  const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148";
+  const WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36";
+
+  function occupied(over: Record<string, unknown>) {
+    return {
+      id: "device-old",
+      contactId: "contact-1",
+      blockedAt: null,
+      secret: "s-old",
+      lastCity: "TJ",
+      lastIp: "10.0.0.1",
+      lastSeenAt: new Date(Date.now() - 2 * 86_400_000),
+      userAgent: ANDROID_A,
+      ...over,
+    };
+  }
+
+  async function open(ua: string, existing: unknown[], extra: { replaceOldest?: boolean } = {}) {
+    const { token } = issueMagicLink("contact-1");
+    arrange(db);
+    db.model("device").count.mockResolvedValue(existing.length);
+    db.model("device").findMany.mockResolvedValue(existing);
+    db.model("device").update.mockImplementation(async ({ where }: { where: { id: string } }) => ({ id: where.id, blockedAt: null, secret: "s-old" }));
+    db.model("device").create.mockResolvedValue({ id: "device-new", blockedAt: null, secret: "s-new" });
+    return openByLink(fakeReq({ "user-agent": ua, "x-forwarded-for": "10.0.0.1" }), fakeRes() as never, token, undefined, extra.replaceOldest ?? false);
+  }
+
+  it("другая ОС — это другой телефон: стоп, владелец не тревожится", async () => {
+    const result = await open(IPHONE, [occupied({ lastSeenAt: new Date() })]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("два Android с разными известными моделями — разные телефоны", async () => {
+    const result = await open(ANDROID_B, [occupied({ lastSeenAt: new Date() })]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+  });
+
+  it("Android той же модели в другом браузере — НЕ блокируем: тот же телефон, владельцу сводка", async () => {
+    const result = await open(ANDROID_A.replace("Chrome/120", "Instagram 300 Chrome/120"), [occupied({})]);
+    expect(result.ok).toBe(true);
+    expect(db.model("device").create).not.toHaveBeenCalled();
+    expect(db.model("device").update).toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Возможно, второй телефон");
+  });
+
+  it("модель скрыта (Chrome режет до «K»), сеть та же и заход свежий — сомнительно, пускаем и сообщаем", async () => {
+    const result = await open(ANDROID_REDUCED, [occupied({ userAgent: ANDROID_REDUCED, lastSeenAt: new Date(Date.now() - 5 * 60_000) })]);
+    expect(result.ok).toBe(true);
+    expect(db.model("device").create).not.toHaveBeenCalled();
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("модель скрыта, сеть та же, но прошлый заход давно — другой телефон: стоп", async () => {
+    const result = await open(ANDROID_REDUCED, [occupied({ userAgent: ANDROID_REDUCED })]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+  });
+
+  it("компьютер при занятом телефоне — стоп", async () => {
+    const result = await open(WINDOWS, [occupied({ lastSeenAt: new Date() })]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+  });
+
+  it("«это мой новый телефон»: все старые устройства удаляются, новое создаётся, перенос тратится", async () => {
+    const result = await open(IPHONE, [occupied({ lastSeenAt: new Date() })], { replaceOldest: true });
+    // count остаётся замоканным на 1, поэтому проверяем сам перенос, а не итоговый вход.
+    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["device-old"] } } });
+    const upd = db.model("contact").update.mock.calls[0][0] as { data: { deviceSwaps: number } };
+    expect(upd.data.deviceSwaps).toBe(1);
+    expect(result.ok === true || result.ok === false).toBe(true);
+  });
+
+  it("второй перенос в тот же месяц не выполняется", async () => {
+    const { token } = issueMagicLink("contact-1");
+    arrange(db, { contact: { deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * 86_400_000) } as never });
+    db.model("device").count.mockResolvedValue(1);
+    db.model("device").findMany.mockResolvedValue([occupied({ lastSeenAt: new Date() })]);
+
+    const result = await openByLink(fakeReq({ "user-agent": IPHONE }), fakeRes() as never, token, undefined, true);
+
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
   });
 });
