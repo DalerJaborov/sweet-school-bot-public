@@ -19,7 +19,7 @@ import type { Course } from "../courses.js";
  *  - одного сообщения без покупки мало, чтобы тихо закрыть оплату: такой чек
  *    уходит владельцу с пометкой «возможно, уже выдано» ("maybe").
  */
-const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{16,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
+const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
 
 export async function manualLinkSince(contactId: string, since: Date): Promise<boolean> {
   const rows = await prisma.message.findMany({
@@ -73,8 +73,10 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
   });
   if (!waiting || waiting.length === 0) return false;
   const settled: string[] = [];
+  // Ссылка Ширин не привязана к курсу: по одному её сообщению снимаем ожидание,
+  // только если ждёт ровно одна покупка (комплект из двух не трогаем).
   for (const p of waiting) {
-    if (p.inviteLink || (await manualLinkSince(contactId, p.createdAt))) settled.push(p.id);
+    if (p.inviteLink || (waiting.length === 1 && (await manualLinkSince(contactId, p.createdAt)))) settled.push(p.id);
   }
   if (settled.length === 0) return false;
   await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false } });

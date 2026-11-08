@@ -260,6 +260,8 @@ model ReceiptCheck {
   ownerAlerts String?
   /// Номер операции с чека (если читается): один на перевод, ловит пересохранённый старый чек.
   transactionId String?
+  /// Когда очередь перепроверки может взять чек снова (createdAt не двигаем: он нужен как стабильная точка отсчёта).
+  retryAfter DateTime?
 
   @@index([transactionId])
 }

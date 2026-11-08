@@ -98,7 +98,11 @@ export async function retryUncheckedReceipts(): Promise<void> {
 async function runQueue(): Promise<void> {
   if (await isBotFrozen()) return;
   const pending = await prisma.receiptCheck.findMany({
-    where: { kind: UNCHECKED, createdAt: { lt: new Date(Date.now() - RETRY_DELAY_MS) } },
+    where: {
+      kind: UNCHECKED,
+      createdAt: { lt: new Date(Date.now() - RETRY_DELAY_MS) },
+      OR: [{ retryAfter: null }, { retryAfter: { lt: new Date() } }],
+    },
     include: { contact: true },
     orderBy: { createdAt: "asc" },
     take: 3,
@@ -142,11 +146,11 @@ async function runQueue(): Promise<void> {
     if (await isBotFrozen()) return;
 
     if (!verdict) {
-      // Попытка не удалась — двигаем createdAt, иначе следующий тик возьмёт эту же
+      // Попытка не удалась — откладываем retryAfter (createdAt остаётся точкой отсчёта), иначе следующий тик возьмёт эту же
       // запись через 10 секунд и съест дневной бюджет на одной картинке.
       await prisma.receiptCheck.update({
         where: { id: row.id },
-        data: { confidence: attempt, createdAt: new Date() },
+        data: { confidence: attempt, retryAfter: new Date(Date.now() + RETRY_DELAY_MS) },
       });
       continue;
     }

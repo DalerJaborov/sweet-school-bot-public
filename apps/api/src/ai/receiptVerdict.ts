@@ -13,7 +13,7 @@ import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
-import { receiptServedState } from "../course/handedOut.js";
+import { manualLinkSince, receiptServedState } from "../course/handedOut.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -217,25 +217,44 @@ export async function handleReceiptVerdict(
   // прислала ссылку вне системы (покупок нет) - оплату молча не закрываем:
   // карточка владельцу с пометкой, клиентке ничего не пишем.
   let maybeServed = false;
-  if (existingId && verdict.amount != null && (verdict.currency ?? "TJS").toUpperCase() === "TJS") {
+  if (existingId) {
     const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
     if (queued) {
-      const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(verdict.amount));
-      if (state === "served") {
-        await prisma.receiptCheck.update({
-          where: { id: existingId },
-          data: {
-            kind: "duplicate",
-            confidence: verdict.confidence,
-            reason: `${verdict.reason} (доступ на эти курсы уже выдан - автоматика не сработала)`,
-            amount: Math.round(verdict.amount),
-            ownerDecision: "HANDLED",
-            decidedAt: new Date(),
+      const tjs = verdict.amount != null && (verdict.currency ?? "TJS").toUpperCase() === "TJS";
+      // Другой чек этого человека уже открыл доступ после этого: покупки могли
+      // появиться от него, а не от ручной выдачи - решают обычные проверки
+      // повтора и второго платежа ниже, молча не закрываем.
+      const explainedByOtherReceipt =
+        (await prisma.receiptCheck.count({
+          where: {
+            contactId: contact.id,
+            id: { not: existingId },
+            createdAt: { gte: queued.createdAt },
+            OR: [{ linkSent: true }, { ownerDecision: "APPROVED" }],
           },
-        });
-        return;
+        })) > 0;
+      if (tjs && !explainedByOtherReceipt) {
+        const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(verdict.amount as number));
+        if (state === "served") {
+          await prisma.receiptCheck.update({
+            where: { id: existingId },
+            data: {
+              kind: "duplicate",
+              confidence: verdict.confidence,
+              reason: `${verdict.reason} (доступ на эти курсы уже выдан - автоматика не сработала)`,
+              amount: Math.round(verdict.amount as number),
+              ownerDecision: "HANDLED",
+              decidedAt: new Date(),
+            },
+          });
+          return;
+        }
+        maybeServed = state === "maybe";
+      } else if (!tjs) {
+        // Сумма не в сомони или не прочитана: курсы не определить - если Ширин
+        // уже прислала ссылку, клиентке не пишем, чек идёт владельцу.
+        maybeServed = await manualLinkSince(contact.id, queued.createdAt);
       }
-      maybeServed = state === "maybe";
     }
   }
   const previous = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
@@ -397,8 +416,8 @@ export async function handleReceiptVerdict(
   // Из рублей и других валют банк конвертирует по своему курсу (единого нет):
   // пересчёт по нашему курсу сравниваем с ценами с запасом 5 %.
   const converted = verdict.amount != null && currency !== "TJS";
-  if (maybeServed && kind === "valid") {
-    kind = "suspicious";
+  if (maybeServed) {
+    if (kind === "valid") kind = "suspicious";
     hard = true;
     doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
   }
