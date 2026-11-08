@@ -123,7 +123,10 @@ export async function remindDeliveryChoice(contact: Contact, opts: { byHuman?: b
   const state = await prisma.contact.findUnique({ where: { id: contact.id }, select: { deliveryChoicePromptState: true } });
   if (state?.deliveryChoicePromptState === "UNKNOWN") return false;
   const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN", text: { not: null } }, orderBy: { createdAt: "desc" } });
-  const text = CHOICE_REMINDER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  // Язык - тем же способом, что у самого вопроса (язык контакта, затем текст).
+  const lang = contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
+    ? contact.preferredLanguage : (await contactLanguage(contact.id, lastIn?.text ?? "")) === "ru" ? "ru" : "tg";
+  const text = CHOICE_REMINDER_TEXT[lang];
   try {
     // Назначение "чек проверен" разрешено только внутри проверки принятого чека
     // (withVerifiedReceiptDelivery); вне её - обычный ответ (ревью PR 72).
