@@ -47,6 +47,18 @@ describe("DeviceLimitScreen", () => {
     expect(screen.getByText(/ба бот нависед/)).toBeTruthy();
   });
 
+  it("главная кнопка «Написать в чат»: WhatsApp с готовым текстом и публичным кодом из ссылки", () => {
+    localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+    render(<DeviceLimitScreen t={t} limit={limit({ school: { telegram: null, instagram: null, whatsapp: "https://wa.me/992900000000" } })} />);
+    const link = screen.getByRole("link", { name: t.deviceLimitWrite }) as HTMLAnchorElement;
+    const href = link.getAttribute("href") ?? "";
+    expect(href.startsWith("https://wa.me/992900000000?text=")).toBe(true);
+    const text = decodeURIComponent(href.split("text=")[1]);
+    expect(text).toContain("Я сменила телефон");
+    expect(text).toContain("7F3A-91C2");
+    localStorage.removeItem("course.recoveryCode");
+  });
+
   it("контакты школы показываются, если известны", () => {
     render(<DeviceLimitScreen t={t} limit={limit({ school: { telegram: "https://t.me/x", instagram: null, whatsapp: null } })} />);
     expect(screen.getByRole("link", { name: t.telegramGroup })).toBeTruthy();

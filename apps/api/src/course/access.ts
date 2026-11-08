@@ -477,13 +477,16 @@ export async function transferToNewPhone(
   const old = await prisma.device.findMany({ where: { contactId: contact.id, ...(includeBlocked ? {} : { blockedAt: null }) } });
   if (old.length === 0) return "nothing";
   // Одним запросом, но каждое место попадает в журнал (как в releaseDevice).
-  await prisma.device.deleteMany({ where: { id: { in: old.map((d) => d.id) } } });
-  for (const d of old) await recordAccessEvent(d, "released", actor);
   const used = recentTransfers(contact);
-  await prisma.contact.update({
-    where: { id: contact.id },
-    data: { deviceSwaps: used + 1, deviceSwapAt: new Date() },
+  // Удаление и счётчик — одна транзакция: либо оба, либо ни одного.
+  await prisma.$transaction(async (tx) => {
+    await tx.device.deleteMany({ where: { id: { in: old.map((d) => d.id) } } });
+    await tx.contact.update({
+      where: { id: contact.id },
+      data: { deviceSwaps: used + 1, deviceSwapAt: new Date() },
+    });
   });
+  for (const d of old) await recordAccessEvent(d, "released", actor);
   logInfo("course:deviceSwap", `контакт ${contact.id}: перенос на новый телефон, снято устройств: ${old.length}`);
   return "transferred";
 }

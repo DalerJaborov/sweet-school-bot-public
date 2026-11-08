@@ -131,18 +131,16 @@ describe("maybeRestoreAccess", () => {
     expect(counted).toBeTruthy();
   });
 
-  it("«сменила телефон» без доказательств: ссылка НЕ выдаётся, устройства целы, ей «пришлите чек или код», владельцу карточка с кнопкой", async () => {
+  it("«сменила телефон» из её чата с подтверждённой оплатой — доказательство само: бот переносит сразу, старые устройства снимаются", async () => {
     db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
     db.model("receiptCheck").count.mockResolvedValue(1);
     db.model("device").findMany.mockResolvedValue([{ id: "old-1", userAgent: "Android", lastCity: "TJ", lastSeenAt: new Date("2026-11-07") }]);
 
     const result = await maybeRestoreAccess(contact, "я сменила телефон, дайте ссылку");
 
-    expect(result).toMatchObject({ handled: true, outcome: "escalated" });
-    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
-    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
-    expect(String(sendText.mock.calls[0][1])).toContain("чек об оплате картинкой или код из вашей ссылки");
-    expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("mn:tr:");
+    expect(result).toMatchObject({ handled: true, outcome: "reissued" });
+    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["old-1"] } } });
+    expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
   });
 
   it("«сменила телефон» с её чеком картинкой: бот переносит сам — новая ссылка, все старые устройства снимаются", async () => {
@@ -175,23 +173,6 @@ describe("maybeRestoreAccess", () => {
     const alert = String(sendTelegramMessage.mock.calls[0][2]);
     expect(alert).toContain("ещё раз в этом месяце");
     expect(alert).toContain("Android");
-  });
-
-  it("доказательство отдельным сообщением: бот просил чек, пришла одна картинка без текста — перенос делается", async () => {
-    const asker = { ...contact, id: "c-await" } as unknown as Contact;
-    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1", contactId: "c-await" })]);
-    db.model("receiptCheck").count.mockResolvedValue(0);
-    db.model("purchase").count.mockResolvedValue(1);
-    db.model("device").findMany.mockResolvedValue([{ id: "old-1", userAgent: "Android", lastCity: null, lastSeenAt: new Date("2026-11-07") }]);
-
-    const first = await maybeRestoreAccess(asker, "я сменила телефон");
-    expect(first).toMatchObject({ handled: true, outcome: "escalated" });
-    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
-
-    db.model("receiptCheck").count.mockResolvedValue(1);
-    const second = await maybeRestoreAccess(asker, "", ["hash-1"]);
-    expect(second).toMatchObject({ handled: true, outcome: "reissued" });
-    expect(db.model("device").deleteMany).toHaveBeenCalled();
   });
 
   it("таджикская фраза с экрана «телефонамро иваз кардам» распознаётся как просьба", () => {
