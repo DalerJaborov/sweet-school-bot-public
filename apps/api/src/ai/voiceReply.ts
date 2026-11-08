@@ -23,7 +23,11 @@ import { decorateForV3, splitForVoice, synthesizeToFile, voiceEnabled } from "./
  *  - Любая ошибка озвучки (потолок трат, сеть) — молча отвечаем текстом.
  */
 /** Каналы, где голос разрешён, и формат файла: WhatsApp - ogg/opus, Instagram и Messenger - aac. Сайт (WEB) - только текст. */
-const VOICE_FORMAT_BY_CHANNEL: Record<string, "ogg" | "aac" | undefined> = { WHATSAPP: "ogg", INSTAGRAM: "aac", MESSENGER: "aac" };
+const VOICE_FORMAT_BY_CHANNEL: Record<string, "ogg" | "aac" | undefined> = {
+  WHATSAPP: "ogg",
+  INSTAGRAM: "aac",
+  MESSENGER: "aac",
+};
 export const VOICE_MARK = "🎤 ";
 /** Короткая благодарность или «понял» без вопроса: голосом на такое не отвечаем. */
 const ACK_WORD =
@@ -48,7 +52,10 @@ const HAS_MONEY_WORDS =
 
 /** Текст для озвучки: без эмодзи и переносов строк. */
 export function speakable(text: string): string {
-  return text.replace(/[\p{Extended_Pictographic}‍️\u{1F3FB}-\u{1F3FF}]/gu, "").replace(/\s+/g, " ").trim();
+  return text
+    .replace(/[\p{Extended_Pictographic}‍️\u{1F3FB}-\u{1F3FF}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function chooseVoiceOrText(
@@ -74,7 +81,10 @@ type VoiceCtx = { channel: string; clientSentVoice: boolean; lastReplyWasVoice: 
 export function planVoice(text: string, ctx: VoiceCtx): { voice: string; rest: string } | null {
   if (chooseVoiceOrText(text, ctx) === "voice") return { voice: speakable(text), rest: "" };
   if (!ctx.clientSentVoice || !VOICE_FORMAT_BY_CHANNEL[ctx.channel] || ctx.lastReplyWasVoice) return null;
-  const sentences = text.split(/(?<=[.!?…])\s+|\n+/u).map((x) => x.trim()).filter(Boolean);
+  const sentences = text
+    .split(/(?<=[.!?…])\s+|\n+/u)
+    .map((x) => x.trim())
+    .filter(Boolean);
   const free: VoiceCtx = { ...ctx, lastReplyWasVoice: false };
   const voiced: string[] = [];
   const rest: string[] = [];
@@ -133,7 +143,13 @@ export async function trySendVoiceReply(
     const chunks = splitForVoice(plan.voice);
     if (!chunks) return null;
     // Куски озвучиваются параллельно (у каждого свой кеш), но уходят строго по очереди.
-    urls = (await Promise.all(chunks.map((chunk, i) => synthesizeToFile(decorateForV3(chunk, i, chunks.length), VOICE_FORMAT_BY_CHANNEL[contact.channel] ?? "ogg")))).map((r) => r.url);
+    urls = (
+      await Promise.all(
+        chunks.map((chunk, i) =>
+          synthesizeToFile(decorateForV3(chunk, i, chunks.length), VOICE_FORMAT_BY_CHANNEL[contact.channel] ?? "ogg"),
+        ),
+      )
+    ).map((r) => r.url);
   } catch (err) {
     // До отправки ничего не ушло - безопасно ответить текстом.
     logError("voiceReply", err);
@@ -157,7 +173,9 @@ export async function trySendVoiceReply(
     }
     // Часть голосовых уже у клиента: запоминаем, что ушло, чтобы история и панель не считали, что бот молчал.
     if (sent > 0) {
-      await recordOutgoingMessage(contact.id, `${VOICE_MARK}(ушло ${sent} из ${urls.length}) ${plan.voice}`, mid).catch((e) => logError("voiceReply:record", e));
+      await recordOutgoingMessage(contact.id, `${VOICE_MARK}(ушло ${sent} из ${urls.length}) ${plan.voice}`, mid).catch(
+        (e) => logError("voiceReply:record", e),
+      );
     }
     throw err;
   }

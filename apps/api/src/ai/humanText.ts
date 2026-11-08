@@ -31,12 +31,18 @@ const TAJIK_LETTER_ALL = new RegExp(String.raw`[${TAJIK_LETTER_CLASS}]`, "gu");
 /** Карта замен особых букв на обычную кириллицу — единственная в проекте
  *  (её же использует поиск по рецептам, course/assistant.ts). */
 const PLAIN_LETTER: Readonly<Record<string, string>> = {
-  ҷ: "ч", Ҷ: "Ч",
-  қ: "к", Қ: "К",
-  ӯ: "у", Ӯ: "У",
-  ғ: "г", Ғ: "Г",
-  ҳ: "х", Ҳ: "Х",
-  ӣ: "и", Ӣ: "И",
+  ҷ: "ч",
+  Ҷ: "Ч",
+  қ: "к",
+  Қ: "К",
+  ӯ: "у",
+  Ӯ: "У",
+  ғ: "г",
+  Ғ: "Г",
+  ҳ: "х",
+  Ҳ: "Х",
+  ӣ: "и",
+  Ӣ: "И",
 };
 
 /** Есть ли в тексте особые таджикские буквы (в любом регистре, в т.ч. «и» + знак долготы). */
@@ -55,16 +61,18 @@ const DASH = "—–―‒";
 /** Убирает длинные тире: в начале строки — совсем, между цифрами — дефис, иначе — запятая. */
 export function withoutDashes(text: string): string {
   if (!new RegExp(String.raw`[${DASH}]`, "u").test(text)) return text;
-  return text
-    .replace(new RegExp(String.raw`^([ \t]*)[${DASH}]+[ \t]*`, "gmu"), "$1")
-    .replace(new RegExp(String.raw`(\d)[ \t]*[${DASH}][ \t]*(\d)`, "gu"), "$1-$2")
-    .replace(new RegExp(String.raw`[ \t]*[${DASH}]+[ \t]*`, "gu"), ", ")
-    // «уроки, — прямо» → «уроки,, прямо» → «уроки, прямо»; «да. — нет» → «да. нет».
-    .replace(/([,.!?:;…])[ \t]*,[ \t]*/gu, "$1 ")
-    .replace(/,[ \t]*([.!?])/gu, "$1")
-    .replace(/[ \t]*,[ \t]*$/gmu, "")
-    .replace(/^([ \t]*),[ \t]*/gmu, "$1")
-    .replace(/[ \t]{2,}/gu, " ");
+  return (
+    text
+      .replace(new RegExp(String.raw`^([ \t]*)[${DASH}]+[ \t]*`, "gmu"), "$1")
+      .replace(new RegExp(String.raw`(\d)[ \t]*[${DASH}][ \t]*(\d)`, "gu"), "$1-$2")
+      .replace(new RegExp(String.raw`[ \t]*[${DASH}]+[ \t]*`, "gu"), ", ")
+      // «уроки, — прямо» → «уроки,, прямо» → «уроки, прямо»; «да. — нет» → «да. нет».
+      .replace(/([,.!?:;…])[ \t]*,[ \t]*/gu, "$1 ")
+      .replace(/,[ \t]*([.!?])/gu, "$1")
+      .replace(/[ \t]*,[ \t]*$/gmu, "")
+      .replace(/^([ \t]*),[ \t]*/gmu, "$1")
+      .replace(/[ \t]{2,}/gu, " ")
+  );
 }
 
 /** Обращения, которых бот не говорит (владелец 08.11.2026). Только целым словом. */
@@ -78,7 +86,11 @@ function capitalizeLineStarts(text: string, lines: Set<number>): string {
   if (lines.size === 0) return text;
   return text
     .split("\n")
-    .map((line, i) => (lines.has(i) ? line.replace(/^([ \t]*)(\p{Ll})/u, (_m, sp: string, ch: string) => sp + ch.toLocaleUpperCase("ru")) : line))
+    .map((line, i) =>
+      lines.has(i)
+        ? line.replace(/^([ \t]*)(\p{Ll})/u, (_m, sp: string, ch: string) => sp + ch.toLocaleUpperCase("ru"))
+        : line,
+    )
     .join("\n");
 }
 
@@ -91,7 +103,11 @@ export function withoutAddressWords(text: string): string {
     if (stripped !== line) startHits.add(i);
     return stripped;
   });
-  const inline = lines.join("\n").replace(ADDRESS_INLINE, "").replace(/[ \t]+([,.!?…])/gu, "$1").replace(/,([.!?])/gu, "$1");
+  const inline = lines
+    .join("\n")
+    .replace(ADDRESS_INLINE, "")
+    .replace(/[ \t]+([,.!?…])/gu, "$1")
+    .replace(/,([.!?])/gu, "$1");
   return capitalizeLineStarts(inline, startHits).trim();
 }
 
@@ -110,7 +126,7 @@ const STOCK_TAIL = new RegExp(
       String.raw`агар\s+савол(?:е|хо|ҳо|и\s+дигар)?\s+(?:бошад|дошта\s+бошед|дошта\s+бошен|пайдо\s+шавад|шавад),?\s+(?:нависед|нависен|пурсед|пурсен)`,
     ].join("|") +
     String.raw`)[.!?…]*[ \t]*$`,
-  "iu"
+  "iu",
 );
 
 function withoutOneStockTail(text: string): string {

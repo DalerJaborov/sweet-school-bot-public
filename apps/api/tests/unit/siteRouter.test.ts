@@ -456,14 +456,14 @@ describe("/api/site/offer-fact — факты очного курса для с�
     return { status: res.status, text: await res.text(), cookie: res.headers.get("set-cookie") };
   };
 
-  it("умолчания: 700, 13:40–16:30, «21 десерт», адрес Рудаки 156, Воданасос, дом Додо Пицца — без куки", async () => {
+  it("умолчания: 700, 13:40–16:30, «21 десерт», адрес Рудаки 177, ориентир Воданасос — без куки", async () => {
     expect(await fact("key=offline.price")).toEqual({ status: 200, text: "700", cookie: null });
     expect((await fact("key=offline.hours")).text).toBe("13:40–16:30");
     expect((await fact("key=offline.dessertsRu")).text).toBe("21 десерт");
-    expect((await fact("key=contact.address&lang=ru")).text).toBe("Душанбе, Рудаки 156, Воданасос, дом Додо Пицца");
-    expect((await fact("key=contact.address&lang=tg")).text).toBe("Душанбе, Рудаки 156, Воданасос, доми Додо Пицца");
-    expect((await fact("key=contact.street&lang=ru")).text).toBe("Рудаки 156, Воданасос, дом Додо Пицца");
-    expect((await fact("key=contact.mapsQuery&lang=tg")).text).toBe(encodeURIComponent("Душанбе, Рудаки 156, Воданасос, дом Додо Пицца"));
+    expect((await fact("key=contact.address&lang=ru")).text).toBe("Душанбе, Рудаки 177, ориентир Воданасос");
+    expect((await fact("key=contact.address&lang=tg")).text).toBe("Душанбе, Рудаки 177, назди Воданасос");
+    expect((await fact("key=contact.street&lang=ru")).text).toBe("Рудаки 177, ориентир Воданасос");
+    expect((await fact("key=contact.mapsQuery&lang=tg")).text).toBe(encodeURIComponent("Душанбе, Рудаки 177, ориентир Воданасос"));
   });
 
   it("адрес из панели экранируется под место вставки; неизвестный ключ — 400", async () => {
