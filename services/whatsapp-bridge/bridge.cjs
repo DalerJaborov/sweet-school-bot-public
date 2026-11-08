@@ -272,7 +272,9 @@ class Bridge {
   trace(reason, message) {
     try {
       const chat = String((message.fromMe ? message.to : message.from) || '');
-      console.log(`[wa-trace] ${reason} type=${message.type} fromMe=${!!message.fromMe} chat=*${chat.replace(/@.*$/, '').slice(-4)} ready=${this.contactsReady} state=${this.state} enabled=${this.accountId ? !!this.account().enabled : 'n/a'}`);
+      const ageS = Math.round((this.now() - Number(message.timestamp) * 1000) / 1000);
+      const sinceLiveS = Math.round((Number(message.timestamp) * 1000 - this.liveSince) / 1000);
+      console.log(`[wa-trace] ${reason} type=${message.type} fromMe=${!!message.fromMe} chat=*${chat.replace(/@.*$/, '').slice(-4)}${chat.endsWith('@lid') ? '(lid)' : ''} ageS=${ageS} afterLiveS=${sinceLiveS} status=${!!message.isStatus} broadcast=${!!message.broadcast} ready=${this.contactsReady} state=${this.state} enabled=${this.accountId ? !!this.account().enabled : 'n/a'}`);
     } catch { /* диагностика не должна ломать приём */ }
   }
 
