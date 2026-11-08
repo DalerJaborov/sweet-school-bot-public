@@ -8,6 +8,7 @@ import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact } from "@prisma/client";
 import { isBotFrozen } from "../messaging/automation.js";
 import { parseRecoveryCode, findContactByRecoveryCode } from "./linkCode.js";
+import { handleSwitchRequest, parseSwitchRequest } from "./channelSwitch.js";
 
 /**
  * САМОВОССТАНОВЛЕНИЕ ДОСТУПА — «не открывается курс, дайте ссылку заново».
@@ -97,6 +98,7 @@ export function looksLikeAccessRequest(text: string): boolean {
   if (!trimmed || trimmed.length > 400) return false;
   // Код покупательницы из готового сообщения страницы курса — сам по себе просьба.
   return parseRecoveryCode(trimmed) !== null || DEVICE_LIMIT_HINT.test(trimmed) || NEW_DEVICE.test(trimmed) ||
+    parseSwitchRequest(trimmed) !== null ||
     (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed));
 }
 
@@ -150,6 +152,15 @@ export async function maybeRestoreAccess(
   // владельцем. Иначе покупка появилась непонятно как, и это повод посмотреть
   // глазами, а не выдавать ссылку.
   const paidProof = await hasPaymentProof(contact.id);
+
+  // Переключение способа входа (Telegram <-> сайт): одна действующая ссылка на
+  // человека, channelSwitch.ts. «Уже так» — идём обычным путём ниже.
+  const switchTarget = waiting ? null : parseSwitchRequest(text);
+  if (switchTarget && paidProof) {
+    if (await isBotFrozen()) return { handled: false };
+    const switched = await handleSwitchRequest(contact, switchTarget, language);
+    if (switched !== "already") return { handled: true, outcome: switched === "switched" ? "reissued" : "escalated" };
+  }
 
   // Смена телефона — отдельный путь с доказательством (phoneChange.ts): простая
   // ссылка устройства не снимает, перенос делает только бот и только при
