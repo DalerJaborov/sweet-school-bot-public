@@ -329,6 +329,7 @@ class Bridge {
     if (typeof operationId !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(operationId)
       || !directId(chatId) || typeof replyToId !== 'string' || !['reply', 'verified_receipt_access'].includes(purpose)
       || (typeof text !== 'string' && typeof mediaUrl !== 'string') || (text && text.length > 12000)) throw failure('Invalid send request', 400);
+    if (mediaUrl && mediaType === 'audio' && text) throw failure('A voice note cannot carry text; send the text separately', 400);
     const accountId = this.accountId;
     const account = this.account();
     const payloadHash = digest({ chatId, replyToId, purpose, text, mediaUrl, mediaType });

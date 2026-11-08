@@ -166,6 +166,11 @@ export const SETTING_KEYS = [
   // Номер для WhatsApp в международном формате — с него же уходит напоминание
   // об очном курсе, но здесь он нужен ученице, чтобы написать живому человеку.
   "schoolWhatsappPhone",
+  // Озвучка голосом Ширин (ai/voiceClone.ts): рубильник, потолок трат в месяц (USD)
+  // и цена за 1000 знаков (USD; цену прислал владелец, на официальной странице не проверена).
+  "voiceCloneEnabled",
+  "voiceMonthlyCapUsd",
+  "voicePricePer1kUsd",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];

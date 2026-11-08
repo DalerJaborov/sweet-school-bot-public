@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../src/db.js", () => ({
   getSetting: vi.fn(async () => null),
+  setSetting: vi.fn(async () => {}),
   logError: vi.fn(),
   logInfo: vi.fn(),
   logWarn: vi.fn(),
@@ -81,5 +82,38 @@ describe("synthesizeSpeech — озвучка голосом Ширин", () => 
     fetchMock.mockResolvedValue({ ok: false, status: 401, text: async () => "secret echo" });
     const { synthesizeSpeech } = await import("../../src/ai/voiceClone.js");
     await expect(synthesizeSpeech("Привет")).rejects.toMatchObject({ status: 502, message: "ElevenLabs ответил 401" });
+  });
+});
+
+describe("кеш и потолок трат озвучки", () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.ELEVENLABS_API_KEY = "test-key-not-real";
+    process.env.ELEVENLABS_VOICE_ID = "voice-123";
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => {
+    delete process.env.ELEVENLABS_API_KEY;
+    delete process.env.ELEVENLABS_VOICE_ID;
+    vi.unstubAllGlobals();
+  });
+
+  it("ключ кеша одинаков для того же текста независимо от пробелов и регистра", async () => {
+    const { voiceCacheKey } = await import("../../src/ai/voiceClone.js");
+    expect(voiceCacheKey("Здравствуйте,  это Ширин!")).toBe(voiceCacheKey(" здравствуйте, это ширин! "));
+    expect(voiceCacheKey("Привет")).not.toBe(voiceCacheKey("Пока"));
+  });
+
+  it("потолок: при превышении отказ 429 и в ElevenLabs не ходим", async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    vi.mocked(getSetting).mockImplementation(async (key: string) =>
+      key === "voiceCloneEnabled" ? "true" : key === "voiceSpend" ? `${month}|249990` : key === "voiceMonthlyCapUsd" ? "20" : null
+    );
+    vi.doMock("../../src/systemAlerts.js", () => ({ notifyOwnerDirect: vi.fn(async () => {}) }));
+    const { synthesizeToFile } = await import("../../src/ai/voiceClone.js");
+    await expect(synthesizeToFile("Короткая тёплая реплика для проверки потолка")).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

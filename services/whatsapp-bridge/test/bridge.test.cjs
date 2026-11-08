@@ -187,7 +187,8 @@ test('audio goes out as a voice note (ptt) with a recording state and no caption
   let typing = 0, recording = 0;
   client.getChatById = async () => ({ sendStateTyping: async () => { typing++; }, sendStateRecording: async () => { recording++; }, clearState: async () => {} });
   await prepare(bridge);
-  await bridge.send(request({ operationId: 'op-voice', text: 'подпись', mediaUrl: 'https://shirinsweets.online/media/a.ogg', mediaType: 'audio' }));
+  await assert.rejects(bridge.send(request({ operationId: 'op-voice-text', text: 'подпись', mediaUrl: 'https://shirinsweets.online/media/a.ogg', mediaType: 'audio' })), /voice note cannot carry text/);
+  await bridge.send(request({ operationId: 'op-voice', text: undefined, mediaUrl: 'https://shirinsweets.online/media/a.ogg', mediaType: 'audio' }));
   assert.equal(recording, 1); assert.equal(typing, 0);
   assert.equal(client.sent[0].options.sendAudioAsVoice, true);
   assert.equal(client.sent[0].options.caption, undefined);
