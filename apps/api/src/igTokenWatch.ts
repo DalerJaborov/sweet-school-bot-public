@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { getSetting, logInfo, logWarn, prisma, setSetting } from "./db.js";
 import { igGet } from "./ai/igGet.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "./telegram.js";
+import { techChatIds, sendTelegramMessage } from "./telegram.js";
 
 /**
  * АВТОПРОДЛЕНИЕ МАРКЕРА INSTAGRAM.
@@ -104,7 +104,7 @@ async function alertOwner(text: string, now: number): Promise<void> {
   const last = num(await getSetting(K.alertAt));
   if (last !== null && now - last < ALERT_COOLDOWN_MS) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await ownerAlertChatIds())[0];
+  const chatId = (await techChatIds())[0];
   if (!botToken || !chatId) return;
   await setSetting(K.alertAt, String(now));
   await sendTelegramMessage(botToken, chatId, text);

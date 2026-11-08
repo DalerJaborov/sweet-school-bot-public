@@ -112,7 +112,14 @@ describe("Статичные страницы сайта", () => {
     expect(sm).not.toContain("<lastmod>");
     const robots = files.get("public/robots.txt")!;
     expect(robots).toContain("Disallow: /api/");
-    expect(robots).not.toContain("Disallow: /panel");
+    // Адрес панели нигде на сайте не светим: ни в robots, ни ссылкой в подвале.
+    expect(robots).not.toContain("/panel");
+    expect(robots).not.toContain("/admin");
+    for (const [name, html] of files) {
+      if (typeof html === "string" && /\.html$/.test(name)) {
+        expect(html, name).not.toMatch(/href="\/(panel|admin)/);
+      }
+    }
     expect(robots).not.toContain("Disallow: /course");
     expect(robots).toContain("Sitemap: https://shirinsweets.online/sitemap.xml");
   });

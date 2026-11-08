@@ -3,7 +3,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink } from "./telegram.js";
+import { techChatIds, sendTelegramMessage, createOneTimeInviteLink } from "./telegram.js";
 import { rememberInviteLink } from "./groupAccess.js";
 import { chatIdFor, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryMode, deliveryModeFor, issueCourseLink, type DeliveryMode } from "./course/delivery.js";
@@ -125,7 +125,7 @@ async function sweep(): Promise<void> {
   if (waiting.length === 0) return;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const sisterChat = (await ownerAlertChatIds())[0];
+  const sisterChat = (await techChatIds())[0];
 
   for (const contact of waiting) {
     if ((await getSetting("botFrozen")) === "true") return;

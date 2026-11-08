@@ -221,7 +221,7 @@ function renderFooter(site, lang, ctx) {
         <li><a class="social" href="${esc(site.contacts.instagram)}" rel="noopener" aria-label="Instagram">${ICONS.instagram}</a></li>
         <li><a class="social" href="${esc(site.contacts.tiktok)}" rel="noopener" aria-label="TikTok">${ICONS.tiktok}</a></li>
       </ul>
-      <p style="margin-top:12px">© ${year} ${esc(ui.footerRights)} · <a href="/panel" rel="nofollow">${esc(ui.footerPanel)}</a></p>
+      <p style="margin-top:12px">© ${year} ${esc(ui.footerRights)}</p>
     </div>
     <ul class="footer-links">${links}<li><a href="/course">${esc(ui.ctaLessons)}</a></li></ul>
   </div>
@@ -939,7 +939,6 @@ function renderRobots(site) {
   return `User-agent: *
 Allow: /
 Disallow: /api/
-Disallow: /admin/
 # Private application HTML uses noindex; allow crawling to read that rule.
 Sitemap: ${site.origin}/sitemap.xml
 `;

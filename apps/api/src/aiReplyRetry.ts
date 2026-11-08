@@ -169,14 +169,9 @@ async function runQueue(): Promise<void> {
 async function giveUp(contactId: string, text: string, early = false): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
-  const recipients = [
-    ...new Set(
-      [
-        (await getSetting("telegramOwnerChatId"))?.trim(),
-        (await getSetting("telegramReportChatId"))?.trim(),
-      ].filter((id): id is string => Boolean(id))
-    ),
-  ];
+  // Техническое: только владельцу (telegramTechChatId), не сестре.
+  const { techChatIds } = await import("./telegram.js");
+  const recipients = await techChatIds();
   if (recipients.length === 0) return;
 
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });

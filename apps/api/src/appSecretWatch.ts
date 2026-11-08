@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from "./db.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "./telegram.js";
+import { techChatIds, sendTelegramMessage } from "./telegram.js";
 
 /**
  * СТОРОЖ «СЕКРЕТ ПРИЛОЖЕНИЯ META».
@@ -33,7 +33,7 @@ export async function checkAppSecret(now = Date.now()): Promise<SecretCheck> {
   if (Number.isFinite(last) && last > 0 && now - last < ALERT_COOLDOWN_MS) return "cooldown";
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatIds = await ownerAlertChatIds();
+  const chatIds = await techChatIds();
   if (!botToken || chatIds.length === 0) return "no-recipient";
 
   await setSetting(ALERT_KEY, String(now));

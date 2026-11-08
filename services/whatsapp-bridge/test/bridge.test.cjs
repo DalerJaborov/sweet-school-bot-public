@@ -160,3 +160,24 @@ test('changing connected account isolates history and preferences', async t => {
   assert.equal(bridge.status().enabled, false); assert.equal(bridge.events().events.length, 0);
   await assert.rejects(bridge.send(request()), /incoming/);
 });
+
+test('pacing: typing state, random gap between sends and caps that fail before dispatch', async t => {
+  const sleeps = [];
+  const { bridge, client } = await fixture(t, { pacing: { perChatMax: 2, hourMax: 3, dayMax: 4 }, sleep: async ms => { sleeps.push(ms); }, random: () => 0.5 });
+  let typing = 0, cleared = 0;
+  client.getChatById = async () => ({ sendStateTyping: async () => { typing++; }, clearState: async () => { cleared++; } });
+  await prepare(bridge);
+  await bridge.send(request({ operationId: 'op-a' }));
+  assert.equal(client.sent.length, 1); assert.equal(typing, 1); assert.equal(cleared, 1);
+  assert.ok(sleeps.some(ms => ms >= 1200 && ms <= 9600), 'a typing pause of 1.2-9.6 s happened');
+  await bridge.send(request({ operationId: 'op-b' }));
+  await assert.rejects(bridge.send(request({ operationId: 'op-c' })), error => error.status === 429 && /Chat send limit/.test(error.message));
+  assert.equal(client.sent.length, 2);
+  assert.equal(bridge.account().operations['op-c'], undefined, 'a capped send leaves no uncertain operation behind');
+});
+test('pacing: typing failures never block the reply, and pacing is off when not configured', async t => {
+  const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0 });
+  client.getChatById = async () => { throw new Error('no chat'); };
+  await prepare(bridge); await bridge.send(request());
+  assert.equal(client.sent.length, 1);
+});

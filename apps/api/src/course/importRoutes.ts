@@ -9,7 +9,7 @@ import { storageConfig, putObject, putObjectStream } from "../storage/s3.js";
 import { ffmpegAvailable, ffprobeAvailable, probeMedia } from "../storage/videoPipeline.js";
 import { createBackgroundJob } from "../services/importService.js";
 import { courseByCode } from "../services/courseCatalog.js";
-import { diskState } from "../diskWatch.js";
+import { diskState } from "../diskInfo.js";
 import {
   detectParseMode,
   parseTelegramExport,

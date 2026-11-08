@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => undefined) }));
+  techChatIds: vi.fn(async () => ["owner-1"]), summaryChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => undefined) }));
 
 import { buildReport, learningSummary } from "../../src/dailyReport.js";
 

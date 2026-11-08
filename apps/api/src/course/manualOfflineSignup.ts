@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { sendTelegramMessage } from "../telegram.js";
+import { sendTelegramMessage, trustedChatIds } from "../telegram.js";
 import { extractName, extractPhone, registerOfflineSignup } from "../ai/offlineSignup.js";
 
 /**
@@ -44,10 +44,7 @@ export async function handleWhatsappSignupCommand(message: TgMessage): Promise<b
   if (!command) return false;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const allowed = [
-    (await getSetting("telegramOwnerChatId"))?.trim(),
-    (await getSetting("telegramReportChatId"))?.trim(),
-  ].filter((v): v is string => Boolean(v));
+  const allowed = await trustedChatIds();
   if (!botToken || allowed.length === 0) return false;
 
   const who = [message.chat?.id, message.from?.id].filter((v) => v != null).map(String);
