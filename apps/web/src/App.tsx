@@ -13,7 +13,7 @@ import { TodayPage } from "./pages/TodayPage";
 import type { CatalogView } from "./pages/CatalogPage";
 import type { TasksView } from "./pages/TasksPage";
 import { BOTTOM_NAV, MORE_SECTIONS, bottomNavFor, isAllowed, navOwner, type Tab } from "./panel/nav";
-import { useSimpleMode } from "./panel/prefs";
+import { useShowEscalations, useSimpleMode } from "./panel/prefs";
 import { useAttention } from "./panel/useAttention";
 import { lazyPage } from "./panel/lazy";
 
@@ -89,6 +89,7 @@ export function App() {
   const [authed, setAuthed] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const simple = useSimpleMode();
+  const showEscalations = useShowEscalations();
   /** Проверка OCR-рецептов (§13): null — список уроков на проверку, id — карточка. */
   const [reviewLessonId, setReviewLessonId] = useState<string | null>(null);
   /** Открытая карточка ученицы — поверх вкладки «Клиенты» (StudentPage). */
@@ -215,7 +216,7 @@ export function App() {
 
   const data = attention.data;
   const taskBadge = (data ? data.receipts + data.questions : 0) + waAttention;
-  const clientBadge = data ? data.waiting.length : 0;
+  const clientBadge = data && showEscalations ? data.waiting.length : 0;
   const badgeOf = (id: Tab) => (id === "receipts" ? taskBadge : id === "clients" ? clientBadge : 0);
   const badgeLabel = (id: Tab, n: number) => (id === "receipts" ? `${n} дел ждут` : `${n} ждут ответа`);
   const owner = navOwner(tab);

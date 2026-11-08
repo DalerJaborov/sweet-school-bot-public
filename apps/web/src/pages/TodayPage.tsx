@@ -4,6 +4,7 @@ import { Icons } from "../components/Brand";
 import { EmptyState, OfflineState } from "../components/EmptyState";
 import { Skeleton } from "../components/Skeleton";
 import { money, timeAgo } from "../format";
+import { useShowEscalations } from "../panel/prefs";
 import { activeCards, type Attention, type TodayCardId, type WaitingClient } from "../panel/useAttention";
 
 /**
@@ -65,7 +66,8 @@ function Cards(props: {
   onOpenStudent: (id: string) => void;
 }) {
   const { data, simple, onGo, onOpenStudent } = props;
-  const ids = activeCards(data, simple);
+  const showWaiting = useShowEscalations();
+  const ids = activeCards(data, simple, showWaiting);
 
   if (ids.length === 0) {
     return (
@@ -109,7 +111,7 @@ function renderCard(
       );
     }
     case "waiting": {
-      return <WaitingCard waiting={a.waiting} aiOff={a.aiOff} />;
+      return <WaitingCard waiting={a.waiting} />;
     }
     case "questions":
       return (
@@ -209,8 +211,8 @@ function TodayCard(props: {
 /** Сколько ждущих показываем сразу; остальные появятся, как только эти получат ответ. */
 const WAITING_SHOWN = 3;
 
-function WaitingCard(props: { waiting: WaitingClient[]; aiOff: boolean }) {
-  const { waiting, aiOff } = props;
+function WaitingCard(props: { waiting: WaitingClient[] }) {
+  const { waiting } = props;
   const [open, setOpen] = useState<WaitingClient | null>(null);
   const shown = waiting.slice(0, WAITING_SHOWN);
   const hidden = waiting.length - shown.length;
@@ -221,13 +223,13 @@ function WaitingCard(props: { waiting: WaitingClient[]; aiOff: boolean }) {
         <div className="today-count">{waiting.length}</div>
       </div>
       <h3 className="today-title">Клиенты ждут ответа</h3>
-      {aiOff && <p className="today-sub">Помощник сейчас выключен — всем, кто пишет, отвечаете вы.</p>}
       <ul className="today-people">
         {shown.map((c) => (
           <li key={c.contactId} className="today-person">
             <p className="today-sub">
               <b>{c.name}</b> · {c.channelLabel} · {timeAgo(c.at)}
-              <br />«{truncate(c.lastText, 110)}»
+              <br />
+              {c.reason}
             </p>
             {c.replyUrl ? (
               <a
@@ -256,11 +258,6 @@ function WaitingCard(props: { waiting: WaitingClient[]; aiOff: boolean }) {
       <ConversationSheet contactId={open?.contactId ?? null} name={open?.name ?? ""} onClose={() => setOpen(null)} />
     </article>
   );
-}
-
-function truncate(text: string, max: number): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
 function greeting(): string {

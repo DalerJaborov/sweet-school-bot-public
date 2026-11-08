@@ -85,6 +85,10 @@ model Contact {
   /// ответила ЖИВАЯ хозяйка из приложения Instagram (эхо-событие без нашего mid).
   /// null — бот отвечает как обычно.
   humanTakenOverAt     DateTime?
+  /// Клиент сам попросил позвать человека (ai.ts callOwnerToChat). Единственный
+  /// надёжный след такой просьбы: humanSilencedUntil ставится и после ответа Ширин
+  /// из приложения, и по нему нельзя отличить просьбу от обычной тишины.
+  humanRequestedAt     DateTime?
   humanTakeoverMid     String?
   whatsappSavedContact Boolean          @default(false)
   humanSilencedUntil   DateTime?
