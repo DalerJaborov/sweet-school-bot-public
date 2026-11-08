@@ -23,7 +23,10 @@ describe("resolveTakeover (с базой)", () => {
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(30) });
     const d = await resolveTakeover(contact, { text: "Алло?", at: ago(0) }, now);
     expect(d).toMatchObject({ action: "answer", why: "cold" });
-    expect(db.model("contact").updateMany).toHaveBeenCalledWith({ where: { id: "c1", humanTakenOverAt: contact.humanTakenOverAt }, data: { humanTakenOverAt: null, humanTakeoverMid: null } });
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith({
+      where: { id: "c1", humanTakenOverAt: contact.humanTakenOverAt },
+      data: { humanTakenOverAt: null, humanTakeoverMid: null },
+    });
   });
   it("сутки без реплик: перехват снят совсем", async () => {
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(25 * 60) });
@@ -37,13 +40,20 @@ describe("resolveTakeover (с базой)", () => {
     expect(db.model("contact").updateMany).not.toHaveBeenCalled();
   });
   it("рубильник выключен: молчим без срока", async () => {
-    db.model("setting").findUnique.mockImplementation(async (a: { where: { key: string } }) => (a.where.key === "smartTakeoverEnabled" ? { value: "false" } : null));
+    db.model("setting").findUnique.mockImplementation(async (a: { where: { key: string } }) =>
+      a.where.key === "smartTakeoverEnabled" ? { value: "false" } : null,
+    );
     db.model("message").findFirst.mockResolvedValue({ createdAt: ago(900) });
-    expect(await resolveTakeover(contact, { text: "Привет", at: ago(0) }, now)).toEqual({ action: "hold", until: null });
+    expect(await resolveTakeover(contact, { text: "Привет", at: ago(0) }, now)).toEqual({
+      action: "hold",
+      until: null,
+    });
   });
   it("отложенный ответ ставится в очередь на нужное время, дубль не создаётся", async () => {
     await scheduleHeldReply("c1", "Привет", ago(-5), ago(1));
-    expect(db.model("pendingAiReply").create).toHaveBeenCalledWith({ data: { contactId: "c1", text: "Привет", snapshotAt: ago(1), nextAttemptAt: ago(-5) } });
+    expect(db.model("pendingAiReply").create).toHaveBeenCalledWith({
+      data: { contactId: "c1", text: "Привет", snapshotAt: ago(1), nextAttemptAt: ago(-5) },
+    });
     db.model("pendingAiReply").findFirst.mockResolvedValue({ id: "x" });
     db.model("pendingAiReply").create.mockClear();
     await scheduleHeldReply("c1", "Привет", ago(-5), ago(1));
@@ -51,7 +61,9 @@ describe("resolveTakeover (с базой)", () => {
   });
   it("тик снимает старые перехваты и не трогает свежие", async () => {
     db.model("contact").findMany.mockResolvedValue([{ id: "old" }, { id: "fresh" }]);
-    db.model("message").findFirst.mockImplementation(async (a: { where: { contactId: string } }) => (a.where.contactId === "fresh" ? { id: 1 } : null));
+    db.model("message").findFirst.mockImplementation(async (a: { where: { contactId: string } }) =>
+      a.where.contactId === "fresh" ? { id: 1 } : null,
+    );
     expect(await releaseExpiredTakeovers(now)).toBe(1);
   });
 });

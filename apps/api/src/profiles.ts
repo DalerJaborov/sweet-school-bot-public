@@ -70,17 +70,36 @@ async function fetchProfile(igUserId: string, channel: string): Promise<Profile 
  * ответить. Для Instagram без ника, при непустом списке, профиль запрашивается сразу (с таймаутом);
  * совпало со списком — контакт помечается личным. Возвращает true, если пометили.
  */
+const profileTried = new Map<string, number>();
+const PROFILE_RETRY_MS = 30 * 60_000;
+
 export async function markListedPersonalNow(contact: {
-  id: string; igUserId: string; channel: string; username: string | null; personal: boolean;
+  id: string;
+  igUserId: string;
+  channel: string;
+  username: string | null;
+  personal: boolean;
+  profileAt?: Date | null;
 }): Promise<boolean> {
   if (contact.personal || contact.username || contact.channel !== "INSTAGRAM") return false;
+  // Профиль уже запрашивали (тик или прошлое сообщение) — на каждое сообщение в Graph не ходим.
+  if (contact.profileAt) return false;
+  const lastTry = profileTried.get(contact.id);
+  if (lastTry && Date.now() - lastTry < PROFILE_RETRY_MS) return false;
   try {
     if ((await readPersonalList()).length === 0) return false;
+    profileTried.set(contact.id, Date.now());
+    if (profileTried.size > 5000) profileTried.clear();
     const profile = await fetchProfile(contact.igUserId, contact.channel);
     if (!profile?.username || !(await isListedPersonal(profile.username))) return false;
     await prisma.contact.update({
       where: { id: contact.id },
-      data: { personal: true, personalReason: LIST_REASON, username: profile.username, name: profile.name ?? undefined },
+      data: {
+        personal: true,
+        personalReason: LIST_REASON,
+        username: profile.username,
+        name: profile.name ?? undefined,
+      },
     });
     return true;
   } catch (err) {
@@ -98,7 +117,10 @@ export async function refreshProfiles(): Promise<void> {
 async function refreshProfilesOnce(): Promise<void> {
   try {
     const stale = await prisma.contact.findMany({
-      where: { channel: { in: ["INSTAGRAM", "MESSENGER"] }, OR: [{ profileAt: null }, { profileAt: { lt: new Date(Date.now() - MAX_AGE_MS) } }] },
+      where: {
+        channel: { in: ["INSTAGRAM", "MESSENGER"] },
+        OR: [{ profileAt: null }, { profileAt: { lt: new Date(Date.now() - MAX_AGE_MS) } }],
+      },
       orderBy: { updatedAt: "desc" },
       take: BATCH,
     });

@@ -10,7 +10,13 @@ import { prisma, getSetting, logError } from "./db.js";
 import { sendText } from "./instagram.js";
 import { upload, handleUpload } from "./upload.js";
 import { decideReceipt } from "./receiptDecision.js";
-import { isOfferKey, isSettingKey, readSettingsMasked, writeSetting, writeSettings } from "./services/settingsService.js";
+import {
+  isOfferKey,
+  isSettingKey,
+  readSettingsMasked,
+  writeSetting,
+  writeSettings,
+} from "./services/settingsService.js";
 import { styleImportJob, archiveTestimonialsImportJob } from "./services/importService.js";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
 import { courseAdminRouter } from "./course/adminRoutes.js";
@@ -642,7 +648,10 @@ function paginate<T>(rows: T[], take: number): { rows: T[]; hasMore: boolean } {
 adminRouter.get("/admin/reply-gate", async (req, res) => {
   const take = takeParam(req.query.take, 50, 200);
   const skip = skipParam(req.query.skip);
-  const action = typeof req.query.action === "string" && ["silent", "clarify", "attention", "reply"].includes(req.query.action) ? req.query.action : undefined;
+  const action =
+    typeof req.query.action === "string" && ["silent", "clarify", "attention", "reply"].includes(req.query.action)
+      ? req.query.action
+      : undefined;
   const rows = await prisma.replyGate.findMany({
     where: action ? { action } : undefined,
     orderBy: { createdAt: "desc" },
@@ -711,11 +720,9 @@ adminRouter.post("/admin/receipts/:id/decide", async (req, res) => {
     })
     .safeParse(req.body);
   if (!parsed.success) {
-    res
-      .status(400)
-      .json({
-        error: "Ожидается { action: 'approve'|'reject', course?: 'COURSE50'|'COURSE70'|'BOTH', reason?: string }",
-      });
+    res.status(400).json({
+      error: "Ожидается { action: 'approve'|'reject', course?: 'COURSE50'|'COURSE70'|'BOTH', reason?: string }",
+    });
     return;
   }
   const result = await decideReceipt(req.params.id, parsed.data.action, parsed.data.course, {

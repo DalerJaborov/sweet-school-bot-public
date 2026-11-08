@@ -22,7 +22,11 @@ function normalizePhone(raw: string): string {
 
 /** Ник Instagram или номер: приводит к ключу сравнения либо null, если строка пустая. */
 export function normalizeEntry(raw: string): string | null {
-  const t = raw.trim().replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/[/?#].*$/, "").trim();
+  const t = raw
+    .trim()
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, "")
+    .replace(/[/?#].*$/, "")
+    .trim();
   if (!t) return null;
   if (/^[+\d][\d\s()-]{6,}$/.test(t)) return normalizePhone(t);
   const nick = t.replace(/^@/, "").toLowerCase();
@@ -30,7 +34,14 @@ export function normalizeEntry(raw: string): string | null {
 }
 
 export function parseList(text: string): string[] {
-  return [...new Set(text.split(/[\n,;]+/).map(normalizeEntry).filter((x): x is string => !!x))];
+  return [
+    ...new Set(
+      text
+        .split(/[\n,;]+/)
+        .map(normalizeEntry)
+        .filter((x): x is string => !!x),
+    ),
+  ];
 }
 
 export async function readPersonalList(): Promise<string[]> {
@@ -45,7 +56,10 @@ export async function isListedPersonal(nameOrNick: string | null | undefined): P
 
 /** Добавить список; уже существующие контакты помечаются сразу. Возвращает сколько записей добавлено и контактов помечено. */
 export async function importPersonalList(text: string): Promise<{ added: number; marked: number; invalid: number }> {
-  const parts = text.split(/[\n,;]+/).map((p) => p.trim()).filter(Boolean);
+  const parts = text
+    .split(/[\n,;]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
   const entries = parseList(text);
   const known = new Set(await readPersonalList());
   const fresh = entries.filter((e) => !known.has(e));
@@ -78,7 +92,12 @@ export async function removePersonalEntry(raw: string): Promise<{ removed: boole
   const isPhone = /^\d+$/.test(key);
   const res = await prisma.contact.updateMany({
     where: isPhone
-      ? { channel: "WHATSAPP", OR: [{ name: `+${key}` }, { igUserId: { endsWith: `:${key}@c.us` } }], personal: true, personalReason: LIST_REASON }
+      ? {
+          channel: "WHATSAPP",
+          OR: [{ name: `+${key}` }, { igUserId: { endsWith: `:${key}@c.us` } }],
+          personal: true,
+          personalReason: LIST_REASON,
+        }
       : { username: key, personal: true, personalReason: LIST_REASON },
     data: { personal: false, personalReason: null },
   });

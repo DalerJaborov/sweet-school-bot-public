@@ -13,7 +13,10 @@ vi.mock("../../src/ai.js", () => ({
 }));
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: vi.fn(async () => "mid") }));
 const findOwnMedia = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
-vi.mock("../../src/ownMedia.js", () => ({ findOwnMedia: (...a: unknown[]) => findOwnMedia(...a), viewableUrl: vi.fn() }));
+vi.mock("../../src/ownMedia.js", () => ({
+  findOwnMedia: (...a: unknown[]) => findOwnMedia(...a),
+  viewableUrl: vi.fn(),
+}));
 vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(async () => false),
@@ -28,7 +31,11 @@ vi.mock("../../src/debounce.js", () => ({ debounceMessage: vi.fn() }));
 import { retryPendingAiReplies } from "../../src/aiReplyRetry.js";
 import { resolveTakeover, releaseExpiredTakeovers } from "../../src/ai/ownerTakeover.js";
 import { normalizeEntry, importPersonalList, removePersonalEntry } from "../../src/ai/personalList.js";
-import { contactAutomationBlocked, takeoverOverrideActive, withTakeoverOverride } from "../../src/messaging/automation.js";
+import {
+  contactAutomationBlocked,
+  takeoverOverrideActive,
+  withTakeoverOverride,
+} from "../../src/messaging/automation.js";
 import { QUIET_STORY_PAYLOAD } from "../../src/ai/storyRelevance.js";
 import { deliberateSilenceSince, resetDeliberateSilence } from "../../src/ai/deliberateSilence.js";
 import { handleMessage } from "../../src/webhook.js";
@@ -47,7 +54,15 @@ beforeEach(() => {
 afterEach(restorePrisma);
 
 function pendingRow(contact: Record<string, unknown> = {}, text = "Сколько стоит курс?") {
-  return { id: "p1", contactId: "contact-1", text, snapshotAt: ago(3), attempts: 0, delayNoticeAt: null, contact: fakeContact(contact) };
+  return {
+    id: "p1",
+    contactId: "contact-1",
+    text,
+    snapshotAt: ago(3),
+    attempts: 0,
+    delayNoticeAt: null,
+    contact: fakeContact(contact),
+  };
 }
 
 describe("находка 4: тихий ответ на историю", () => {
@@ -106,7 +121,9 @@ describe("находка 8: повтор при safe_intent", () => {
     db.model("pendingAiReply").findMany.mockResolvedValue([
       pendingRow({ humanTakenOverAt: taken }, "курс не открывается, дайте ссылку заново"),
     ]);
-    db.model("message").findFirst.mockImplementation(async (a: { where: { byHuman?: boolean } }) => (a.where.byHuman ? { createdAt: ago(10) } : null));
+    db.model("message").findFirst.mockImplementation(async (a: { where: { byHuman?: boolean } }) =>
+      a.where.byHuman ? { createdAt: ago(10) } : null,
+    );
     db.model("purchase").count.mockResolvedValue(1);
     let overrideSeen = false;
     reply.mockImplementationOnce(async () => {
@@ -128,14 +145,24 @@ describe("находка 7: разовое разрешение не шире з
     });
   });
   it("«спасибо» при выключенных реакциях не даёт свободного ИИ-ответа под паузой", async () => {
-    db.model("setting").findUnique.mockImplementation(async (a: { where: { key: string } }) => (a.where.key === "reactionsEnabled" ? { value: "false" } : null));
+    db.model("setting").findUnique.mockImplementation(async (a: { where: { key: string } }) =>
+      a.where.key === "reactionsEnabled" ? { value: "false" } : null,
+    );
     db.model("message").findFirst.mockResolvedValue({ createdAt: new Date(now.getTime() - 2 * 60_000) });
-    const d = await resolveTakeover({ id: "c1", humanTakenOverAt: new Date(now.getTime() - 5 * 60_000) }, { text: "Рахмат", at: now }, now);
+    const d = await resolveTakeover(
+      { id: "c1", humanTakenOverAt: new Date(now.getTime() - 5 * 60_000) },
+      { text: "Рахмат", at: now },
+      now,
+    );
     expect(d).toEqual({ action: "hold", until: null });
   });
   it("«спасибо» при включённых реакциях по-прежнему безопасно", async () => {
     db.model("message").findFirst.mockResolvedValue({ createdAt: new Date(now.getTime() - 2 * 60_000) });
-    const d = await resolveTakeover({ id: "c1", humanTakenOverAt: new Date(now.getTime() - 5 * 60_000) }, { text: "Рахмат", at: now }, now);
+    const d = await resolveTakeover(
+      { id: "c1", humanTakenOverAt: new Date(now.getTime() - 5 * 60_000) },
+      { text: "Рахмат", at: now },
+      now,
+    );
     expect(d).toEqual({ action: "answer", why: "safe_intent" });
   });
 });
@@ -147,14 +174,18 @@ describe("находка 12: гонка снятия перехвата", () => 
     db.model("contact").updateMany.mockResolvedValue({ count: 0 });
     const d = await resolveTakeover({ id: "c1", humanTakenOverAt: taken }, { text: "Алло?", at: now }, now);
     expect(d).toEqual({ action: "hold", until: null });
-    expect(db.model("contact").updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "c1", humanTakenOverAt: taken } }));
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "c1", humanTakenOverAt: taken } }),
+    );
   });
   it("тик очистки тоже снимает только тот перехват, который проверил", async () => {
     const taken = new Date(now.getTime() - 30 * 3_600_000);
     db.model("contact").findMany.mockResolvedValue([{ id: "old", humanTakenOverAt: taken }]);
     db.model("contact").updateMany.mockResolvedValue({ count: 0 });
     expect(await releaseExpiredTakeovers(now)).toBe(0);
-    expect(db.model("contact").updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "old", humanTakenOverAt: taken } }));
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "old", humanTakenOverAt: taken } }),
+    );
   });
 });
 
@@ -174,9 +205,17 @@ describe("находка 5: список личных контактов", () =>
     db.model("contact").updateMany.mockResolvedValue({ count: 1 });
     const r = await removePersonalEntry("@Mama_Nick");
     expect(r).toEqual({ removed: true, unmarked: 1 });
-    expect(db.model("setting").upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { value: "992901234567" } }));
+    expect(db.model("setting").upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: { value: "992901234567" } }),
+    );
     expect(db.model("contact").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ username: "mama_nick", personal: true, personalReason: expect.stringContaining("Список") }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({
+          username: "mama_nick",
+          personal: true,
+          personalReason: expect.stringContaining("Список"),
+        }),
+      }),
     );
   });
 });

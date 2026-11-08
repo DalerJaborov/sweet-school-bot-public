@@ -473,14 +473,22 @@ export async function handleMessage(
       return null;
     });
     if (!own) return; // чужой ролик — молчим, даже если к нему что-то написали
-    // Ответ на НАШУ историю: отвечаем только про курсы (подпись истории или слова в самом ответе).
-    if (msg.reply_to?.story && !storyReplyWorthAnswer({ storyCaption: own.caption, replyText: text })) {
+    // Ответ на НАШУ историю: молчим только на эмодзи и короткие комплименты, остальное решает модель.
+    // Голосовое и другие вложения не теряем.
+    if (
+      msg.reply_to?.story &&
+      !storyReplyWorthAnswer({ storyCaption: own.caption, replyText: text, hasMedia: attachments.length > 0 })
+    ) {
       const quietContact = await upsertContact(senderId, null, channel);
       if (msg.mid && text) {
         // Метка нужна очереди повторов: тихий ответ на историю не должен стирать отложенный ответ на вопрос.
         await prisma.message
-          .create({ data: { contactId: quietContact.id, direction: "IN", mid: msg.mid, text, payload: QUIET_STORY_PAYLOAD } })
-          .catch((err) => { if ((err as { code?: string })?.code !== "P2002") logError("webhook:storyRecord", err); });
+          .create({
+            data: { contactId: quietContact.id, direction: "IN", mid: msg.mid, text, payload: QUIET_STORY_PAYLOAD },
+          })
+          .catch((err) => {
+            if ((err as { code?: string })?.code !== "P2002") logError("webhook:storyRecord", err);
+          });
       }
       // Молчим сознательно: сторож неотвеченных не должен поднимать тревогу.
       noteDeliberateSilence(quietContact.id, "ответ на историю не про курсы");
@@ -569,7 +577,10 @@ export async function handleMessage(
   if (textOrVoice && (await isFirstIncoming(contact.id)) && startsWithFamilyAddress(textOrVoice)) {
     await prisma.contact.update({
       where: { id: contact.id },
-      data: { personal: true, personalReason: `Первое сообщение начато обращением к родне: «${textOrVoice.slice(0, 100)}»` },
+      data: {
+        personal: true,
+        personalReason: `Первое сообщение начато обращением к родне: «${textOrVoice.slice(0, 100)}»`,
+      },
     });
     return;
   }
@@ -644,7 +655,7 @@ export async function handleMessage(
   // на случай, если она не успеет; безопасные запросы и «ушла» обслуживаются сразу.
   let safeOverride = false;
   if (isHumanSilenced(contact)) {
-    const gate = await gateHumanTakeover(contact, textOrVoice);
+    const gate = await gateHumanTakeover(contact, textOrVoice, attachments.length > 0);
     if (gate === "hold") return;
     safeOverride = gate === "safe";
     if (gate === "free") {
@@ -656,7 +667,9 @@ export async function handleMessage(
   // Разовое разрешение даёт только ответ ИИ (доступ купившей, реакция на «спасибо»):
   // воронка по ключевому слову под паузой хозяйки не запускается.
   return safeOverride
-    ? withTakeoverOverride(contact.id, () => replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint, true))
+    ? withTakeoverOverride(contact.id, () =>
+        replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint, true),
+      )
     : replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint);
 }
 
@@ -669,7 +682,14 @@ async function isFirstIncoming(contactId: string): Promise<boolean> {
   return (await prisma.message.count({ where: { contactId, direction: "IN" } })) <= 1;
 }
 
-async function gateHumanTakeover(contact: Contact, text: string | null): Promise<"hold" | "safe" | "free"> {
+/** Текст отложенного ответа на сообщение без текста (фото без подписи). */
+const MEDIA_ONLY_PLACEHOLDER = "[клиентка прислала фото без подписи]";
+
+async function gateHumanTakeover(
+  contact: Contact,
+  text: string | null,
+  hasMedia = false,
+): Promise<"hold" | "safe" | "free"> {
   // Пауза по таймеру (реакция хозяйки, просьба «позови человека») не из этой цепочки.
   if (!contact.humanTakenOverAt) return "hold";
   // Реакция хозяйки / «позови человека» (таймер) разовым разрешением не обходится.
@@ -682,7 +702,9 @@ async function gateHumanTakeover(contact: Contact, text: string | null): Promise
   const at = lastIn?.createdAt ?? new Date();
   const decision = await resolveTakeover(contact, { text, at });
   if (decision.action === "hold") {
-    if (decision.until && text) await scheduleHeldReply(contact.id, text, decision.until, at);
+    // Фото без подписи тоже откладываем (картинка спасена выше): иначе после паузы вопрос потеряется.
+    const heldText = text || (hasMedia ? MEDIA_ONLY_PLACEHOLDER : null);
+    if (decision.until && heldText) await scheduleHeldReply(contact.id, heldText, decision.until, at);
     return "hold";
   }
   return decision.why === "safe_intent" ? "safe" : "free";

@@ -8,6 +8,7 @@ import { aiReply } from "./ai.js";
 import { isBotFrozen, withTakeoverOverride } from "./messaging/automation.js";
 import { resolveTakeover } from "./ai/ownerTakeover.js";
 import { isPureThanks } from "./ai/reactions.js";
+import { deliberateSilenceSince } from "./ai/deliberateSilence.js";
 import { QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
 
 /**
@@ -97,7 +98,12 @@ async function runQueue(): Promise<void> {
   for (const row of due) {
     if (await isBotFrozen()) return;
     // WhatsApp retries belong to its durable inbox and require the original incoming turn.
-    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact)) {
+    if (
+      row.contact.channel === "WHATSAPP" ||
+      row.contact.personal ||
+      row.contact.spamBlockedAt ||
+      row.contact.whatsappSavedContact
+    ) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } });
       continue;
     }
@@ -145,7 +151,10 @@ async function runQueue(): Promise<void> {
     if (contactNow.humanTakenOverAt) {
       const verdict = await resolveTakeover(contactNow, { text: row.text, at: row.snapshotAt });
       if (verdict.action === "hold") {
-        if (verdict.until) await prisma.pendingAiReply.update({ where: { id: row.id }, data: { nextAttemptAt: verdict.until } }).catch(() => null);
+        if (verdict.until)
+          await prisma.pendingAiReply
+            .update({ where: { id: row.id }, data: { nextAttemptAt: verdict.until } })
+            .catch(() => null);
         else await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
         continue;
       }
@@ -153,6 +162,7 @@ async function runQueue(): Promise<void> {
       else contactNow = { ...contactNow, humanTakenOverAt: null, humanTakeoverMid: null };
     }
 
+    const attemptStartedAt = new Date();
     try {
       // Безопасный запрос под паузой хозяйки — то же разовое разрешение, что и в webhook.ts.
       if (safeIntentOnly) await withTakeoverOverride(contactNow.id, () => aiReply(contactNow, row.text, [], []));
@@ -160,7 +170,9 @@ async function runQueue(): Promise<void> {
     } catch (err) {
       logError("aiReplyRetry:attempt", err);
       if (!canRetryMetaFailure(err)) {
-        await notifyOwnerDirect(`Ответ для ${row.contactId} остановлен. Проверьте переписку перед повтором: ${err instanceof Error ? err.message : "неповторяемая ошибка"}`);
+        await notifyOwnerDirect(
+          `Ответ для ${row.contactId} остановлен. Проверьте переписку перед повтором: ${err instanceof Error ? err.message : "неповторяемая ошибка"}`,
+        );
         await prisma.pendingAiReply.delete({ where: { id: row.id } });
         continue;
       }
@@ -175,18 +187,33 @@ async function runQueue(): Promise<void> {
       continue;
     }
 
+    // Намеренное молчание (NO_REPLY, фильтр «не по делу», реакция вместо ответа) — это успех,
+    // а не провал: без «не получается подготовить ответ» и без ложной тревоги владельцу.
+    const silence =
+      deliberateSilenceSince(row.contactId, attemptStartedAt) ??
+      ((await prisma.replyGate.findFirst({ where: { contactId: row.contactId, action: { not: "reply" }, createdAt: { gte: attemptStartedAt } } }))
+        ? "шлюз «не по делу»"
+        : null);
+    if (silence) {
+      await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
+      continue;
+    }
+
     const attempts = row.attempts + 1;
     if (attempts >= 2 && !row.delayNoticeAt) {
       // Claim before sending: a timeout is ambiguous, so never resend this notice blindly.
       const claimed = await prisma.pendingAiReply.updateMany({
-        where: { id: row.id, delayNoticeAt: null }, data: { delayNoticeAt: new Date() },
+        where: { id: row.id, delayNoticeAt: null },
+        data: { delayNoticeAt: new Date() },
       });
       if (claimed.count) {
         const notice = DELAY_NOTICES[detectClientLanguage(row.text)];
         try {
           const mid = await sendToContact(row.contact, notice);
           await recordOutgoingMessage(row.contactId, notice, mid);
-        } catch (error) { logError("aiReplyRetry:notice", error); }
+        } catch (error) {
+          logError("aiReplyRetry:notice", error);
+        }
         await giveUp(row.contactId, row.text, true);
       }
     }
@@ -213,7 +240,9 @@ async function giveUp(contactId: string, text: string, early = false): Promise<v
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const who = contact?.username ? `@${contact.username}` : contact?.igUserId;
   const message =
-    (early ? "ИИ дважды не смог ответить. Вопрос сохранён, нужен человек.\n" : "ИИ не смог ответить за всё время повтора (~13 часов).\n") +
+    (early
+      ? "ИИ дважды не смог ответить. Вопрос сохранён, нужен человек.\n"
+      : "ИИ не смог ответить за всё время повтора (~13 часов).\n") +
     `Человек: ${who}\n` +
     `Последнее: «${text.slice(0, 200)}»\n` +
     `Ответьте, пожалуйста, вручную.`;

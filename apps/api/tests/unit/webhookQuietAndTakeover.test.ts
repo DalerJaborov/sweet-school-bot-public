@@ -21,7 +21,10 @@ vi.mock("../../src/ai/abuseFilter.js", () => ({ detectAbuse: () => null }));
 vi.mock("../../src/ai/styleLearning.js", () => ({ rememberOwnerReply: vi.fn(async () => undefined) }));
 vi.mock("../../src/ai/voiceToText.js", () => ({ voiceToText: vi.fn(async () => null) }));
 const findOwnMedia = vi.fn();
-vi.mock("../../src/ownMedia.js", () => ({ findOwnMedia: (...a: unknown[]) => findOwnMedia(...a), viewableUrl: vi.fn(() => null) }));
+vi.mock("../../src/ownMedia.js", () => ({
+  findOwnMedia: (...a: unknown[]) => findOwnMedia(...a),
+  viewableUrl: vi.fn(() => null),
+}));
 vi.mock("../../src/ai/media.js", () => ({ fetchAttachment: vi.fn(async () => null) }));
 vi.mock("../../src/upload.js", () => ({ saveOwnerMedia: vi.fn(() => null) }));
 
@@ -54,13 +57,17 @@ afterEach(() => {
 describe("чужие публикации и истории", () => {
   it("чужой рилс: молчим, воронка и ИИ не вызываются", async () => {
     findOwnMedia.mockResolvedValue(null);
-    await handleMessage(text("", { attachments: [{ type: "reel", payload: { url: "https://instagram.com/reel/AAA/" } }] }));
+    await handleMessage(
+      text("", { attachments: [{ type: "reel", payload: { url: "https://instagram.com/reel/AAA/" } }] }),
+    );
     expect(handleIncomingDm).not.toHaveBeenCalled();
     expect(debounceMessage).not.toHaveBeenCalled();
   });
   it("наш рилс с вопросом про цену: отвечаем", async () => {
     findOwnMedia.mockResolvedValue({ id: "1", permalink: "", caption: "Курс по десертам", mediaType: "VIDEO" });
-    await handleMessage(text("сколько стоит?", { attachments: [{ type: "reel", payload: { url: "https://instagram.com/reel/BBB/" } }] }));
+    await handleMessage(
+      text("сколько стоит?", { attachments: [{ type: "reel", payload: { url: "https://instagram.com/reel/BBB/" } }] }),
+    );
     expect(debounceMessage).toHaveBeenCalled();
   });
   it("ответ на нашу историю без слов про курсы: молчим, но переписка сохранена", async () => {
@@ -85,7 +92,9 @@ describe("родня по первому сообщению", () => {
   it("«Мама, ты дома?» первым сообщением: личный контакт, бот молчит", async () => {
     db.model("message").count.mockResolvedValue(1);
     await handleMessage(text("Мама, ты дома?"));
-    expect(db.model("contact").update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ personal: true }) }));
+    expect(db.model("contact").update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ personal: true }) }),
+    );
     expect(debounceMessage).not.toHaveBeenCalled();
   });
   it("«моя мама хочет на курс» — клиентка, не родня", async () => {
@@ -113,6 +122,15 @@ describe("умный перехват хозяйки в вебхуке", () => {
     });
     await handleMessage(text("а адрес какой?"));
     expect(debounceMessage).toHaveBeenCalled();
+  });
+  it("фото без подписи в живом разговоре хозяйки: ответ откладывается, а не теряется", async () => {
+    contactRef.current.humanTakenOverAt = ago(2);
+    db.model("message").findFirst.mockResolvedValue({ createdAt: ago(2), text: "x" });
+    await handleMessage(text("", { text: undefined, attachments: [{ type: "image", payload: { url: "https://cdn.example/p.jpg" } }] }));
+    expect(debounceMessage).not.toHaveBeenCalled();
+    expect(db.model("pendingAiReply").create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ text: expect.stringContaining("фото") }),
+    });
   });
   it("«спасибо» во время живого разговора: отвечаем сразу", async () => {
     contactRef.current.humanTakenOverAt = ago(2);

@@ -102,6 +102,8 @@ export function resetInboundWatch(): void {
  */
 export const UNANSWERED_AFTER_MS = 2 * 60_000;
 const LOOKBACK_MS = 24 * 3_600_000;
+/** Запас после конца паузы хозяйки, прежде чем молчание считается сбоем. */
+const TAKEOVER_GRACE_MS = 4 * 60_000;
 const PROCESS_STARTED_AT = Date.now();
 const MAX_ALERTS_PER_TICK = 5;
 
@@ -152,6 +154,14 @@ export async function explainUnanswered(
       if (!config.enabled || !anchor) return { skip: true, why: "живая пауза хозяйки" };
       const d = decideTakeover({ config, anchor, incomingAt: lastIn.createdAt, safeIntent: false, now });
       if (d.action === "hold") return { skip: true, why: "живая пауза хозяйки" };
+      // Запас к концу паузы: очередь ответов отвечает по тику, сторож не должен гоняться с ней.
+      if (d.why === "idle" || d.why === "cold") {
+        const dueAt = Math.min(
+          anchor.getTime() + config.liveWindowMin * 60_000,
+          lastIn.createdAt.getTime() + config.idleReplyMin * 60_000,
+        );
+        if (now.getTime() - dueAt < TAKEOVER_GRACE_MS) return { skip: true, why: "пауза хозяйки только что закончилась, ответ в очереди" };
+      }
       return { skip: false, reason: "перехват хозяйки уже должен был закончиться (" + d.why + "), но бот не ответил", dedupeKey: "takeover-due:" + contactId + ":" + lastIn.createdAt.getTime() };
     }
     return {

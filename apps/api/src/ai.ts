@@ -9,6 +9,7 @@ import {
   isBotFrozen,
   assertAutomationAllowed,
   contactAutomationBlocked,
+  takeoverOverrideActive,
   withContactMessaging,
 } from "./messaging/automation.js";
 import {
@@ -56,7 +57,7 @@ import { maybeRestoreAccess } from "./course/recovery.js";
 import { maybeWarmEmoji } from "./voice.js";
 import { splitHumanLike, splitOptionsFor } from "./ai/replySplit.js";
 import { passesRelevanceGate } from "./ai/relevanceGate.js";
-import { reactInsteadOfReply } from "./ai/reactions.js";
+import { reactInsteadOfReply, isPureThanks } from "./ai/reactions.js";
 import type { Contact } from "@prisma/client";
 
 const TIMEOUT_MS = 60_000;
@@ -261,6 +262,12 @@ export async function aiReply(
   // «Спасибо» без вопроса — живой человек ставит сердечко, а не пишет ещё одно сообщение (ai/reactions.ts).
   if (attachments.length === 0 && images.length === 0 && (await reactInsteadOfReply(contact, text))) {
     noteDeliberateSilence(contact.id, "реакция вместо ответа");
+    return;
+  }
+  // «Спасибо» под паузой хозяйки (разовое разрешение): разрешена только реакция. Не ушла —
+  // полный ответ ИИ под паузой не нужен.
+  if (takeoverOverrideActive(contact.id) && attachments.length === 0 && images.length === 0 && isPureThanks(text)) {
+    noteDeliberateSilence(contact.id, "«спасибо» под паузой хозяйки, реакция не ушла");
     return;
   }
 
