@@ -1,4 +1,5 @@
 import { prisma, getSetting, logError } from "./db.js";
+import { isListedPersonal } from "./ai/personalList.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { env } from "./env.js";
 
@@ -80,12 +81,14 @@ async function refreshProfilesOnce(): Promise<void> {
 
     for (const contact of stale) {
       const profile = await fetchProfile(contact.igUserId, contact.channel);
+      const listed = !contact.personal && (await isListedPersonal(profile?.username ?? contact.username));
       await prisma.contact.update({
         where: { id: contact.id },
         data: {
           // Отметку ставим всегда, даже когда профиль не отдали: иначе такие
           // контакты будут перезапрашиваться каждый тик, вечно.
           profileAt: new Date(),
+          ...(listed ? { personal: true, personalReason: "Список личных контактов (добавлен владельцем)" } : {}),
           name: profile?.name ?? contact.name,
           username: profile?.username ?? contact.username,
           avatarUrl: profile?.profile_pic ?? profile?.profile_picture_url ?? contact.avatarUrl,

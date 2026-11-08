@@ -7,6 +7,7 @@ import { SkeletonList } from "../components/Skeleton";
 import { toast } from "../components/Toast";
 import { plural, shortWho, timeAgo } from "../format";
 import { usePaged } from "../hooks/usePaged";
+import { PersonalImport } from "../components/PersonalImport";
 import { ManualEnrollment } from "../components/ManualEnrollment";
 
 /**
@@ -157,6 +158,7 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
       <h2>{Icons.clients} Клиенты</h2>
       <p className="hint">Кто писал и что у него с курсом. «Личный» — помощник с этим человеком не переписывается никогда.</p>
       <ManualEnrollment onSaved={reload} onOpenStudent={onOpenStudent} />
+      <PersonalImport onSaved={reload} />
 
       <label className="field" style={{ marginBottom: 10 }}>
         {/* Плейсхолдер — не замена подписи для программ чтения с экрана (он

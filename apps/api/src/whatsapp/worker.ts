@@ -4,6 +4,7 @@ import { bridgeRequest, bridgeEventSchema, whatsappConfigured, whatsappMessageId
 import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
+import { isListedPersonal } from "../ai/personalList.js";
 import { resolveTakeover } from "../ai/ownerTakeover.js";
 import { attentionError, classifyAttention } from "./attention.js";
 
@@ -59,6 +60,10 @@ export async function processInbox(id: string): Promise<void> {
   if (!check.identityResolved) throw attentionError("contact_check", "Не удалось проверить контакт WhatsApp");
   const phone = check.aliases?.find(alias => /^\d{7,15}@c\.us$/.test(alias))?.split("@")[0];
   if (phone && !contact.name) await prisma.contact.update({ where: { id: contact.id }, data: { name: `+${phone}` } });
+  if (phone && !contact.personal && (await isListedPersonal(phone))) {
+    await prisma.contact.update({ where: { id: contact.id }, data: { personal: true, personalReason: "Список личных контактов (добавлен владельцем)" } });
+    contact.personal = true;
+  }
   const stamp = event.timestamp;
   if (Date.now() - stamp > 86400000 || stamp > Date.now() + 60000) {
     await prisma.whatsAppInbox.update({ where: { id }, data: { status: "expired", payload: JSON.stringify({ ...payload, media: undefined }) } });

@@ -9,7 +9,8 @@ import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
 import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
-import { looksPersonal } from "./ai/personalContact.js";
+import { storyReplyWorthAnswer } from "./ai/storyRelevance.js";
+import { looksPersonal, startsWithFamilyAddress } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { rememberOwnerReply, type OwnerMedia } from "./ai/styleLearning.js";
@@ -465,6 +466,16 @@ export async function handleMessage(
       return null;
     });
     if (!own) return; // чужой ролик — молчим, даже если к нему что-то написали
+    // Ответ на НАШУ историю: отвечаем только про курсы (подпись истории или слова в самом ответе).
+    if (msg.reply_to?.story && !storyReplyWorthAnswer({ storyCaption: own.caption, replyText: text })) {
+      const quietContact = await upsertContact(senderId, null, channel);
+      if (msg.mid && text) {
+        await prisma.message
+          .create({ data: { contactId: quietContact.id, direction: "IN", mid: msg.mid, text, payload } })
+          .catch((err) => { if ((err as { code?: string })?.code !== "P2002") logError("webhook:storyRecord", err); });
+      }
+      return;
+    }
     // Обложку отдаём модели глазами, подпись — текстом: вместе они объясняют,
     // о чём спрашивает человек, лучше, чем сам ролик без подписи.
     const preview = viewableUrl(own);
@@ -540,6 +551,15 @@ export async function handleMessage(
         .catch((err) => logError("webhook:spamBlock", err));
       return;
     }
+  }
+
+  // Первое сообщение, начатое обращением к родне («мама, ...»), — личная переписка.
+  if (textOrVoice && (await isFirstIncoming(contact.id)) && startsWithFamilyAddress(textOrVoice)) {
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { personal: true, personalReason: `Первое сообщение начато обращением к родне: «${textOrVoice.slice(0, 100)}»` },
+    });
+    return;
   }
 
   if (textOrVoice && looksPersonal(textOrVoice)) {
@@ -633,6 +653,10 @@ export async function handleMessage(
  * отложен в очередь), "safe" — отвечаем разово, перехват остаётся, "free" — перехват
  * снят (в базе), отвечаем как обычно.
  */
+async function isFirstIncoming(contactId: string): Promise<boolean> {
+  return (await prisma.message.count({ where: { contactId, direction: "IN" } })) <= 1;
+}
+
 async function gateHumanTakeover(contact: Contact, text: string | null): Promise<"hold" | "safe" | "free"> {
   // Пауза по таймеру (реакция хозяйки, просьба «позови человека») не из этой цепочки.
   if (!contact.humanTakenOverAt) return "hold";

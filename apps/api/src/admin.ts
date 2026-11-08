@@ -1,4 +1,5 @@
 import { freeLessonAdminRouter } from "./site/freeLessonAdmin.js";
+import { importPersonalList } from "./ai/personalList.js";
 import express, { Router, type Request, type Response, type NextFunction } from "express";
 import nodeCrypto from "node:crypto";
 import { adminAccessConfig } from "./adminAccess.js";
@@ -1280,6 +1281,21 @@ adminRouter.get("/admin/personal", async (_req, res) => {
     take: 200,
   });
   res.json(rows);
+});
+
+/** Массовый список личных контактов: ники Instagram и номера WhatsApp, по одному в строке. */
+adminRouter.post("/admin/personal/import", async (req, res) => {
+  const parsed = z.object({ text: z.string().min(1).max(20000) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Вставьте ники или номера списком" });
+    return;
+  }
+  try {
+    res.json(await importPersonalList(parsed.data.text));
+  } catch (err) {
+    logError("admin:importPersonal", err);
+    res.status(500).json({ error: "Не удалось сохранить список" });
+  }
 });
 
 /** Пометить/снять «личный контакт». Бот с такими не разговаривает вообще: это

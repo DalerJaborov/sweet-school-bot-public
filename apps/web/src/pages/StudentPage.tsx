@@ -45,6 +45,20 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
 
   useEffect(() => load(), [load]);
 
+  async function togglePersonal() {
+    if (!s) return;
+    setBusy("personal");
+    try {
+      await api(`/admin/contacts/${s.contact.id}/personal`, { method: "POST", body: { personal: !s.contact.personal } });
+      toast(s.contact.personal ? "Помощник снова отвечает этому человеку" : "Помечено: личный контакт, помощник не отвечает");
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Не удалось изменить", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function newLink() {
     if (!s) return;
     const ok = await confirmDialog({
@@ -153,6 +167,9 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
         <div className="student-actions">
           <button type="button" className="btn" disabled={busy === "link" || activeCourses === 0 || Boolean(c.accessRevokedAt)} onClick={() => void newLink()}>
             {busy === "link" ? "Выдаю…" : "Новая ссылка"}
+          </button>
+          <button type="button" className="btn ghost" disabled={busy === "personal"} onClick={() => void togglePersonal()}>
+            {c.personal ? "Вернуть помощника" : "Это личный контакт — не отвечать"}
           </button>
           {write ? (
             <a className="btn ghost" href={write.href} target="_blank" rel="noreferrer">
