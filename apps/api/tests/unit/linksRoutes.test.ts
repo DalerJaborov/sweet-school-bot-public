@@ -97,6 +97,7 @@ describe("права", () => {
       ["/admin/v1/links/telegram", "GET"],
       ["/admin/v1/links/telegram", "POST"],
       ["/admin/v1/links/telegram/x/revoke", "POST"],
+      ["/admin/v1/links/telegram/x/joins/y/remove", "POST"],
     ] as const) {
       const res = await call(path, { method, auth: false, body: method === "POST" ? {} : undefined });
       expect(res.status, `${method} ${path}`).toBe(401);
@@ -153,19 +154,24 @@ describe("ссылка на сайт", () => {
     expect(statuses[30]).toBe(429);
   });
 
-  it("список считает переходы, обращения и покупки", async () => {
+  it("список считает людей, а не заявки: чат + заявка одного человека — один", async () => {
     db.model("siteLink").findMany.mockResolvedValue([link({ clicks: 12 })]);
-    db.model("contact").groupBy.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.purchases
-        ? [{ siteLinkId: "link-1", _count: { _all: 1 } }]
-        : [{ siteLinkId: "link-1", _count: { _all: 3 } }],
-    );
-    db.model("freeLessonLead").groupBy.mockResolvedValue([{ siteLinkId: "link-1", _count: { _all: 2 } }]);
+    db.model("contact").findMany.mockResolvedValue([
+      // Написала в чат, записалась на очный и купила — один человек, одна покупка.
+      { siteLinkId: "link-1", offlineSignup: { phone: "+992 90 000 0001" }, purchases: [{ id: "p1" }] },
+      // Только открыла чат — тоже обратилась.
+      { siteLinkId: "link-1", offlineSignup: null, purchases: [] },
+    ]);
+    db.model("freeLessonLead").findMany.mockResolvedValue([
+      { siteLinkId: "link-1", phone: "900000001" }, // та же, что в заявке на очный
+      { siteLinkId: "link-1", phone: "992900000002" }, // новый человек
+      { siteLinkId: "link-1", phone: "900000002" }, // он же второй раз
+    ]);
     const res = await call("/admin/v1/links/site");
     const body = (await res.json()) as { links: Record<string, unknown>[] };
     expect(body.links[0]).toMatchObject({
       clicks: 12,
-      leads: 5,
+      leads: 3,
       buyers: 1,
       sourceLabel: "Блогер",
       targetLabel: "Онлайн-курс",
@@ -189,12 +195,18 @@ describe("переход /go/<код>", () => {
     });
   });
 
-  it("повторный клик того же человека за полчаса не считается, другой человек — считается", async () => {
+  it("повтор узнаём по куке, а не по IP: общий адрес оператора — разные люди", async () => {
     db.model("siteLink").findUnique.mockResolvedValue(link());
-    await go("abc234", BROWSER, "10.0.0.2");
-    await go("abc234", BROWSER, "10.0.0.2");
+    const first = await go("abc234", BROWSER, "10.0.0.2");
+    expect(first.headers.get("set-cookie")).toContain("ssb_click=abc234");
+    // Тот же человек (браузер вернул куку) — второй переход не считается.
+    await realFetch(`${base}/go/abc234`, {
+      redirect: "manual",
+      headers: { "user-agent": BROWSER, "x-forwarded-for": "10.0.0.2", cookie: "ssb_click=abc234" },
+    });
     expect(db.model("siteLink").update).toHaveBeenCalledTimes(1);
-    await go("abc234", BROWSER, "10.0.0.3");
+    // Другой абонент за тем же IP — без куки — считается.
+    await go("abc234", BROWSER, "10.0.0.2");
     expect(db.model("siteLink").update).toHaveBeenCalledTimes(2);
   });
 
@@ -223,6 +235,7 @@ describe("переход /go/<код>", () => {
 
   it("испорченная строка в базе всё равно уводит только на свой сайт", async () => {
     for (const target of ["https://evil.example", "//evil.example", "/\\evil.example", "home"]) {
+      resetGoLimits(); // ссылки держатся в памяти — каждую «испорченную» читаем заново
       db.model("siteLink").findUnique.mockResolvedValue(link({ target, source: "nonsense", lang: "xx" }));
       const res = await go("abc234", BROWSER, `10.2.0.${target.length}`);
       const location = res.headers.get("location") ?? "";
@@ -233,11 +246,23 @@ describe("переход /go/<код>", () => {
     }
   });
 
-  it("поток запросов с одного адреса не доходит до базы", async () => {
+  it("перегрузка с одного адреса всё равно ведёт на НУЖНУЮ страницу, база читается один раз", async () => {
     db.model("siteLink").findUnique.mockResolvedValue(link());
-    for (let i = 0; i < 65; i++) await go("abc234", BROWSER, "10.9.9.9");
+    const locations = new Set<string>();
+    for (let i = 0; i < 150; i++)
+      locations.add((await go("abc234", BROWSER, "10.9.9.9")).headers.get("location") ?? "");
+    expect([...locations]).toEqual([expect.stringMatching(/^\/online-kurs\?utm_source=blogger/)]);
+    expect(db.model("siteLink").findUnique).toHaveBeenCalledTimes(1);
+    // Запись счётчика ограничена: 120 в минуту с адреса.
+    expect(db.model("siteLink").update).toHaveBeenCalledTimes(120);
+  }, 30_000); // 150 настоящих HTTP-запросов: в общем прогоне под нагрузкой дольше 5 с
+
+  it("перебор несуществующих кодов упирается в лимит чтения базы", async () => {
+    db.model("siteLink").findUnique.mockResolvedValue(null);
+    const L = "abcdefghjk";
+    for (let i = 0; i < 70; i++) await go(`zz${L[Math.floor(i / 10)]}${L[i % 10]}x`, BROWSER, "10.8.8.8");
     expect(db.model("siteLink").findUnique).toHaveBeenCalledTimes(60);
-  });
+  }, 30_000);
 });
 
 describe("приглашение в Telegram", () => {
@@ -359,5 +384,48 @@ describe("приглашение в Telegram", () => {
     const res = await call("/admin/v1/links/telegram/inv-1/revoke", { method: "POST" });
     expect(res.status).toBe(409);
     expect(db.model("telegramInvite").updateMany).not.toHaveBeenCalled();
+  });
+
+  it("ссылка в Telegram создана, а запись в базу упала — ссылка сразу гасится, хозяйка видит ошибку", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    db.model("telegramInvite").create.mockRejectedValue(new Error("SQLITE_BUSY"));
+    const res = await call("/admin/v1/links/telegram", { body: { group: "COURSE50", preset: "one" } });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { reason: string }).reason).toBe("save_failed");
+    expect(telegram).toHaveBeenCalledWith("revokeChatInviteLink", {
+      chat_id: "-1001",
+      invite_link: "https://t.me/+NewInvite123",
+    });
+  });
+
+  it("вошедшего по общей ссылке можно удалить из группы", async () => {
+    db.model("telegramInviteJoin").findUnique.mockResolvedValue({
+      id: "j-1",
+      inviteId: "inv-5",
+      telegramUserId: "777",
+      removedAt: null,
+    });
+    db.model("telegramInvite").findUnique.mockResolvedValue({ id: "inv-5", groupKey: "COURSE70", chatId: "-1002" });
+    telegram.mockResolvedValue({ ok: true, result: true });
+    const res = await call("/admin/v1/links/telegram/inv-5/joins/j-1/remove", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(telegram).toHaveBeenCalledWith("banChatMember", { chat_id: "-1002", user_id: 777 });
+    expect(telegram).toHaveBeenCalledWith("unbanChatMember", { chat_id: "-1002", user_id: 777, only_if_banned: true });
+    expect(db.model("telegramInviteJoin").updateMany).toHaveBeenCalledWith({
+      where: { id: "j-1", removedAt: null },
+      data: { removedAt: expect.any(Date) },
+    });
+  });
+
+  it("чужой вошедший (другая ссылка) — 404, никого не выгоняем", async () => {
+    db.model("telegramInviteJoin").findUnique.mockResolvedValue({
+      id: "j-1",
+      inviteId: "other",
+      telegramUserId: "777",
+      removedAt: null,
+    });
+    const res = await call("/admin/v1/links/telegram/inv-5/joins/j-1/remove", { method: "POST" });
+    expect(res.status).toBe(404);
+    expect(telegram).not.toHaveBeenCalled();
   });
 });

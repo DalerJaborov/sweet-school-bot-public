@@ -21,6 +21,7 @@ import {
   createPanelInvite,
   groupOptions,
   listPanelInvites,
+  removeInviteJoiner,
   revokePanelInvite,
   type InvitePreset,
 } from "./telegramInvites.js";
@@ -138,6 +139,15 @@ linksAdminRouter.post(`${BASE}/telegram`, async (req, res) => {
     res.status(201).json({
       invite: { id: invite.id, link: invite.inviteLink, expiresAt: invite.expiresAt, memberLimit: invite.memberLimit },
     });
+  } catch (err) {
+    inviteFailed(res, err);
+  }
+});
+
+linksAdminRouter.post(`${BASE}/telegram/:id/joins/:joinId/remove`, async (req, res) => {
+  try {
+    await removeInviteJoiner(String(req.params.id), String(req.params.joinId));
+    res.json({ ok: true });
   } catch (err) {
     inviteFailed(res, err);
   }

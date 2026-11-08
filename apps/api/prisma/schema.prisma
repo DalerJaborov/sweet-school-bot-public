@@ -715,6 +715,22 @@ model TelegramInvite {
   @@index([contactId])
 }
 
+/// Кто вошёл по приглашению из панели — по общей ссылке (на 5–20 человек)
+/// хозяйка видит людей и может выгнать лишнего. Только то, что прислал
+/// Telegram в событии входа: id, имя, ник.
+model TelegramInviteJoin {
+  id             String    @id @default(uuid())
+  inviteId       String
+  telegramUserId String
+  name           String?
+  username       String?
+  joinedAt       DateTime  @default(now())
+  /// Когда хозяйка удалила человека из группы кнопкой в «Ссылках».
+  removedAt      DateTime?
+
+  @@index([inviteId])
+}
+
 model Course {
   id          String     @id @default(uuid())
   /// Стабильный код, совпадает с Purchase.course сегодня: "COURSE50" | "COURSE70".

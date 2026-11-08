@@ -1005,7 +1005,7 @@ adminRouter.post("/admin/contacts/:id/revoke", async (req, res) => {
     res.status(400).json({ error: result.details });
     return;
   }
-  res.json({ ok: true, details: result.details });
+  res.json({ ok: true, details: result.details, ...(result.warning ? { warning: result.warning } : {}) });
 });
 
 /**

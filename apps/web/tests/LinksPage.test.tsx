@@ -85,7 +85,10 @@ describe("LinksPage — ссылка на сайт", () => {
     render(<LinksPage />);
     expect(await screen.findByRole("heading", { name: "Ссылка на сайт" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Ссылка в Telegram-группу" })).toBeTruthy();
-    expect(await screen.findByText("12 переходов · 3 обратились · 1 купил")).toBeTruthy();
+    expect(
+      await screen.findByText("12 переходов · 3 обратились через чат или форму на сайте · 1 купил через чат на сайте"),
+    ).toBeTruthy();
+    expect(screen.getByText(/Покупки через WhatsApp и Instagram сюда не попадают/)).toBeTruthy();
     expect(await screen.findByText(/Зарина · Курс «Арт-десерты»/)).toBeTruthy();
     // Ненастроенная группа не предлагается.
     expect(screen.queryByRole("option", { name: "Курс «21 рецепт»" })).toBeNull();
@@ -104,6 +107,9 @@ describe("LinksPage — ссылка на сайт", () => {
     expect(await within(site).findByRole("alert")).toBeTruthy();
     expect(bodyOf(fetchMock, "POST", "/admin/v1/links/site")).toBeUndefined();
 
+    // Предупреждение: имя попадёт в адрес страницы.
+    expect(within(site).getByLabelText("Имя блогера").getAttribute("aria-describedby")).toBeTruthy();
+    expect(within(site).getByText(/видно в адресе страницы/)).toBeTruthy();
     fireEvent.change(within(site).getByLabelText("Имя блогера"), { target: { value: "Мадина" } });
     fireEvent.click(within(site).getByRole("button", { name: "Создать ссылку" }));
     const url = (await within(site).findByLabelText("Готовая ссылка")) as HTMLInputElement;
@@ -171,6 +177,43 @@ describe("LinksPage — Telegram", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Отозвать" }));
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([u]) => u === "/admin/v1/links/telegram/i1/revoke")).toBe(true),
+    );
+  });
+
+  it("входы набраны, но ссылка не погашена — «Отозвать» на экране; вошедшего можно удалить", async () => {
+    const fetchMock = mockApi({
+      "GET /admin/v1/links/telegram": () =>
+        new Response(
+          JSON.stringify({
+            invites: [
+              {
+                ...inviteRow,
+                id: "i5",
+                name: "Группа ноябрь",
+                memberLimit: 5,
+                joinedCount: 5,
+                joins: [
+                  { id: "j1", name: "Нигора @nigora", joinedAt: "2026-11-08T10:00:00Z", removed: false },
+                  { id: "j2", name: "Telegram 777", joinedAt: "2026-11-08T11:00:00Z", removed: true },
+                ],
+              },
+            ],
+          }),
+        ),
+      "POST /admin/v1/links/telegram/i5/joins/j1/remove": () => new Response(JSON.stringify({ ok: true })),
+    });
+    render(
+      <>
+        <LinksPage />
+        <ConfirmHost />
+      </>,
+    );
+    expect(await screen.findByRole("button", { name: "Отозвать ссылку для: Группа ноябрь" })).toBeTruthy();
+    expect(screen.getByText("удалили из группы")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Удалить из группы: Нигора @nigora" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Удалить" }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => u === "/admin/v1/links/telegram/i5/joins/j1/remove")).toBe(true),
     );
   });
 });

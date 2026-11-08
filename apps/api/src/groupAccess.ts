@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink } from "./telegram.js";
+import { ownerAlertChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
 import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryModeFor, issueCourseLink } from "./course/delivery.js";
@@ -165,9 +165,16 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
   // Ссылка выдана из панели (раздел «Ссылки»): бот создал её сам, но в
   // Contact.inviteLink её нет — без этой проверки каждый такой вход поднимал бы
   // тревогу «возможно слитая».
-  if (await recordPanelInviteJoin(link, userId, joined)) return;
+  if (await recordPanelInviteJoin(link, update.new_chat_member?.user ?? { id: userId }, joined)) return;
 
-  const contact = await prisma.contact.findFirst({ where: { inviteLink: link } });
+  // У Contact.inviteLink живёт только ПОСЛЕДНЯЯ ссылка; ссылка на первый из двух
+  // купленных курсов есть только на её покупке — ищем и там, иначе вход по ней
+  // поднимал тревогу «слитая ссылка» у честной ученицы.
+  const contact =
+    (await prisma.contact.findFirst({ where: { inviteLink: link } })) ??
+    (await prisma.purchase
+      .findFirst({ where: { inviteLink: link }, select: { contactId: true } })
+      .then((p) => (p ? prisma.contact.findUnique({ where: { id: p.contactId } }) : null)));
   if (!contact) {
     if (!joined) return;
     const botToken = (await getSetting("telegramBotToken"))?.trim() ?? "";
@@ -209,6 +216,11 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
     await prisma.purchase
       .updateMany({ where: { contactId: contact.id, inviteLink: link, joinedAt: null }, data: { joinedAt: new Date() } })
       .catch((err) => logError("groupAccess:purchaseJoined", err));
+    // Ссылка была на одного человека, он вошёл — гасим её. member_limit в
+    // Telegram ограничивает, сколько человек В ГРУППЕ одновременно, а не число
+    // входов: без отзыва вышедшая ученица могла бы переслать ссылку подруге.
+    const botToken = (await getSetting("telegramBotToken"))?.trim();
+    if (botToken && update.chat?.id != null) await revokeInviteLink(botToken, String(update.chat.id), link);
   }
 }
 
@@ -219,7 +231,10 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
  * человека в чёрном списке навсегда: если окажется, что чек был настоящий,
  * достаточно выдать ссылку заново.
  */
-export async function revokeAccess(contactId: string, reason = "фальшивый чек"): Promise<{ ok: boolean; details: string }> {
+export async function revokeAccess(
+  contactId: string,
+  reason = "фальшивый чек",
+): Promise<{ ok: boolean; details: string; warning?: string }> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return { ok: false, details: "Клиент не найден" };
@@ -241,7 +256,15 @@ export async function revokeAccess(contactId: string, reason = "фальшивы
   }
   // Ссылки, выданные этой ученице вручную из панели, — тоже гасим: иначе по
   // ней можно было бы войти уже после отзыва доступа.
-  await revokeInvitesForContact(contactId).catch((err) => logError("groupAccess:revoke:panelInvites", err));
+  const notRevoked = await revokeInvitesForContact(contactId).catch((err) => {
+    logError("groupAccess:revoke:panelInvites", err);
+    return -1;
+  });
+  // Молча «готово» нельзя: по неотозванной ссылке можно войти и после отзыва.
+  const warning =
+    notRevoked !== 0
+      ? "Ссылка из раздела «Ссылки» не отозвана — отзовите её там вручную."
+      : undefined;
 
   const results: string[] = [];
   if (contact.telegramUserId) {
@@ -294,9 +317,9 @@ export async function revokeAccess(contactId: string, reason = "фальшивы
       });
   }
 
-  const details = results.length > 0 ? results.join("; ") : "ссылка отозвана";
+  const details = [results.length > 0 ? results.join("; ") : "ссылка отозвана", warning].filter(Boolean).join(". ");
   await notifyOwner(botToken, contact.username ?? contact.igUserId, reason, details);
-  return { ok: true, details };
+  return { ok: true, details, ...(warning ? { warning } : {}) };
 }
 
 /**

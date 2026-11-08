@@ -115,7 +115,8 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
     if (!ok) return;
     setBusy(c.id);
     try {
-      await api(`/admin/contacts/${c.id}/revoke`, { method: "POST", body: { reason: "фальшивый чек" } });
+      const r = await api<{ warning?: string }>(`/admin/contacts/${c.id}/revoke`, { method: "POST", body: { reason: "фальшивый чек" } });
+      if (r.warning) toast(r.warning, "error");
       reload();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Не удалось отобрать доступ", "error");

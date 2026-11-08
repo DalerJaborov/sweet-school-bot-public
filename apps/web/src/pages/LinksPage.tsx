@@ -46,6 +46,7 @@ type InviteRow = {
   expiresAt: string | null;
   createdAt: string;
   status: "active" | "used" | "expired" | "revoked";
+  joins?: { id: string; name: string; joinedAt: string; removed: boolean }[];
 };
 
 const LIST_STEP = 10;
@@ -261,8 +262,14 @@ function SiteLinkBlock({ options }: { options: Options }) {
               onChange={(e) => setLabel(e.target.value)}
               placeholder={source === "blogger" ? "Например, Мадина" : "Например, Ноябрь — сторис"}
               autoComplete="off"
+              aria-describedby={`${ids}-label-note`}
             />
           </label>
+        )}
+        {needsLabel && (
+          <p id={`${ids}-label-note`} className="links-note links-label-note">
+            Это слово будет видно в адресе страницы — без фамилии и телефона.
+          </p>
         )}
 
         {error && (
@@ -293,8 +300,8 @@ function SiteLinkBlock({ options }: { options: Options }) {
                 </div>
                 <div className="list-sub">
                   {r.clicks} {plural(r.clicks, "переход", "перехода", "переходов")} · {r.leads}{" "}
-                  {plural(r.leads, "обратился", "обратились", "обратились")} · {r.buyers}{" "}
-                  {plural(r.buyers, "купил", "купили", "купили")}
+                  {plural(r.leads, "обратился", "обратились", "обратились")} через чат или форму на сайте · {r.buyers}{" "}
+                  {plural(r.buyers, "купил", "купили", "купили")} через чат на сайте
                 </div>
               </div>
               <button
@@ -310,6 +317,11 @@ function SiteLinkBlock({ options }: { options: Options }) {
         </ul>
       )}
       {rows && <ShowMore shown={shown} total={rows.length} onMore={() => setShown((n) => n + LIST_STEP)} />}
+      {rows && rows.length > 0 && (
+        <p className="hint links-footnote">
+          Покупки через WhatsApp и Instagram сюда не попадают: там человек пишет без ссылки.
+        </p>
+      )}
     </section>
   );
 }
@@ -318,7 +330,7 @@ function SiteLinkBlock({ options }: { options: Options }) {
 
 const STATUS_TEXT: Record<InviteRow["status"], string> = {
   active: "Действует",
-  used: "Все входы использованы",
+  used: "Все вошли — ссылка закрыта",
   expired: "Срок вышел",
   revoked: "Отозвана",
 };
@@ -393,6 +405,25 @@ function TelegramBlock({ options }: { options: Options }) {
       loadRows();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Не получилось отозвать", "error");
+    }
+  }
+
+  async function removeJoiner(row: InviteRow, join: NonNullable<InviteRow["joins"]>[number]) {
+    const ok = await confirmDialog({
+      title: `Удалить ${join.name} из группы?`,
+      message: "Человек выйдет из группы. Вернуться сможет только по новой ссылке.",
+      confirmLabel: "Удалить",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/admin/v1/links/telegram/${encodeURIComponent(row.id)}/joins/${encodeURIComponent(join.id)}/remove`, {
+        method: "POST",
+      });
+      toast("Удалили из группы");
+      loadRows();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Не получилось удалить", "error");
     }
   }
 
@@ -471,6 +502,27 @@ function TelegramBlock({ options }: { options: Options }) {
                   {r.status === "active" && r.expiresAt ? ` · до ${shortDate(r.expiresAt)}` : ""}
                   {r.status !== "active" ? ` · выдана ${timeAgo(r.createdAt)}` : ""}
                 </div>
+                {r.joins && r.joins.length > 0 && (
+                  <ul className="links-joins" aria-label="Кто вошёл по ссылке">
+                    {r.joins.map((j) => (
+                      <li key={j.id}>
+                        <span>{j.name}</span>
+                        {j.removed ? (
+                          <span className="links-note">удалили из группы</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn quiet small"
+                            onClick={() => void removeJoiner(r, j)}
+                            aria-label={`Удалить из группы: ${j.name}`}
+                          >
+                            Удалить из группы
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               {r.status === "active" && (
                 <div className="links-row-actions">

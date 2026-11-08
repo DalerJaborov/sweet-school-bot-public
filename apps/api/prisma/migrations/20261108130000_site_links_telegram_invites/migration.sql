@@ -1,6 +1,6 @@
 -- Раздел «Ссылки» (08.11.2026): короткие ссылки на сайт с меткой источника и
 -- приглашения в Telegram-группы из панели. ТОЛЬКО ДОБАВЛЕНИЕ: два nullable
--- столбца (без внешних ключей — SQLite не пересоздаёт таблицы) и две новые
+-- столбца (без внешних ключей — SQLite не пересоздаёт таблицы) и три новые
 -- таблицы. Существующие строки не меняются.
 
 -- AlterTable
@@ -37,6 +37,20 @@ CREATE TABLE "TelegramInvite" (
     "revokedAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- CreateTable
+CREATE TABLE "TelegramInviteJoin" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "inviteId" TEXT NOT NULL,
+    "telegramUserId" TEXT NOT NULL,
+    "name" TEXT,
+    "username" TEXT,
+    "joinedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "removedAt" DATETIME
+);
+
+-- CreateIndex
+CREATE INDEX "TelegramInviteJoin_inviteId_idx" ON "TelegramInviteJoin"("inviteId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "SiteLink_code_key" ON "SiteLink"("code");

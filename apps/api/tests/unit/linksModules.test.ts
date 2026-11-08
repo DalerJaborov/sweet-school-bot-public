@@ -50,8 +50,20 @@ describe("кто не человек", () => {
       "Mozilla/5.0 (iPhone) Mobile/15E148 Instagram 300.0",
       "Mozilla/5.0 (Linux; Android 13) musical_ly_2023 BytedanceWebview",
       "Mozilla/5.0 (iPhone) FBAN/FBIOS",
+      // Приложение Яндекса и Pinterest — люди; их роботы — нет (ниже).
+      "Mozilla/5.0 (Linux; Android 12) Chrome/118 YaApp_Android/23.10 YaSearchBrowser/23.10 Mobile Safari/537.36",
+      "Mozilla/5.0 (Linux; Android 12) Chrome/118 YaBrowser/23.9 Mobile Safari/537.36",
+      "Mozilla/5.0 (iPhone) Mobile/15E148 [Pinterest/iOS]",
+      "Pinterest for Android/11.40.1 (SM-A515F; 12)",
     ])
       expect(isPreviewAgent(ua), ua).toBe(false);
+    for (const ua of [
+      "Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)",
+      "Mozilla/5.0 (compatible; YandexMobileBot/3.0)",
+      "Pinterest/0.2 (+http://www.pinterest.com/bot.html)",
+      "Mozilla/5.0 (compatible; Pinterestbot/1.0)",
+    ])
+      expect(isPreviewAgent(ua), ua).toBe(true);
   });
   it("код из понятных знаков нужной длины", () => {
     for (let i = 0; i < 200; i++) expect(newCode()).toMatch(/^[a-hjkmnp-z2-9]{6}$/);
@@ -89,7 +101,10 @@ describe("ответы Telegram → простые слова", () => {
     const now = new Date("2026-11-08T12:00:00Z");
     const base = { revokedAt: null, expiresAt: new Date("2026-11-09T00:00:00Z"), memberLimit: 1, joinedCount: 0 };
     expect(inviteStatus(base, now)).toBe("active");
-    expect(inviteStatus({ ...base, joinedCount: 1 }, now)).toBe("used");
+    // Набрали входов, но бот не смог погасить ссылку — она ещё пускает: «Действует»
+    // и кнопка «Отозвать» на экране (member_limit считает людей в группе, не входы).
+    expect(inviteStatus({ ...base, joinedCount: 1 }, now)).toBe("active");
+    expect(inviteStatus({ ...base, joinedCount: 1, revokedAt: now }, now)).toBe("used");
     expect(inviteStatus({ ...base, expiresAt: new Date("2026-11-08T00:00:00Z") }, now)).toBe("expired");
     expect(inviteStatus({ ...base, revokedAt: now }, now)).toBe("revoked");
   });
@@ -126,15 +141,29 @@ describe("вход по ссылке из панели (chat_member)", () => {
     chat: { id: -1001 },
   });
 
-  it("ссылка на одну ученицу: без тревоги, вход засчитан, Telegram связан с карточкой", async () => {
-    db.model("telegramInvite").findUnique.mockResolvedValue({
-      id: "inv-1",
-      groupKey: "COURSE50",
-      contactId: "c-1",
-      memberLimit: 1,
-    });
+  const invite = (over: Record<string, unknown>) => ({
+    id: "inv-1",
+    groupKey: "COURSE50",
+    chatId: "-1001",
+    inviteLink: "https://t.me/+Panel",
+    contactId: null,
+    memberLimit: 1,
+    joinedCount: 0,
+    revokedAt: null,
+    ...over,
+  });
+
+  it("ссылка на одну ученицу: без тревоги, вход засчитан, Telegram связан с карточкой, ссылка погашена", async () => {
+    db.model("telegramInvite").findUnique.mockResolvedValue(invite({ contactId: "c-1" }));
+    db.model("telegramInvite").update.mockResolvedValue(invite({ contactId: "c-1", joinedCount: 1 }));
     await handleChatMember(update("https://t.me/+Panel"));
     expect(telegramCalls).not.toContain("sendMessage");
+    // member_limit в Telegram — люди В ГРУППЕ, а не входы: гасим ссылку сами.
+    expect(telegramCalls).toContain("revokeChatInviteLink");
+    expect(db.model("telegramInvite").updateMany).toHaveBeenCalledWith({
+      where: { id: "inv-1", revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
     expect(db.model("telegramInvite").update).toHaveBeenCalledWith({
       where: { id: "inv-1" },
       data: { joinedCount: { increment: 1 }, lastJoinedAt: expect.any(Date) },
@@ -149,20 +178,46 @@ describe("вход по ссылке из панели (chat_member)", () => {
     });
   });
 
-  it("ссылка на пятерых не привязывает вошедшего к одной ученице", async () => {
-    db.model("telegramInvite").findUnique.mockResolvedValue({
-      id: "inv-2",
-      groupKey: "COURSE50",
-      contactId: "c-1",
-      memberLimit: 5,
-    });
+  it("общая ссылка на пятерых: запоминаем, КТО вошёл; не привязываем к ученице; пока мест не набрано — не гасим", async () => {
+    db.model("telegramInvite").findUnique.mockResolvedValue(invite({ id: "inv-2", contactId: "c-1", memberLimit: 5 }));
+    db.model("telegramInvite").update.mockResolvedValue(invite({ id: "inv-2", memberLimit: 5, joinedCount: 3 }));
     await handleChatMember(update("https://t.me/+Five"));
     expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+    expect(db.model("telegramInviteJoin").create).toHaveBeenCalledWith({
+      data: { inviteId: "inv-2", telegramUserId: "42", name: "Мадина", username: null },
+    });
+    expect(telegramCalls).not.toContain("revokeChatInviteLink");
+  });
+
+  it("пятый вход по ссылке на пятерых — ссылка гасится", async () => {
+    db.model("telegramInvite").findUnique.mockResolvedValue(invite({ id: "inv-3", memberLimit: 5, joinedCount: 4 }));
+    db.model("telegramInvite").update.mockResolvedValue(invite({ id: "inv-3", memberLimit: 5, joinedCount: 5 }));
+    await handleChatMember(update("https://t.me/+Five"));
+    expect(telegramCalls).toContain("revokeChatInviteLink");
+  });
+
+  it("автоматическая ссылка бота после входа ученицы тоже гасится (тот же класс ошибки)", async () => {
+    db.model("telegramInvite").findUnique.mockResolvedValue(null);
+    db.model("contact").findFirst.mockResolvedValue({ id: "c-9", joinedGroupAt: null });
+    await handleChatMember(update("https://t.me/+Auto"));
+    expect(telegramCalls).toContain("revokeChatInviteLink");
+    expect(telegramCalls).not.toContain("sendMessage");
+  });
+
+  it("ссылка на первый из двух курсов (есть только на покупке) — узнаём ученицу, без тревоги", async () => {
+    db.model("telegramInvite").findUnique.mockResolvedValue(null);
+    db.model("contact").findFirst.mockResolvedValue(null);
+    db.model("purchase").findFirst.mockResolvedValue({ contactId: "c-9" });
+    db.model("contact").findUnique.mockResolvedValue({ id: "c-9", joinedGroupAt: null });
+    await handleChatMember(update("https://t.me/+FirstCourse"));
+    expect(telegramCalls).not.toContain("sendMessage");
+    expect(db.model("contact").update).toHaveBeenCalled();
   });
 
   it("незнакомая ботовая ссылка по-прежнему поднимает тревогу", async () => {
     db.model("telegramInvite").findUnique.mockResolvedValue(null);
     db.model("contact").findFirst.mockResolvedValue(null);
+    db.model("purchase").findFirst.mockResolvedValue(null);
     await handleChatMember(update("https://t.me/+Leaked"));
     expect(telegramCalls).toContain("sendMessage");
   });
@@ -220,7 +275,7 @@ describe("архитектура: одна дверь для ссылок", () =
   });
   it("prisma.siteLink / prisma.telegramInvite — только внутри links/", () => {
     const offenders = files.filter(
-      (f) => /prisma\.(siteLink|telegramInvite)\b/.test(fs.readFileSync(f, "utf8")) && !rel(f).startsWith("links/"),
+      (f) => /prisma\.(siteLink|telegramInvite\w*)\b/.test(fs.readFileSync(f, "utf8")) && !rel(f).startsWith("links/"),
     );
     expect(offenders.map(rel)).toEqual([]);
   });

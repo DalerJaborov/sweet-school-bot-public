@@ -4,8 +4,8 @@ import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "../courses.js";
 /**
  * ПРИГЛАШЕНИЯ В TELEGRAM-ГРУППЫ ИЗ ПАНЕЛИ (раздел «Ссылки», 08.11.2026).
  *
- * Бот сам выдаёт одноразовую ссылку после проверенного чека (telegram.ts
- * createOneTimeInviteLink) — этот путь не трогаем. Здесь — ручная выдача:
+ * Бот сам выдаёт ссылку на одного человека после проверенного чека (telegram.ts
+ * createOneTimeInviteLink) — это отдельный путь. Здесь — ручная выдача:
  * хозяйка или сестра выбирают группу и сколько людей, получают ссылку и
  * пересылают её сами (WhatsApp, личка). Каждая такая ссылка записана в базу:
  *  • её можно отозвать кнопкой;
@@ -52,6 +52,7 @@ export type InviteFailure =
   | "bad_token"
   | "unavailable"
   | "not_found"
+  | "save_failed"
   | "unknown";
 
 const RIGHTS_HINT =
@@ -67,6 +68,7 @@ export const FAILURE_TEXT: Record<InviteFailure, string> = {
   bad_token: "Telegram не принимает токен бота. Проверьте токен в «Настройках».",
   unavailable: "Telegram сейчас не отвечает. Попробуйте через минуту.",
   not_found: "Такой ссылки нет — обновите страницу.",
+  save_failed: "Ссылку не удалось сохранить, поэтому она сразу отменена. Попробуйте ещё раз.",
   unknown: "Telegram не дал сделать ссылку. Попробуйте ещё раз через минуту; если повторится — напишите разработчику.",
 };
 
@@ -190,17 +192,26 @@ export async function createPanelInvite(input: CreateInviteInput) {
     reportFailure("links:telegramCreate", reason, `${input.group}: ${failure.description}`);
     throw new InviteError(reason);
   }
-  const row = await prisma.telegramInvite.create({
-    data: {
-      groupKey: input.group,
-      chatId,
-      inviteLink: r.result.invite_link,
-      name,
-      memberLimit: preset.memberLimit,
-      expiresAt,
-      contactId: input.contactId ?? null,
-    },
-  });
+  const inviteLink = r.result.invite_link;
+  const row = await prisma.telegramInvite
+    .create({
+      data: {
+        groupKey: input.group,
+        chatId,
+        inviteLink,
+        name,
+        memberLimit: preset.memberLimit,
+        expiresAt,
+        contactId: input.contactId ?? null,
+      },
+    })
+    .catch(async (err) => {
+      // Ссылка в Telegram уже есть, а у нас о ней записи нет: её нельзя было бы
+      // ни отозвать из панели, ни узнать вошедшего. Гасим её сразу.
+      logError("links:telegramSave", err);
+      await botCall(token, "revokeChatInviteLink", { chat_id: chatId, invite_link: inviteLink });
+      throw new InviteError("save_failed");
+    });
   logInfo(
     "links:telegram",
     `выдано приглашение ${row.id}: ${input.group}, входов ${preset.memberLimit}, ${preset.days} дн.`,
@@ -230,28 +241,78 @@ export async function revokePanelInvite(id: string) {
   return { ...invite, revokedAt: new Date() };
 }
 
-/** «Отобрать доступ» (groupAccess.ts): гасим и ручные ссылки этой ученицы. */
-export async function revokeInvitesForContact(contactId: string): Promise<void> {
+/**
+ * «Отобрать доступ» (groupAccess.ts): гасим и ручные ссылки этой ученицы.
+ * Возвращает, сколько отозвать НЕ удалось — молча сказать «готово» нельзя.
+ */
+export async function revokeInvitesForContact(contactId: string): Promise<number> {
   const active = await prisma.telegramInvite.findMany({ where: { contactId, revokedAt: null }, select: { id: true } });
+  let failed = 0;
   for (const { id } of active) {
-    await revokePanelInvite(id).catch((err) => logError("links:revokeForContact", err));
+    await revokePanelInvite(id).catch((err) => {
+      failed += 1;
+      logError("links:revokeForContact", err);
+    });
   }
+  return failed;
+}
+
+/**
+ * Выгнать из группы того, кто вошёл по ссылке из панели. Бан с немедленной
+ * разблокировкой, как в groupAccess.revokeAccess: человека удаляет, но не
+ * оставляет в чёрном списке навсегда.
+ */
+export async function removeInviteJoiner(inviteId: string, joinId: string): Promise<void> {
+  const join = await prisma.telegramInviteJoin.findUnique({ where: { id: joinId } });
+  const invite =
+    join && join.inviteId === inviteId ? await prisma.telegramInvite.findUnique({ where: { id: inviteId } }) : null;
+  if (!join || !invite) throw new InviteError("not_found");
+  if (join.removedAt) return;
+  const token = (await getSetting("telegramBotToken"))?.trim();
+  if (!token) throw new InviteError("no_bot");
+  const userId = Number(join.telegramUserId);
+  const r = await botCall(token, "banChatMember", { chat_id: invite.chatId, user_id: userId });
+  if (!r.ok) {
+    const reason = classifyFailure(r);
+    reportFailure("links:telegramKick", reason, `${invite.groupKey}: ${r.description}`);
+    throw new InviteError(reason);
+  }
+  await botCall(token, "unbanChatMember", { chat_id: invite.chatId, user_id: userId, only_if_banned: true });
+  await prisma.telegramInviteJoin.updateMany({
+    where: { id: joinId, removedAt: null },
+    data: { removedAt: new Date() },
+  });
+  logInfo("links:telegram", `удалён из группы вошедший по приглашению ${inviteId}`);
 }
 
 export type InviteStatus = "active" | "used" | "expired" | "revoked";
 
+/**
+ * «Действует» — пока ссылка не отозвана и не истекла, даже если входов уже
+ * столько, сколько задумано: Telegram считает людей В ГРУППЕ, а не входы, и
+ * ссылка, которую бот не смог погасить сам, всё ещё пускает. Кнопка «Отозвать»
+ * в таком случае обязана быть на экране.
+ */
 export function inviteStatus(
   invite: { revokedAt: Date | null; expiresAt: Date | null; memberLimit: number | null; joinedCount: number },
   now = new Date(),
 ): InviteStatus {
-  if (invite.revokedAt) return "revoked";
-  if (invite.memberLimit != null && invite.joinedCount >= invite.memberLimit) return "used";
+  const full = invite.memberLimit != null && invite.joinedCount >= invite.memberLimit;
+  if (invite.revokedAt) return full ? "used" : "revoked";
   if (invite.expiresAt && invite.expiresAt <= now) return "expired";
   return "active";
 }
 
 export async function listPanelInvites(take = 200) {
   const rows = await prisma.telegramInvite.findMany({ orderBy: { createdAt: "desc" }, take });
+  const joins = rows.length
+    ? await prisma.telegramInviteJoin.findMany({
+        where: { inviteId: { in: rows.map((r) => r.id) } },
+        orderBy: { joinedAt: "asc" },
+      })
+    : [];
+  const joinsOf = new Map<string, typeof joins>();
+  for (const j of joins) joinsOf.set(j.inviteId, [...(joinsOf.get(j.inviteId) ?? []), j]);
   const contactIds = [...new Set(rows.map((r) => r.contactId).filter((id): id is string => Boolean(id)))];
   const contacts = contactIds.length
     ? await prisma.contact.findMany({
@@ -281,24 +342,55 @@ export async function listPanelInvites(take = 200) {
     expiresAt: r.expiresAt,
     createdAt: r.createdAt,
     status: inviteStatus(r),
+    joins: (joinsOf.get(r.id) ?? []).map((j) => ({
+      id: j.id,
+      name: [j.name, j.username ? `@${j.username}` : null].filter(Boolean).join(" ") || `Telegram ${j.telegramUserId}`,
+      joinedAt: j.joinedAt,
+      removed: Boolean(j.removedAt),
+    })),
   }));
 }
+
+export type JoinedUser = { id?: number; first_name?: string; last_name?: string; username?: string };
 
 /**
  * Вход в группу по ссылке из панели (событие chat_member, groupAccess.ts).
  * true — ссылка наша, тревога «непонятный вход» не нужна.
  */
-export async function recordPanelInviteJoin(link: string, telegramUserId: number, joined: boolean): Promise<boolean> {
+export async function recordPanelInviteJoin(link: string, user: JoinedUser, joined: boolean): Promise<boolean> {
   const invite = await prisma.telegramInvite.findUnique({ where: { inviteLink: link } }).catch((err) => {
     logError("links:join", err);
     return null;
   });
   if (!invite) return false;
-  if (!joined) return true;
+  if (!joined || user.id == null) return true;
+  const telegramUserId = user.id;
   const now = new Date();
-  await prisma.telegramInvite
+  const counted = await prisma.telegramInvite
     .update({ where: { id: invite.id }, data: { joinedCount: { increment: 1 }, lastJoinedAt: now } })
-    .catch((err) => logError("links:joinCount", err));
+    .catch((err) => {
+      logError("links:joinCount", err);
+      return null;
+    });
+  // КТО вошёл — чтобы по общей ссылке (на 5 или 20 человек) хозяйка видела
+  // людей и могла выгнать лишнего. Только то, что Telegram сам прислал.
+  await prisma.telegramInviteJoin
+    .create({
+      data: {
+        inviteId: invite.id,
+        telegramUserId: String(telegramUserId),
+        name: [user.first_name, user.last_name].filter(Boolean).join(" ").slice(0, 80) || null,
+        username: user.username?.slice(0, 64) ?? null,
+      },
+    })
+    .catch((err) => logError("links:joinWho", err));
+  // Набрали задуманное число входов — гасим ссылку сами. member_limit в
+  // Telegram — это сколько человек В ГРУППЕ одновременно: вышедший освобождает
+  // место, и без отзыва ссылку можно было бы переслать дальше.
+  const joinedCount = counted?.joinedCount ?? invite.joinedCount + 1;
+  if (invite.memberLimit != null && joinedCount >= invite.memberLimit && !invite.revokedAt) {
+    await revokePanelInvite(invite.id).catch((err) => logError("links:autoRevoke", err));
+  }
   // Связываем Telegram с карточкой только для ссылки на ОДИН вход: по ссылке на
   // пятерых первым мог войти кто угодно из пяти.
   if (invite.contactId && invite.memberLimit === 1) {
