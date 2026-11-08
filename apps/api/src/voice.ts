@@ -53,3 +53,23 @@ export function dropTrailingDots(text: string): string {
 export function toOwnerVoice(text: string): string {
   return dropTrailingDots(feminizeEmoji(text));
 }
+
+/**
+ * Редкая «живая» теплота в свободных ответах бота (решение владельца 08.11.2026:
+ * «редко, как у Ширин»). Сама она ставит ❤️ 🌸 💚 примерно в каждом восьмом
+ * сообщении (замер по её настоящим текстам, 23 из 186). Общая чистка
+ * cleanAutomatedReply убирает все смайлики, поэтому тут — отдельный, строго
+ * ограниченный шаг ПОСЛЕ неё: только на коротких тёплых репликах, без цифр,
+ * ссылок и вопроса в конце. Выбор детерминированный (по тексту), без случайности.
+ */
+const WARM = ["❤️", "🌸", "💚"];
+export function maybeWarmEmoji(text: string): string {
+  const t = text.trim();
+  if (!t || t.length > 140) return text;
+  if (/[0-9]|https?:|www\.|[?？]\s*$/u.test(t)) return text;
+  if (/\p{Extended_Pictographic}/u.test(t)) return text;
+  let h = 0;
+  for (const ch of t) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
+  if (h % 8 !== 0) return text;
+  return t + " " + WARM[(h >>> 3) % WARM.length];
+}

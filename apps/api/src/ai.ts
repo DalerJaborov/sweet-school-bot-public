@@ -35,6 +35,8 @@ import { ownedCourses, COURSE_TITLE, COURSE_50, COURSE_70 } from "./courses.js";
 import { buildInsightsBlock } from "./nightlyLearning.js";
 import { buildObjectionsBlock } from "./ai/objectionLibrary.js";
 import { maybeRestoreAccess } from "./course/recovery.js";
+import { maybeWarmEmoji } from "./voice.js";
+import { passesRelevanceGate } from "./ai/relevanceGate.js";
 import type { Contact } from "@prisma/client";
 
 
@@ -233,6 +235,10 @@ export async function aiReply(
   const primaryKey = apiKeys[0];
 
   const language = detectClientLanguage(text);
+
+  // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
+  // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
+  if (!(await passesRelevanceGate(contact, text, attachments, images.length > 0, language))) return;
 
   // «Я отправила чек» — а картинки в сообщении нет и в этот ход ничего не
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
@@ -458,6 +464,8 @@ export async function aiReply(
         }
       }
       if (replyText) replyText = cleanAutomatedReply(replyText);
+      // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
+      if (replyText && !replyText.includes("---")) replyText = maybeWarmEmoji(replyText);
     }
     if (replyText) {
       try {
