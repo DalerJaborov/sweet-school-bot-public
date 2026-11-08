@@ -171,6 +171,28 @@ describe("maybeRestoreAccess", () => {
     expect(alert).toContain("Android");
   });
 
+  it("доказательство отдельным сообщением: бот просил чек, пришла одна картинка без текста — перенос делается", async () => {
+    const asker = { ...contact, id: "c-await" } as unknown as Contact;
+    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1", contactId: "c-await" })]);
+    db.model("receiptCheck").count.mockResolvedValue(0);
+    db.model("purchase").count.mockResolvedValue(1);
+    db.model("device").findMany.mockResolvedValue([{ id: "old-1", userAgent: "Android", lastCity: null, lastSeenAt: new Date("2026-11-07") }]);
+
+    const first = await maybeRestoreAccess(asker, "я сменила телефон");
+    expect(first).toMatchObject({ handled: true, outcome: "escalated" });
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    const second = await maybeRestoreAccess(asker, "", ["hash-1"]);
+    expect(second).toMatchObject({ handled: true, outcome: "reissued" });
+    expect(db.model("device").deleteMany).toHaveBeenCalled();
+  });
+
+  it("таджикская фраза с экрана «телефонамро иваз кардам» распознаётся как просьба", () => {
+    expect(looksLikeAccessRequest("телефонамро иваз кардам")).toBe(true);
+    expect(looksLikeAccessRequest("поменяла телефон")).toBe(true);
+  });
+
   it("смена телефона без следа оплаты в базе — только к владельцу, без переноса", async () => {
     db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
     db.model("receiptCheck").count.mockResolvedValue(0);

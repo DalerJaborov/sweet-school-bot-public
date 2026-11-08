@@ -25,6 +25,19 @@ import type { Contact } from "@prisma/client";
  * по нему повторно не выдаётся, разбор чеков (receiptVerdict) не меняется.
  */
 
+/** Бот попросил доказательство: ответ (код, картинка, имя с номером) в течение суток разбираем как продолжение. */
+const AWAIT_PROOF_MS = 24 * 3_600_000;
+const awaiting = new Map<string, number>();
+export function isAwaitingProof(contactId: string): boolean {
+  const until = awaiting.get(contactId);
+  if (!until) return false;
+  if (until < Date.now()) {
+    awaiting.delete(contactId);
+    return false;
+  }
+  return true;
+}
+
 export type ProofKind = "link_code" | "receipt" | "name_phone";
 export type PhoneChangeOutcome = "changed" | "no_proof" | "limit" | "send_failed" | "no_link";
 
@@ -167,7 +180,8 @@ export async function performPhoneChange(
   const text = (kind === "owner" ? TEXT[lang(fresh)].approved : TEXT[lang(fresh)].changed) + url;
   let delivered = false;
   try {
-    const mid = await sendToContact(fresh, text);
+    // Нажатие владельца — его решение: пауза бота и «ответила Ширин сама» не мешают.
+    const mid = await sendToContact(fresh, text, [], kind === "owner" ? { byHuman: true } : {});
     if (mid) {
       await recordOutgoingMessage(fresh.id, text, mid);
       delivered = true;
@@ -215,6 +229,7 @@ export async function handlePhoneChange(
   const proof = await phoneChangeProof(contact, text, imageHashes);
   if (!proof) {
     await replyTo(contact, TEXT[language].noProof);
+    awaiting.set(contact.id, Date.now() + AWAIT_PROOF_MS);
     await askOwner(
       contact,
       "просит сменить телефон, доказательств нет (ни кода ссылки, ни её чека, ни имени с номером)",
@@ -226,13 +241,14 @@ export async function handlePhoneChange(
     await askOwner(contact, `просит сменить телефон ещё раз в этом месяце (доказательство: ${PROOF_NAME[proof]})`);
     return "limit";
   }
+  awaiting.delete(contact.id);
   const done = await performPhoneChange(contact, "bot");
   if (done === "changed") {
     await notifyOwner(contact, `бот перенёс доступ на новый телефон (доказательство: ${PROOF_NAME[proof]})`);
     return "changed";
   }
   await replyTo(contact, TEXT[language].failed);
-  await askOwner(contact, "доказательство есть, но ссылку на новый телефон отправить не удалось");
+  await askOwner(contact, "доказательство есть, но ссылку на новый телефон отправить не удалось", "failed");
   return done;
 }
 
@@ -267,10 +283,10 @@ async function devicesNow(contactId: string): Promise<string> {
 }
 
 /** Карточка владельцу с кнопкой «Разрешить перенос». */
-async function askOwner(contact: Contact, what: string): Promise<void> {
+async function askOwner(contact: Contact, what: string, key = "ask"): Promise<void> {
   const chat = await ownerChat();
   if (!chat) return;
-  if (!(await shouldSendAlert(`phone-change:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
+  if (!(await shouldSendAlert(`phone-change:${key}:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
   const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "переносов не было";
   await sendTelegramMessage(
     chat.botToken,

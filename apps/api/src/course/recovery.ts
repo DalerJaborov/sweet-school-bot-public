@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
-import { handlePhoneChange } from "./phoneChange.js";
+import { handlePhoneChange, isAwaitingProof } from "./phoneChange.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
@@ -51,7 +51,7 @@ const WINDOW_DAYS = 30;
  */
 const ACCESS_SUBJECT = /(ссылк|доступ|кабинет|курс|урок[иов]*|линк|дастрас|дарс)/iu;
 const ACCESS_PROBLEM = /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
-const NEW_DEVICE = /(смен(ил|ила)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав)/iu;
+const NEW_DEVICE = /(смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
@@ -111,7 +111,9 @@ export async function maybeRestoreAccess(
   imageHashes: string[] = []
 ): Promise<RecoveryResult> {
   if (await isBotFrozen()) return { handled: false };
-  if (!looksLikeAccessRequest(text)) return { handled: false };
+  // Бот уже просил доказательство смены телефона: код, картинка или имя с номером — продолжение.
+  const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
+  if (!waiting && !looksLikeAccessRequest(text)) return { handled: false };
 
   // Код из ссылки: покупка могла быть сделана в другом чате. Бот выдаёт ссылку
   // САМ только когда код указывает на ЭТОТ ЖЕ контакт; на чужой — только владельцу.
@@ -152,7 +154,7 @@ export async function maybeRestoreAccess(
   // Смена телефона — отдельный путь с доказательством (phoneChange.ts): простая
   // ссылка устройства не снимает, перенос делает только бот и только при
   // совпавших данных, не чаще раза в 30 дней.
-  if (DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text)) {
+  if (waiting || DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text)) {
     if (!paidProof || (await deliveryModeFor(contact)) === "telegram") {
       await reply(contact, TEXTS[language].pending);
       await tellOwner(contact, paidProof ? "просит сменить телефон, но выдача идёт через Telegram-группу" : "просит сменить телефон, но чека в базе нет", active.length, 0);

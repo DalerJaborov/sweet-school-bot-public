@@ -625,7 +625,9 @@ export function samePhoneVerdict(
   // та же сеть недавно — тот же телефон; иначе отпечаток аппарата уже не
   // совпал, и это другой телефон.
   const fresh = Date.now() - known.lastSeenAt.getTime() < SAME_NET_WINDOW_MS;
-  return sameNet && fresh ? "same" : "different";
+  // Не «same»: модель телефона неизвестна, значит это может быть и чужой
+  // телефон в той же сети (дом, офис). Пускаем (сомнение = пускаем), владельцу сводка.
+  return sameNet && fresh ? "unsure" : "different";
 }
 
 async function alertUnsurePhone(contact: Contact, device: Device): Promise<void> {
