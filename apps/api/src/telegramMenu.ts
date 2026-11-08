@@ -8,6 +8,7 @@ import {
   type SiteTarget, type SiteLang, type SiteSource,
 } from "./links/siteLinks.js";
 import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "./courses.js";
+import { createOffer, findPeople, getPerson, issueOwnerLink, REASON_TEXT, takeOffer, type Person } from "./course/ownerLink.js";
 
 /**
  * МЕНЮ БЫСТРЫХ ДЕЙСТВИЙ В TELEGRAM (08.11.2026) — для владельца и сестры.
@@ -205,6 +206,123 @@ async function handleLinkStep(botToken: string, chatId: string, data: string): P
   return false;
 }
 
+
+// ---------- «Выдать доступ»: человек → «В Telegram» / «На сайт» → ссылка ----------
+
+const coursesText = (p: Person) => p.courses.map((c) => COURSE_SHORT[c] ?? c).join(", ");
+const personLabel = (p: Person) => `${p.handle}${p.name ? ` · ${p.name}` : ""}`;
+
+/** Что человеку приходит вместе с кнопкой «Переслать»: коротко, по-русски и по-таджикски. */
+function shareButton(url: string): Record<string, unknown> {
+  const text = "Ваша личная ссылка на уроки Ширин. Линки шахсии шумо ба дарсҳои Ширин.";
+  return {
+    inline_keyboard: [
+      [{ text: "📤 Переслать человеку", url: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}` }],
+    ],
+  };
+}
+
+async function sendChoice(botToken: string, chatId: string, p: Person): Promise<void> {
+  const n = createOffer(p.id);
+  await sendWithMarkup(botToken, chatId, `${personLabel(p)}
+Курсы: ${coursesText(p)}
+
+Куда выдать личную ссылку?`, {
+    inline_keyboard: [
+      [
+        { text: "✈️ В Telegram", callback_data: `mn:ik:${n}:t` },
+        { text: "🌐 На сайт", callback_data: `mn:ik:${n}:w` },
+      ],
+    ],
+  });
+}
+
+/** Ответ на вопрос «Кому выдать доступ?»: нашли одного — сразу выбор канала, нескольких — список. */
+async function offerPeople(botToken: string, chatId: string, query: string): Promise<void> {
+  const people = await findPeople(query);
+  if (people.length === 0) {
+    await sendTelegramMessage(
+      botToken,
+      chatId,
+      `Не нашла «${query.trim()}» среди тех, у кого есть оплаченный курс.
+
+Попробуйте ник из переписки или имя ученицы.`,
+    );
+    return;
+  }
+  if (people.length === 1) {
+    await sendChoice(botToken, chatId, people[0]);
+    return;
+  }
+  await sendWithMarkup(botToken, chatId, "Нашла нескольких. Кому выдать?", {
+    inline_keyboard: people.map((p) => [{ text: personLabel(p).slice(0, 60), callback_data: `mn:ip:${createOffer(p.id)}` }]),
+  });
+}
+
+/** Нажатия «mn:ip:» (выбор человека) и «mn:ik:» (выбор Telegram/сайт). Каждая карточка — одно нажатие и 15 минут. */
+async function handleGrantStep(botToken: string, queryId: string, chatId: string, data: string): Promise<boolean> {
+  const stale = "Карточка устарела или уже использована. Найдите человека заново.";
+  const pick = /^mn:ip:([0-9a-f]{12})$/.exec(data);
+  if (pick) {
+    const person = await getPerson(takeOffer(pick[1]) ?? "");
+    if (!person) {
+      await answerCallback(botToken, queryId, stale);
+      return true;
+    }
+    await answerCallback(botToken, queryId, "");
+    await sendChoice(botToken, chatId, person);
+    return true;
+  }
+  const go = /^mn:ik:([0-9a-f]{12}):([tw])$/.exec(data);
+  if (!go) return false;
+  const contactId = takeOffer(go[1]);
+  if (!contactId) {
+    await answerCallback(botToken, queryId, stale);
+    return true;
+  }
+  const kind = go[2] === "t" ? "telegram" : "web";
+  await answerCallback(botToken, queryId, "Готовлю ссылку");
+  const person = await getPerson(contactId);
+  const who = person ? personLabel(person) : "ученицы";
+  const result = await issueOwnerLink(contactId, kind).catch((err) => {
+    logError("telegramMenu:issueLink", err);
+    return null;
+  });
+  if (!result) {
+    await sendTelegramMessage(botToken, chatId, "Не получилось выдать ссылку. Загляните в журнал ошибок в панели.");
+  } else if (!result.ok) {
+    await sendTelegramMessage(botToken, chatId, REASON_TEXT[result.reason]);
+  } else if (result.kind === "web") {
+    const body =
+      `🌐 Ссылка на сайт для ${who}
+
+${result.url}
+
+` +
+      "Она личная: откроется на первом телефоне, где её нажмут, пересылать дальше нельзя. " +
+      "Прошлая ссылка с этой минуты не работает.";
+    // Прошлая ссылка уже погашена: если сообщение не ушло, повторяем без кнопки, а не теряем ссылку.
+    if (!(await sendWithMarkup(botToken, chatId, body, shareButton(result.url)))) {
+      await sendTelegramMessage(botToken, chatId, body);
+    }
+  } else {
+    for (const l of result.links) {
+      const body =
+        `✈️ Приглашение в группу для ${who}
+${COURSE_SHORT[l.course] ?? l.course}
+
+${l.url}
+
+` +
+        "Одно приглашение — один человек, действует 30 дней. Прежнее неиспользованное приглашение этой ученицы не работает.";
+      if (!(await sendWithMarkup(botToken, chatId, body, shareButton(l.url)))) {
+        await sendTelegramMessage(botToken, chatId, body);
+      }
+    }
+  }
+  return true;
+}
+
 /** true — сообщение было командой меню и обработано; дальше его вести не нужно. */
 export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
   const text = (message.text ?? "").trim();
@@ -250,9 +368,10 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
     return true;
   }
   if (answeringGrant) {
-    // Выдача — тем же путём, что команда «/ссылка @ник» (новая ссылка, старая гаснет).
-    const { handleManualLinkCommand } = await import("./course/manualLink.js");
-    await handleManualLinkCommand({ ...message, text: `/ссылка ${text}` });
+    await offerPeople(botToken, chatId, text).catch(async (err) => {
+      logError("telegramMenu:grantSearch", err);
+      await send("Не получилось найти. Загляните в журнал ошибок в панели.");
+    });
     return true;
   }
   if (text === BTN_PAYMENTS) {
@@ -260,9 +379,9 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
     return true;
   }
   if (text === BTN_FIND || text === BTN_GRANT) {
-    await sendWithMarkup(botToken, chatId, text === BTN_FIND ? PROMPT_FIND : PROMPT_GRANT, {
+    await sendWithMarkup(botToken, chatId, text === BTN_FIND ? PROMPT_FIND : `${PROMPT_GRANT} или именем`, {
       force_reply: true,
-      input_field_placeholder: "@ник",
+      input_field_placeholder: text === BTN_FIND ? "@ник" : "ник или имя",
     });
     return true;
   }
@@ -296,6 +415,10 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
   if (query.id && chatId && /^mn:l[tls]:/.test(query.data ?? "")) {
     await answerCallback(botToken, query.id, "");
     await handleLinkStep(botToken, chatId, query.data ?? "").catch((err) => logError("telegramMenu:siteLink", err));
+    return;
+  }
+  if (query.id && chatId && /^mn:i[pk]:/.test(query.data ?? "")) {
+    await handleGrantStep(botToken, query.id, chatId, query.data ?? "").catch((err) => logError("telegramMenu:grant", err));
     return;
   }
   const approve = /^mn:tr:([0-9a-f-]{36})$/.exec(query.data ?? "");
