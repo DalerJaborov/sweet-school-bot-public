@@ -1,5 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { freeLessonCopy, type Lang } from "./i18n";
+import { FreeLessonShowcase } from "./FreeLessonShowcase";
 import type { RecipeCardData } from "../course/api";
 const Video = lazy(() => import("./FreeLessonVideo"));
 const BASE = "/api/v1/free-lesson";
@@ -26,6 +27,7 @@ export function FreeLesson({ lang }: { lang: Lang }) {
   const [content, setContent] = useState<Content | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [ended, setEnded] = useState(false);
   useEffect(() => {
     let active = true;
     fetch(BASE)
@@ -84,8 +86,13 @@ export function FreeLesson({ lang }: { lang: Lang }) {
       {content ? (
         <div>
           <Suspense fallback={<p role="status">{t.loading}</p>}>
-            <Video lang={lang} title={content.title} src={content.manifestUrl} />
+            <Video lang={lang} title={content.title} src={content.manifestUrl} onEnded={() => setEnded(true)} />
           </Suspense>
+          {ended && (
+            <p className="free-ended">
+              <a href="#free-showcase">{t.ended}</a>
+            </p>
+          )}
           <h3>{t.recipe}</h3>
           {content.recipeData ? (
             content.recipeData.components.map((group, index) => (
@@ -124,6 +131,7 @@ export function FreeLesson({ lang }: { lang: Lang }) {
           </button>
         </form>
       )}
+      {content && <FreeLessonShowcase lang={lang} />}
     </section>
   );
 }

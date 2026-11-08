@@ -35,12 +35,15 @@ export class RelevanceRetry extends Error {
 async function isEstablished(contact: Contact): Promise<boolean> {
   if (contact.paid || contact.accessRevokedAt) return true;
   if ((await prisma.purchase.count({ where: { contactId: contact.id } })) > 0) return true;
-  // Уже признанный «по делу» — шлюз его не трогает дальше. Одно приветствие не в счёт:
-  // знакомый тоже пишет «салом», а следом уже что-то личное.
+  // Уже признанный «по делу» — шлюз его не трогает дальше.
   if ((await prisma.replyGate.count({ where: { contactId: contact.id, cls: "on_topic" } })) > 0) return true;
-  // Переписка, начавшаяся ДО шлюза (в журнале нет ни одной записи), — старый разговор, не новый человек.
-  if ((await prisma.replyGate.count({ where: { contactId: contact.id } })) > 0) return false;
-  return (await prisma.message.count({ where: { contactId: contact.id, direction: "OUT" } })) > 0;
+  // Мы (бот или Ширин) уже отвечали этому человеку, кроме уточняющих вопросов шлюза, — разговор идёт.
+  // Молчать на человека, которому уже отвечали, нельзя никогда (ревью 08.11.2026).
+  const [outs, clarifies] = await Promise.all([
+    prisma.message.count({ where: { contactId: contact.id, direction: "OUT" } }),
+    prisma.replyGate.count({ where: { contactId: contact.id, action: "clarify" } }),
+  ]);
+  return outs > clarifies;
 }
 
 async function journal(contact: Contact, text: string, v: RelevanceVerdict, action: RelevanceAction): Promise<void> {
@@ -120,6 +123,8 @@ export async function passesRelevanceGate(
     }
   }
   const hasMedia = attachments.length > 0;
+  // Файл без подписи (PDF, видео): не гадаем и не переспрашиваем «что вас интересует» — дальше решает обычный путь.
+  if (!body && hasMedia) return true;
 
   const recentRows = await prisma.message.findMany({
     where: { contactId: contact.id, text: { not: null } },
@@ -150,11 +155,7 @@ export async function passesRelevanceGate(
   }
 
   const clarifiedBefore = await prisma.replyGate.count({ where: { contactId: contact.id, action: "clarify" } });
-  // Мы уже отвечали этому человеку (кроме уточняющих вопросов шлюза) — идёт разговор,
-  // короткое «Хорошо» или «Ок» в нём не повод переспрашивать (ревью 08.11.2026).
-  const engaged = (await prisma.message.count({ where: { contactId: contact.id, direction: "OUT" } })) > clarifiedBefore;
   let action = decideAction(verdict, { clarifiedBefore });
-  if (verdict.cls === "unclear" && engaged) action = "reply";
   // «Нужен человек» есть только в списке WhatsApp. Instagram: после одного вопроса отвечаем как обычно,
   // молча пропадать хуже.
   if (action === "attention" && contact.channel !== "WHATSAPP") action = "reply";

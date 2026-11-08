@@ -47,6 +47,18 @@ docker compose up -d
 docker compose logs api --since 5m | grep ERROR
 ```
 
+**Всегда после пересоздания или перезапуска `api` перезапускай и `web`** (nginx держит старый адрес `api`, получается 502 на всё `/api/...`, был инцидент 08.11.2026):
+
+```bash
+docker compose up -d --force-recreate web
+curl -s -o /dev/null -w "%{http_code}
+" https://shirinsweets.online/api/v1/free-lesson   # должно быть 200
+curl -s -o /dev/null -w "%{http_code}
+" https://shirinsweets.online/panel/                # должно быть 200
+```
+
+Если любой из адресов дал 502 — сразу `docker compose restart web`.
+
 Две из трёх ошибок при выкладке 03.09.2026 не проявлялись ни в тестах, ни в
 типах — только в логе первого реального запуска.
 
