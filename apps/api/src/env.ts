@@ -17,6 +17,10 @@ export const env = {
   /// Пусто — ходим напрямую.
   igProxyBase: process.env.IG_PROXY_BASE ?? "",
   igProxyKey: process.env.IG_PROXY_KEY ?? "",
+  /// ElevenLabs: озвучка голосом Ширин (ai/voiceClone.ts). Пусто — функция выключена.
+  elevenLabsKey: process.env.ELEVENLABS_API_KEY ?? "",
+  elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID ?? "",
+  elevenLabsModel: process.env.ELEVENLABS_MODEL ?? "eleven_v3",
   /// Публичный адрес самого бота — нужен, чтобы собрать ссылку на загруженный файл
   /// (фото/видео шага воронки), которую сможет скачать сервер Meta.
   /// Без этого медиа-вложения в воронках не работают — Meta не может скачать файл.

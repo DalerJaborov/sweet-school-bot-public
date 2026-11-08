@@ -5,10 +5,25 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
-import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, withContactMessaging } from "./messaging/automation.js";
-import { guardOffTopic, guardReply, isGuardReply, isSilentKind, MAX_GUARD_REPLIES, MAX_RECIPE_REPLIES, ABOUT_COURSE, detectMenuQuestion } from "./ai/offTopicGuard.js";
+import {
+  isBotFrozen,
+  assertAutomationAllowed,
+  contactAutomationBlocked,
+  withContactMessaging,
+} from "./messaging/automation.js";
+import {
+  guardOffTopic,
+  guardReply,
+  isGuardReply,
+  isSilentKind,
+  MAX_GUARD_REPLIES,
+  MAX_RECIPE_REPLIES,
+  ABOUT_COURSE,
+  detectMenuQuestion,
+} from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
 import { maybeSendVideos } from "./ai/videoLibrary.js";
+import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
 import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
@@ -43,7 +58,6 @@ import { splitHumanLike, splitOptionsFor } from "./ai/replySplit.js";
 import { passesRelevanceGate } from "./ai/relevanceGate.js";
 import { reactInsteadOfReply } from "./ai/reactions.js";
 import type { Contact } from "@prisma/client";
-
 
 const TIMEOUT_MS = 60_000;
 /**
@@ -93,7 +107,6 @@ export function splitReplyParts(text: string): string[] {
   const head = parts.slice(0, MAX_REPLY_PARTS - 1);
   return [...head, parts.slice(MAX_REPLY_PARTS - 1).join(" ")];
 }
-
 
 /** Скачанная картинка вместе со всем, что нужно для разбора чека. */
 /** Сколько фото из одного сообщения проверяем как чек — больше трёх подряд не шлют. */
@@ -185,7 +198,7 @@ export async function aiReply(
   contact: Contact,
   text: string,
   attachments: Attachment[] = [],
-  rescuedImages: RescuedImage[] = []
+  rescuedImages: RescuedImage[] = [],
 ): Promise<void> {
   // ЭКСТРЕННАЯ ПАУЗА (владелец 13.09.2026): «всё, кроме воронки». Гасит и
   // выдачу ссылки на курс (maybeRestoreAccess ниже — обычно работает ДАЖЕ при
@@ -194,7 +207,7 @@ export async function aiReply(
   // aiReply и этой проверки не видит вовсе — её выключить нельзя тем же флагом.
   if ((await getSetting("botFrozen")) === "true" || contactAutomationBlocked(contact)) return;
 
-  if (text && await handleDeliveryChoiceReply(contact, text)) return;
+  if (text && (await handleDeliveryChoiceReply(contact, text))) return;
 
   // Побочный эффект, не влияющий на сам ответ: если человеку уже уходило
   // проверочное «как первый урок» (learningCheckIn.ts) и она хоть что-то
@@ -370,9 +383,7 @@ export async function aiReply(
   const imageQueue = [...images];
   for (const att of attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)) {
     const cached = att.kind === "image" ? imageQueue.shift() : null;
-    const downloaded = cached
-      ? { buffer: cached.buffer, mimeType: cached.mimeType }
-      : await fetchAttachment(att.url);
+    const downloaded = cached ? { buffer: cached.buffer, mimeType: cached.mimeType } : await fetchAttachment(att.url);
     if (!downloaded) continue;
     const part = await buildMediaPart(downloaded.buffer, downloaded.mimeType, primaryKey);
     if (!part) continue;
@@ -421,7 +432,7 @@ export async function aiReply(
           const keys = "file_data" in part ? [primaryKey] : apiKeys;
           const verdict = await checkReceipt(part, model, keys);
           return verdict ? { verdict, image } : null;
-        })
+        }),
       ).then(pickReceiptVerdict)
     : Promise.resolve(null);
 
@@ -436,10 +447,11 @@ export async function aiReply(
           contents,
           generationConfig: { thinkingConfig: thinkingConfigFor(m), maxOutputTokens: 500 },
         }),
-      timeout
+      timeout,
     ).then((r) => {
       if ("error" in r) void logAiCall({ endpoint: "ai-reply", ms: Date.now() - startedAt, ok: false });
-      else void logAiCall({ endpoint: "ai-reply", model: r.model, usage: r.usage, ms: Date.now() - startedAt, ok: true });
+      else
+        void logAiCall({ endpoint: "ai-reply", model: r.model, usage: r.usage, ms: Date.now() - startedAt, ok: true });
       return r;
     });
   };
@@ -459,7 +471,9 @@ export async function aiReply(
     // уже превращён в ошибку и направлен в очередь повторов.
     // Отправка обёрнута нарочно: отказ Meta (закрылось окно 24 ч, 429) не должен
     // уносить с собой разбор чека, который ждёт ниже — он дороже ответа.
-    let replyText = result.text ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate) : null;
+    let replyText = result.text
+      ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate)
+      : null;
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
       replyText = null;
@@ -468,13 +482,17 @@ export async function aiReply(
       const facts = await trustedSalesFacts();
       const issues = replyPolicyIssues(replyText, facts);
       if (issues.length) {
-        const fixed = await generate(prompt + `
-Исправьте ответ: ${issues.join(", ")}. Проверенные факты: ${facts}`);
+        const fixed = await generate(
+          prompt +
+            `
+Исправьте ответ: ${issues.join(", ")}. Проверенные факты: ${facts}`,
+        );
         replyText = "error" in fixed ? null : fixed.text;
         if (!replyText || replyPolicyIssues(replyText, facts).length || replyText.trim() === "[NO_REPLY]") {
           logWarn("ai:replyPolicy", `${contact.id}: held ${issues.join(",")}`);
           if ("error" in fixed) {
-            if (contact.channel === "WHATSAPP") deliveryFailure = new Error("WhatsAppGenerationRetry: correction unavailable");
+            if (contact.channel === "WHATSAPP")
+              deliveryFailure = new Error("WhatsAppGenerationRetry: correction unavailable");
             else await queuePendingAiReply(contact.id, text);
           } else deliveryFailure = new ReplyPolicyError(issues);
           replyText = null;
@@ -497,7 +515,17 @@ export async function aiReply(
           web: await getSetting("replySplitWeb"),
           maxParts: await getSetting("replySplitMaxParts"),
         });
-        for (const part of splitHumanLike(replyText, splitOpts)) {
+        const parts = splitHumanLike(replyText, splitOpts);
+        // Короткий тёплый ответ может уйти голосом (рубильник voiceReplyEnabled, по
+        // умолчанию выключен; правило и границы - ai/voiceReply.ts). Любая ошибка до отправки - текстом.
+        const sentAsVoice =
+          parts.length === 1 &&
+          (await trySendVoiceReply(
+            contact,
+            parts[0],
+            attachments.some((a) => a.kind === "audio"),
+          ));
+        for (const part of sentAsVoice ? [] : parts) {
           const mid = await sendToContact(contact, part);
           await recordOutgoingMessage(contact.id, part, mid);
         }
@@ -518,9 +546,13 @@ export async function aiReply(
   const firstImage = picked?.image ?? null;
   // Остальные фото сообщения (не выбранные) больше не чеки в очереди — иначе
   // фоновая перепроверка разобрала бы их отдельно и снова написала клиентке.
-  const otherQueued = imageParts.map((ip) => ip.image.queuedId).filter((id): id is string => Boolean(id) && id !== firstImage?.queuedId);
+  const otherQueued = imageParts
+    .map((ip) => ip.image.queuedId)
+    .filter((id): id is string => Boolean(id) && id !== firstImage?.queuedId);
   if (picked && otherQueued.length > 0) {
-    await prisma.receiptCheck.deleteMany({ where: { id: { in: otherQueued } } }).catch((err) => logError("ai:receiptVerdict:dropSiblings", err));
+    await prisma.receiptCheck
+      .deleteMany({ where: { id: { in: otherQueued } } })
+      .catch((err) => logError("ai:receiptVerdict:dropSiblings", err));
   }
   // ИИ не ответил вовсе (таймаут, кончился бюджет, сеть) — картинка уже лежит в
   // очереди (её положил rescueIncomingImages), фоновый разбор попробует ещё раз.
@@ -553,7 +585,7 @@ export async function aiReply(
         imageUrl: firstImage.url,
       },
       // Обновляем строку, которую создала страховка, а не плодим вторую.
-      firstImage.queuedId ?? undefined
+      firstImage.queuedId ?? undefined,
     ).catch((err) => logError("ai:receiptVerdict", err));
   } else if (verdict?.kind === "not_receipt" && firstImage?.queuedId) {
     // Это было не чеком (фото десерта, мем) — убираем из очереди, чтобы вкладка
@@ -575,7 +607,7 @@ export async function aiReply(
  * кнопок: человек просто спросил что-то под роликом, продавать ему нечего.
  */
 export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<void> {
-  if (await isBotFrozen() || contactAutomationBlocked(contact)) return;
+  if ((await isBotFrozen()) || contactAutomationBlocked(contact)) return;
   // Свой флаг, не aiEnabled — владелец 13.09.2026 попросил заглушить обычный
   // ИИ-ответ в директе, но оставить живыми ответы под комментариями; общий
   // флаг гасил бы оба сразу.
@@ -595,7 +627,9 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
     const guardedText = guardReply(verdict.kind, language);
-    await withContactMessaging(contact.id, "reply", () => sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact))).catch((err) => {
+    await withContactMessaging(contact.id, "reply", () =>
+      sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
+    ).catch((err) => {
       logError("ai:commentGuard:sendPrivateReply", err);
     });
     return;
@@ -634,14 +668,20 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
         // само по себе перехватывается, но лучше не упираться в лимит вообще).
         generationConfig: { thinkingConfig: thinkingConfigFor(m), maxOutputTokens: 900 },
       }),
-    TIMEOUT_MS
+    TIMEOUT_MS,
   );
   if ("error" in result) {
     logError("ai:commentReply", result.error);
     void logAiCall({ endpoint: "comment-reply", ms: Date.now() - startedAt, ok: false });
     return;
   }
-  void logAiCall({ endpoint: "comment-reply", model: result.model, usage: result.usage, ms: Date.now() - startedAt, ok: true });
+  void logAiCall({
+    endpoint: "comment-reply",
+    model: result.model,
+    usage: result.usage,
+    ms: Date.now() - startedAt,
+    ok: true,
+  });
   await recordAiCall(contact.id);
   if (!result.text) return;
 
@@ -652,7 +692,9 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     throw new ReplyPolicyError(issues);
   }
   const clean = cleanAutomatedReply(result.text);
-  const mid = await withContactMessaging(contact.id, "reply", () => sendPrivateReply(commentId, clean, [], metaChannelOf(contact)));
+  const mid = await withContactMessaging(contact.id, "reply", () =>
+    sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
+  );
   await recordOutgoingMessage(contact.id, clean, mid);
 }
 
@@ -720,7 +762,7 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
 Последнее сообщение: «${lastText.slice(0, 200)}»
 
 Бот замолчал, ждёт вас. Можно ответить одной из кнопок ниже — уйдёт клиенту сразу:`,
-    buttons
+    buttons,
   );
 }
 
@@ -768,7 +810,7 @@ async function enforceReplyLanguage(
   language: ClientLanguage,
   reply: string,
   prompt: string,
-  generate: (systemPrompt: string) => Promise<{ text: string | null } | { error: string }>
+  generate: (systemPrompt: string) => Promise<{ text: string | null } | { error: string }>,
 ): Promise<string> {
   const wrong = OPPOSITE[language];
   if (!wrong || !incoming.trim()) return reply;
@@ -776,12 +818,18 @@ async function enforceReplyLanguage(
 
   const retry = await generate(prompt + LANGUAGE_FIX[language as "ru" | "tg"]);
   if ("error" in retry || !retry.text) {
-    logWarn("ai:languageMismatch", `${contact.id}: ответ не на языке клиента (${language}), повтор не удался — отдаю как есть`);
+    logWarn(
+      "ai:languageMismatch",
+      `${contact.id}: ответ не на языке клиента (${language}), повтор не удался — отдаю как есть`,
+    );
     return reply;
   }
   await recordAiCall(contact.id);
   if (detectReplyLanguage(retry.text) === wrong) {
-    logWarn("ai:languageMismatch", `${contact.id}: ответ снова не на языке клиента (${language}) после повтора — отдаю повторный`);
+    logWarn(
+      "ai:languageMismatch",
+      `${contact.id}: ответ снова не на языке клиента (${language}) после повтора — отдаю повторный`,
+    );
   }
   return retry.text;
 }

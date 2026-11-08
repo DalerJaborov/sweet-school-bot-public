@@ -1,6 +1,6 @@
 import { cleanKeepingWarmTail } from "../ai/replyPolicy.js";
 import crypto from "node:crypto";
-import { prisma, WEB_MID_PREFIX } from "../db.js";
+import { prisma, WEB_MID_PREFIX, recordOutgoingMessage, logError } from "../db.js";
 import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
 import { stripRepeatGreeting } from "../greeting.js";
 import { toOwnerVoice } from "../voice.js";
@@ -81,7 +81,16 @@ export async function sendAttachmentToContact(
   await assertMessagingAllowed();
   const channel = channelOf(contact);
   if (channel === "WHATSAPP") return sendWhatsAppAttachment(contact, url, type);
-  if (channel !== "WEB") return sendAttachment(contact.igUserId, url, type, channel);
+  if (channel !== "WEB") {
+    const mid = await sendAttachment(contact.igUserId, url, type, channel);
+    // КРИТИЧНО: без записи mid эхо нашей же картинки (меню, фото воронки) вебхук
+    // принимает за ответ хозяйки из приложения и ставит «передано человеку» —
+    // бот замолкает для клиента навсегда (инцидент 08.11.2026, шаг воронки с
+    // картинкой). recordOutgoingMessage ещё и чинит ложную пометку, если эхо
+    // успело прийти раньше.
+    if (mid) await recordOutgoingMessage(contact.id, "", mid).catch((err) => logError("send:recordAttachment", err));
+    return mid;
+  }
   return type === "image"
     ? persistWebOutgoing(contact.id, { imageUrl: url })
     : persistWebOutgoing(contact.id, { text: url });

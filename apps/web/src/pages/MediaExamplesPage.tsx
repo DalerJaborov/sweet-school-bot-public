@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api } from "../api";
+import { useEffect, useState } from "react";
+import { api, uploadLibraryFile } from "../api";
 import { EmptyState } from "../components/Illustrations";
 import { Icons } from "../components/Brand";
 import { Lightbox } from "../components/Lightbox";
@@ -24,7 +24,8 @@ type MediaExample = {
   studentText: string;
   ownerText: string;
   mediaUrl: string;
-  mediaType: "audio" | "image" | "video";
+  mediaType: "audio" | "image" | "video" | "file";
+  source?: string;
   approvedForReuse: boolean;
   createdAt: string;
 };
@@ -36,11 +37,114 @@ const POOL_LABEL: Record<Pool, string> = {
 
 function MediaPreview({ url, type, onZoom }: { url: string; type: MediaExample["mediaType"]; onZoom: () => void }) {
   if (type === "audio") return <audio controls src={url} className="media-preview-player" />;
+  if (type === "file") return <a className="btn small ghost" href={url} target="_blank" rel="noreferrer">Открыть PDF</a>;
   if (type === "video") return <video controls src={url} className="media-preview-player" style={{ borderRadius: 8 }} />;
   // Раньше .thumb был кликабелен только визуально (курсор zoom-in из общего
   // стиля), а обработчика открыть во весь экран не было вообще — владелец
   // жаловался «фотографии не открываются». Тот же лайтбокс, что у чеков.
   return <img className="thumb" src={url} alt="" loading="lazy" onClick={onZoom} />;
+}
+
+/** Загрузка своего файла и озвучка текста голосом Ширин. */
+function LibraryAdd({ onAdded }: { onAdded: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [caption, setCaption] = useState("");
+  const [keywords, setKeywords] = useState("");
+  const [approved, setApproved] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  type VoiceStatus = { voiceConfigured: boolean; voiceEnabled: boolean; voiceSwitch: boolean; voiceReplySwitch: boolean; maxVoiceText: number };
+  const [voice, setVoice] = useState<VoiceStatus | null>(null);
+  const [speech, setSpeech] = useState("");
+
+  useEffect(() => {
+    api<VoiceStatus>("/admin/media-library/status")
+      .then(setVoice)
+      .catch(() => setVoice(null));
+  }, []);
+
+  async function add() {
+    if (!file) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await uploadLibraryFile(file, caption, keywords, approved);
+      setFile(null);
+      setCaption("");
+      setKeywords("");
+      setMsg({ ok: true, text: "Файл добавлен в библиотеку" });
+      onAdded();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Не удалось загрузить" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function flipSwitch(key: "voiceCloneEnabled" | "voiceReplyEnabled", next: boolean) {
+    try {
+      await api("/admin/settings", { method: "PUT", body: { [key]: String(next) } });
+      const fresh = await api<VoiceStatus>("/admin/media-library/status");
+      setVoice(fresh);
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Не удалось переключить" });
+    }
+  }
+
+  async function speak() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api("/admin/media-library/synthesize", { method: "POST", body: { text: speech, keywords } });
+      setSpeech("");
+      setMsg({ ok: true, text: "Озвучка готова — прослушайте её ниже и нажмите «Одобрить», если всё хорошо" });
+      onAdded();
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Не удалось озвучить" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <h3>Добавить в библиотеку</h3>
+      <p className="hint">
+        Фото, видео (mp4), голосовое или PDF до 8 МБ. В «словах» через пробел напишите, о чём спрашивают клиенты
+        («цена курс оплата»): по ним бот находит файл.
+      </p>
+      <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,audio/mpeg,audio/mp4,audio/ogg,audio/aac,application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <input className="input" placeholder="Подпись (необязательно)" value={caption} maxLength={1000} onChange={(e) => setCaption(e.target.value)} style={{ marginTop: 8 }} />
+      <input className="input" placeholder="Слова для подбора: курс цена оплата" value={keywords} maxLength={500} onChange={(e) => setKeywords(e.target.value)} style={{ marginTop: 8 }} />
+      <label style={{ display: "block", marginTop: 8 }}>
+        <input type="checkbox" checked={approved} onChange={(e) => setApproved(e.target.checked)} /> Сразу разрешить боту отправлять
+      </label>
+      <button className="btn wide" style={{ marginTop: 8 }} disabled={!file || busy} onClick={add}>
+        {busy ? "Загружаю…" : "Добавить"}
+      </button>
+      {voice?.voiceConfigured && (
+        <div style={{ marginTop: 16 }}>
+          <h3>Озвучить голосом Ширин</h3>
+          <p className="hint">
+            Короткая реплика (до {voice.maxVoiceText} знаков). Озвучка попадает в список неодобренной: сначала вы её слушаете,
+            потом решаете, можно ли боту её отправлять.
+            {!voice.voiceEnabled && " Сейчас озвучка выключена в настройках."}
+          </p>
+          <label style={{ display: "block", marginBottom: 6 }}>
+            <input type="checkbox" checked={voice.voiceSwitch} onChange={(e) => void flipSwitch("voiceCloneEnabled", e.target.checked)} /> Озвучка голосом Ширин включена
+          </label>
+          <label style={{ display: "block", marginBottom: 8 }}>
+            <input type="checkbox" checked={voice.voiceReplySwitch} onChange={(e) => void flipSwitch("voiceReplyEnabled", e.target.checked)} /> Бот сам отвечает голосом на короткие тёплые сообщения
+          </label>
+          <textarea className="input" rows={3} value={speech} maxLength={voice.maxVoiceText} onChange={(e) => setSpeech(e.target.value)} placeholder="Что должна сказать Ширин" />
+          <button className="btn wide" style={{ marginTop: 8 }} disabled={!speech.trim() || busy || !voice.voiceEnabled} onClick={speak}>
+            Озвучить
+          </button>
+        </div>
+      )}
+      {msg && <div className={msg.ok ? "msg" : "msg err"} style={{ marginTop: 8 }}>{msg.text}</div>}
+    </div>
+  );
 }
 
 export function MediaExamplesPage() {
@@ -83,6 +187,8 @@ export function MediaExamplesPage() {
   }
 
   return (
+    <>
+    <LibraryAdd onAdded={load} />
     <div className="card">
       <h2>{Icons.media} Фото и видео для ответов</h2>
       <p className="hint">
@@ -105,7 +211,7 @@ export function MediaExamplesPage() {
                   <div className="funnel-meta">Вопрос: {r.studentText || "—"}</div>
                   {r.ownerText && <div style={{ marginTop: 4 }}>{r.ownerText}</div>}
                   <div className="list-chips" style={{ marginTop: 6 }}>
-                    <span className="chip">{POOL_LABEL[r.pool]}</span>
+                    <span className="chip">{r.source === "LIBRARY" ? "библиотека" : POOL_LABEL[r.pool]}</span>
                     {r.approvedForReuse && <span className="chip chip-ok">одобрено</span>}
                   </div>
                 </div>
@@ -131,5 +237,6 @@ export function MediaExamplesPage() {
 
       <Lightbox src={zoom} label="Фото целиком" alt="Фото целиком, увеличено" onClose={() => setZoom(null)} />
     </div>
+    </>
   );
 }
