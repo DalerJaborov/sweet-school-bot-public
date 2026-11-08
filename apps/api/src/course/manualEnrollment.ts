@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { env } from "../env.js";
-import { issueMagicLink, looksLikeShortCode, LINK_TTL_DAYS } from "./access.js";
+import { issueMagicLink, looksLikeShortCode, linkExpired, LINK_RESEND_MIN_LEFT_MS } from "./access.js";
 import { getPrices } from "../services/priceService.js";
 
 const CODES = ["COURSE50", "COURSE70"] as const;
@@ -97,14 +97,15 @@ manualEnrollmentRouter.post("/admin/manual-enrollments", async (req, res, next) 
         throw new EnrollmentConflict(
           "Доступ этой ученицы отозван или заблокирован. Сначала проверьте её карточку; автоматическое восстановление запрещено.",
         );
+      // Ссылку, которой жить меньше суток, не отдаём так же, как просроченную:
+      // хозяйка перешлёт её, а ученица откроет завтра и упрётся в «устарела».
       if (
         existing?.accessTokenId &&
         (!looksLikeShortCode(existing.accessTokenId) ||
-          !existing.accessIssuedAt ||
-          Date.now() - existing.accessIssuedAt.getTime() > LINK_TTL_DAYS * 86_400_000)
+          linkExpired(existing.accessIssuedAt, LINK_RESEND_MIN_LEFT_MS))
       ) {
         throw new EnrollmentConflict(
-          "Существующая ссылка устарела. Откройте карточку ученицы и перевыдайте ссылку явно.",
+          "Ссылка ученицы устарела или истекает в ближайшие сутки. Откройте её карточку и нажмите «Новая ссылка».",
         );
       }
       const purchases = existing ? await tx.purchase.findMany({ where: { contactId: existing.id } }) : [];

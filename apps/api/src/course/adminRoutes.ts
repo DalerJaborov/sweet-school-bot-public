@@ -28,6 +28,7 @@ import { resetTodayCache } from "../today.js";
 import { softDeleteLesson, restoreLesson, listTrash, vacateTrashedOrder } from "./lessonTrash.js";
 import { createVideoChunkRouter } from "./videoChunks.js";
 import { issuePreviewTicket } from "./preview.js";
+import { recordAccessEvent, releaseDevice, DeviceBlockedError } from "./access.js";
 
 /**
  * АДМИНКА ПЛАТФОРМЫ — курсы, уроки, видео, рецепты, устройства и вопросы.
@@ -719,17 +720,45 @@ courseAdminRouter.post("/admin/course-devices/:id", async (req, res) => {
     return;
   }
   try {
-    await prisma.device.update({
+    const device = await prisma.device.update({
       where: { id: req.params.id },
       data: parsed.data.blocked
         ? { blockedAt: new Date(), blockedReason: parsed.data.reason ?? "Заблокировано владельцем" }
         : { blockedAt: null, blockedReason: null },
     });
+    await recordAccessEvent(device, parsed.data.blocked ? "blocked" : "unblocked", "owner");
     res.json({ ok: true });
   } catch (err) {
     logError("courseAdmin:device", err);
     res.status(404).json({ error: "Устройство не найдено" });
   }
+});
+
+/**
+ * «ОСВОБОДИТЬ МЕСТО» (08.11.2026). До этого у владельца были только
+ * «Заблокировать» и «Разблокировать» — а заблокированное устройство место
+ * ЗАНИМАЕТ, и ученице с новым телефоном помочь из панели было нечем. Идёт через
+ * releaseDevice: устройство удаляется, событие пишется в журнал (actor owner);
+ * заблокированное не освобождается (409 «сначала разблокируйте»). Ссылка при
+ * этом НЕ меняется, ротация ссылки — только в переносе через бота и кнопку
+ * «Разрешить перенос» (phoneChange.ts). Права — как у всей панели.
+ */
+courseAdminRouter.post("/admin/course-devices/:id/release", async (req, res) => {
+  const device = await prisma.device.findUnique({ where: { id: req.params.id } });
+  if (!device) {
+    res.status(404).json({ error: "Устройство не найдено — возможно, место уже освобождено" });
+    return;
+  }
+  try {
+    await releaseDevice(device, "owner");
+  } catch (err) {
+    if (err instanceof DeviceBlockedError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+  res.json({ ok: true });
 });
 
 /** Вопросы с платформы, на которые ещё не ответили. */

@@ -193,10 +193,14 @@ model Contact {
   /// Ставится один раз: спросил повторно — не заваливаем той же простынёй,
   /// дальше разговор ведёт обычный консультант (см. ai/offlineCourse.ts).
   offlineInfoSentAt    DateTime?
+  /// «Офлайн: передано Ширин» (ai/offlineHandoff.ts). После карточки бот с этим
+  /// человеком молчит, пока тот не напишет про онлайн или не купит онлайн-курс.
+  offlineHandoffAt     DateTime?
   /// Ссылка с рекламы/блогера (SiteLink.id), по которой человек впервые пришёл
   /// на сайт. Ставится один раз, без внешнего ключа: строгое добавление
   /// столбца, без пересоздания большой таблицы (links/siteLinks.ts).
   siteLinkId           String?
+  accessEvents         AccessEvent[]
 
   @@unique([channel, igUserId])
   @@index([siteLinkId])
@@ -253,6 +257,16 @@ model ReceiptCheck {
   /// дважды (сразу и из очереди перепроверки), а сообщение должно уйти один раз.
   customerNotifiedAt DateTime?
   awaitingDeliveryChoice Boolean @default(false)
+  /// Карточки этого чека в Telegram владельцу: JSON [{chatId, messageId}]. Нужны,
+  /// чтобы закрыть карточку (убрать кнопки), когда доступ уже выдан другим путём —
+  /// иначе кнопки остаются «живыми» и нажатие ломается (08.11.2026).
+  ownerAlerts String?
+  /// Номер операции с чека (если читается): один на перевод, ловит пересохранённый старый чек.
+  transactionId String?
+  /// Когда очередь перепроверки может взять чек снова (createdAt не двигаем: он нужен как стабильная точка отсчёта).
+  retryAfter DateTime?
+
+  @@index([transactionId])
 }
 
 /// Журнал вызовов Gemini — модель, токены, оценочная стоимость (см. ai/pricing.ts).
@@ -931,8 +945,30 @@ model Device {
   blockedAt           DateTime?
   blockedReason       String?
 
-  @@unique([purchaseId, fingerprint])
+  // Уникальности (purchaseId, fingerprint) больше нет (08.11.2026): отпечаток
+  // присылает клиент, у двух одинаковых iPhone он совпадает, и «тот же
+  // аппарат» теперь узнаётся по нему только в 30-минутном окне (access.ts).
+  // Второе устройство с тем же отпечатком — законная запись, а не дубль.
   @@index([contactId])
+}
+
+/// ЖУРНАЛ ДЕЙСТВИЙ С УСТРОЙСТВАМИ УЧЕНИЦ (08.11.2026): кто и когда освободил,
+/// заблокировал или вернул место. Пишет только access.ts (recordAccessEvent);
+/// deviceId — строка без связи: освобождённого устройства в базе уже нет.
+model AccessEvent {
+  id        String   @id @default(uuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  deviceId  String?
+  /// released | blocked | unblocked
+  action    String
+  /// owner (панель) | student (сама заменила) | bot (самовосстановление)
+  actor     String
+  /// Подпись устройства на момент действия: «Safari на iPhone · TJ».
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
 }
 
 /// Прогресс по уроку: одна строка на пару «покупка + урок», обновляется, а не

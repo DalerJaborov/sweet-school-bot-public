@@ -1,4 +1,6 @@
+import { recoveryCodeForToken } from "./linkCode.js";
 import { Router, type Request, type Response } from "express";
+import { claimPlayback } from "./playbackLock.js";
 import { z } from "zod";
 import { env } from "../env.js";
 import { prisma, logError } from "../db.js";
@@ -12,9 +14,10 @@ import {
   listDevicesFor,
   pairDevice,
   issuePairToken,
-  MAX_DEVICE_SWAPS_PER_MONTH,
+  occupiedPhoneLabel,
   type AccessResult,
 } from "./access.js";
+import { relinkBySiteToken } from "./recovery.js";
 import { masterManifest, variantManifest, offlineSegmentList } from "./manifest.js";
 import { OFFLINE_RENDITION } from "../storage/videoPipeline.js";
 import { chatHistory, receiveQuestion } from "./chat.js";
@@ -116,37 +119,56 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
     .object({
       token: z.string().min(10),
       fingerprint: z.string().max(200).optional(),
-      /** «Это мой новый телефон» — заменить самое старое устройство. */
-      replaceOldest: z.boolean().optional(),
     })
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Нужен token" });
     return;
   }
-  const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint, parsed.data.replaceOldest ?? false);
+  const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint);
+  // Публичный код для готового сообщения в WhatsApp (linkCode.ts): производный,
+  // сам код ссылки из него не восстановить. Отдаём и при отказе — он нужен как
+  // раз на экране ошибки.
+  const recoveryCode = recoveryCodeForToken(parsed.data.token);
   if (!result.ok) {
-    // При упоре в лимит показываем, какие устройства заняли места, — экран
-    // «заменить самое старое?» строится из этого.
+    // При упоре в лимит отдаём модель занятого телефона: экран пишет
+    // «курс открыт на телефоне X, для другого купите курс».
     if (result.reason === "device_limit") {
       const claims = verifyMagicLink(parsed.data.token);
       const byCode = claims?.jti && !claims.contactId ? await prisma.contact.findUnique({ where: { accessTokenId: claims.jti } }) : null;
       const contactId = claims?.contactId ?? byCode?.id ?? null;
       const devices = contactId ? await listDevicesFor(contactId) : [];
-      const contact = contactId ? await prisma.contact.findUnique({ where: { id: contactId } }) : null;
-      const swapsLeft = contact
-        ? Math.max(
-            0,
-            MAX_DEVICE_SWAPS_PER_MONTH -
-              (contact.deviceSwapAt && contact.deviceSwapAt.getTime() > Date.now() - 30 * 86_400_000 ? contact.deviceSwaps : 0)
-          )
-        : 0;
-      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, swapsLeft });
+      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, phone: contactId ? await occupiedPhoneLabel(contactId) : null, channel: contactId ? (await prisma.contact.findUnique({ where: { id: contactId }, select: { channel: true } }))?.channel ?? null : null, recoveryCode });
       return;
     }
-    return deny(res, result);
+    res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, recoveryCode });
+    return;
   }
-  res.json({ ok: true, contactId: result.contact.id });
+  res.json({ ok: true, contactId: result.contact.id, recoveryCode });
+});
+
+/**
+ * «ПОЛУЧИТЬ НОВУЮ ССЫЛКУ» с экрана просроченной ссылки (08.11.2026).
+ *
+ * Принимает тот же код из адреса. Ссылку в ответе НЕ отдаёт никогда — она
+ * уходит в переписку человека (course/recovery.ts → restoreAccessFromSite).
+ * Ответ — только исход, по нему экран выбирает текст:
+ *   sent        — новая ссылка уже в переписке (Instagram/WhatsApp; купившим
+ *                 через чат сайта — никогда, их ссылку шлёт хозяйка);
+ *   write_first — напишите нам «Нужна новая ссылка», бот ответит сам;
+ *   escalated   — передали Ширин;
+ *   revoked     — доступ закрыт;
+ *   unknown     — ссылка не наша или уже заменена новой.
+ * Повторное нажатие безопасно: после выдачи старый код никого не находит.
+ */
+courseRouter.post(`${API_BASE}/relink`, async (req: Request, res: Response) => {
+  const parsed = z.object({ token: z.string().min(6).max(64) }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Нужен token" });
+    return;
+  }
+  // Двойное нажатие и повтор после обрыва сети — один исход (relinkBySiteToken).
+  res.json(await relinkBySiteToken(parsed.data.token));
 });
 
 /** Установленное приложение обменивает pair-токен на сессию (см. access.ts). */
@@ -520,9 +542,19 @@ courseRouter.get(`${API_BASE}/lessons/:id/variant/:name`, async (req: Request, r
  * него бесполезны: переданные другому человеку файлы не откроются, а если
  * доступ отозвали, офлайн-копия умрёт сама, когда истечёт выданный ранее срок.
  */
+const PLAYING_ELSEWHERE = {
+  error: "Курс открыт на другом телефоне. С одного телефона можно смотреть только на нём одном",
+  reason: "playing_elsewhere",
+};
+
 courseRouter.get(`${API_BASE}/lessons/:id/key`, async (req: Request, res: Response) => {
   const access = await currentAccess(req);
   if (!access.ok) return deny(res, access);
+  // Одновременно с двух телефонов не играем; вкладки одного телефона делят замок.
+  if (!claimPlayback(access.contact.id, access.device.id)) {
+    res.status(409).json(PLAYING_ELSEWHERE);
+    return;
+  }
   // Право на офлайн истекло — ключ не отдаём. Именно эта проверка делает
   // тридцатидневный срок настоящим, а не декоративным.
   if (!offlineAllowed(access.device)) {
@@ -584,6 +616,10 @@ courseRouter.get(`${API_BASE}/lessons/:id/offline`, async (req: Request, res: Re
 courseRouter.post(`${API_BASE}/lessons/:id/progress`, async (req: Request, res: Response) => {
   const access = await currentAccess(req);
   if (!access.ok) return deny(res, access);
+  if (!claimPlayback(access.contact.id, access.device.id)) {
+    res.status(409).json(PLAYING_ELSEWHERE);
+    return;
+  }
   const parsed = z
     .object({ positionSec: z.number().int().min(0).max(60 * 60 * 12), percent: z.number().int().min(0).max(100) })
     .safeParse(req.body);

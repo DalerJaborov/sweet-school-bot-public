@@ -1,5 +1,5 @@
 import { prisma, getSetting } from "./db.js";
-import { getPrices } from "./services/priceService.js";
+import { getPaymentTolerance, getPrices } from "./services/priceService.js";
 
 /**
  * ДВА КУРСА И ЧТО ЗА КАКИЕ ДЕНЬГИ ВЫДАВАТЬ.
@@ -30,12 +30,12 @@ import { COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./prices.js";
  *  и из отправленных 50 доходит 45–48. Человек заплатил полную цену. */
 export const PAYMENT_TOLERANCE_DOWN = 6;
 // Экспорт — для проверки цен в «Цены и даты» (offerService.checkOffer).
-const DOWN = PAYMENT_TOLERANCE_DOWN;
-/** Вверх допуск шире: заплатить больше можно (округлил, добавил комиссию сверху). */
-const UP = 30;
+/** Допуск вверх по умолчанию (настраивается в «Цены и даты»): заплатить больше
+ *  можно — округлил, добавил комиссию сверху (71.45 за курс за 70). */
+export const PAYMENT_TOLERANCE_UP = 30;
 
-function near(amount: number, price: number, up = UP): boolean {
-  return amount >= price - DOWN && amount <= price + up;
+function near(amount: number, price: number, down: number, up: number): boolean {
+  return amount >= price - down && amount <= price + up;
 }
 
 /** Настройка chat_id группы для курса. */
@@ -70,7 +70,8 @@ export type Allocation = {
  * владельцу на глаза, а не отвергается молча и не открывает доступ наугад.
  */
 export async function allocate(contactId: string, amount: number): Promise<Allocation> {
-  const [owned, prices] = await Promise.all([ownedCourses(contactId), getPrices()]);
+  const [owned, prices, tol] = await Promise.all([ownedCourses(contactId), getPrices(), getPaymentTolerance()]);
+  const DOWN = tol.down;
   const { price: PRICE, bundle: BUNDLE_PRICE, bundleFull: BUNDLE_FULL_PRICE } = prices;
   const missing = ([COURSE_50, COURSE_70] as Course[]).filter((c) => !owned.includes(c));
 
@@ -84,7 +85,7 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   // запасом сверху. Проверяется ПЕРЕД одиночными курсами: полоса курса за 70
   // с допуском вверх дотягивается до 100, и без этого порядка комплект за 100
   // открывал бы один курс.
-  if (missing.length === 2 && amount >= BUNDLE_PRICE - DOWN && amount <= BUNDLE_FULL_PRICE + 40) {
+  if (missing.length === 2 && amount >= BUNDLE_PRICE - DOWN && amount <= BUNDLE_FULL_PRICE + tol.up + 10) {
     return { grant: missing, note: `оплата за оба курса (${Math.round(amount)} сомони)` };
   }
 
@@ -93,7 +94,7 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   // формально попадает и в полосу пятидесятого курса — и без выбора ближайшего
   // код выдавал за 70 сомони курс за 50.
   const fits = missing
-    .filter((course) => near(amount, PRICE[course]))
+    .filter((course) => near(amount, PRICE[course], DOWN, tol.up))
     .sort((a, b) => Math.abs(amount - PRICE[a]) - Math.abs(amount - PRICE[b]));
   if (fits.length > 0) {
     const course = fits[0];
@@ -102,4 +103,37 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   }
 
   return { grant: [], note: `сумма ${Math.round(amount)} сомони не сходится с ценами курсов` };
+}
+
+/**
+ * Какие курсы даёт сумма чека, НЕ глядя на то, что уже куплено (для проверки
+ * "этот платёж уже обслужен"). Те же границы, что у allocate().
+ */
+export async function coursesForAmount(amount: number): Promise<Course[]> {
+  const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
+  const { price, bundle, bundleFull } = prices;
+  if (amount >= bundle - tol.down && amount <= bundleFull + tol.up + 10) return [COURSE_50, COURSE_70];
+  const fits = ([COURSE_50, COURSE_70] as Course[])
+    .filter((course) => near(amount, price[course], tol.down, tol.up))
+    .sort((a, b) => Math.abs(amount - price[a]) - Math.abs(amount - price[b]));
+  return fits.length > 0 ? [fits[0]] : [];
+}
+
+/**
+ * ОДНА ФУНКЦИЯ "ЧТО ОТКРОЕТ ЭТА СУММА" для решения владельца, для строки в
+ * карточке и для автоматики (ревью PR 67): курсы суммы минус уже купленное.
+ * Сумма округляется ОДИН раз, здесь: чек хранит Math.round(сумма), и панель
+ * решает по сохранённой - автоматика обязана считать так же.
+ *  - wanted: курсы, которые вообще даёт сумма;
+ *  - grant: что осталось выдать;
+ *  - duplicate: курсы суммы уже куплены (а не "сумма ни на что не похожа").
+ */
+export async function planForAmount(
+  contactId: string,
+  rawAmount: number
+): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; amount: number }> {
+  const amount = Math.round(rawAmount);
+  const [wanted, owned] = await Promise.all([coursesForAmount(amount), ownedCourses(contactId).catch(() => [] as Course[])]);
+  const grant = wanted.filter((c) => !owned.includes(c));
+  return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0, amount };
 }

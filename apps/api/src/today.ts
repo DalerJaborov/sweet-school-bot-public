@@ -6,6 +6,7 @@ import { countNotOpened } from "./notOpened.js";
 import { deliveryMode } from "./course/delivery.js";
 import { unansweredCount } from "./course/chat.js";
 import { healthReport } from "./health.js";
+import { whatsappProblem } from "./whatsapp/watch.js";
 import { storageConfig } from "./storage/s3.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { getPrices } from "./services/priceService.js";
@@ -352,7 +353,7 @@ async function buildToday(): Promise<TodayResponse> {
       storage: Boolean(storage),
       diskFreePct: health?.diskFreePct ?? null,
       gemini,
-      problems: health?.problems ?? [],
+      problems: [...(health?.problems ?? []), ...(whatsappProblem() ? [whatsappProblem() as string] : [])],
     },
   };
 }
