@@ -87,14 +87,17 @@ describe("sendToContact — маршрутизация по каналу", () =>
   it("картинка: Meta — sendAttachment, WEB — строка с imageUrl", async () => {
     await sendImageToContact(fakeContact() as Recipient, "https://x/1.jpg");
     expect(sendAttachment).toHaveBeenCalledWith("ig-1", "https://x/1.jpg", "image", "INSTAGRAM");
+    // Картинка Meta записывается как исходящее бота (иначе её эхо сочтут ответом хозяйки).
+    const meta = db.model("message").create.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(meta.data).toMatchObject({ direction: "OUT", text: "" });
 
     await sendAttachmentToContact(fakeContact({ channel: "WEB" }) as Recipient, "https://x/2.jpg", "image");
-    const created = db.model("message").create.mock.calls[0][0] as { data: Record<string, unknown> };
+    const created = db.model("message").create.mock.calls[1][0] as { data: Record<string, unknown> };
     expect(created.data).toMatchObject({ direction: "OUT", imageUrl: "https://x/2.jpg", text: null });
 
     // Видео на сайте — ссылкой текстом: плеера в ленте чата нет.
     await sendAttachmentToContact(fakeContact({ channel: "WEB" }) as Recipient, "https://x/v.mp4", "video");
-    const video = db.model("message").create.mock.calls[1][0] as { data: Record<string, unknown> };
+    const video = db.model("message").create.mock.calls[2][0] as { data: Record<string, unknown> };
     expect(video.data).toMatchObject({ text: "https://x/v.mp4", imageUrl: null });
   });
 });
