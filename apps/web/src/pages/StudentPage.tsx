@@ -26,6 +26,18 @@ const CHANNEL_LABEL: Record<string, string> = {
   MANUAL: "вручную",
 };
 
+/** Журнал мест — бытовыми словами, без «released/actor». */
+const EVENT_LABEL: Record<string, string> = {
+  released: "Место освобождено",
+  blocked: "Заблокировано",
+  unblocked: "Разблокировано",
+};
+const ACTOR_LABEL: Record<string, string> = {
+  owner: "вы",
+  student: "сама ученица",
+  bot: "бот по её просьбе",
+};
+
 export function StudentPage({ contactId, onBack }: { contactId: string; onBack: () => void }) {
   const [s, setS] = useState<Student | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -95,6 +107,28 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
       load();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Не удалось изменить устройство", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** «Освободить место»: устройство уходит из списка, место — новому телефону.
+   *  Подтверждение простыми словами: на том телефоне уроки закроются. */
+  async function releaseDevice(d: StudentDevice) {
+    const ok = await confirmDialog({
+      title: `Освободить место «${d.label}»?`,
+      message: "На этом устройстве уроки закроются. Ученица сможет открыть курс на новом телефоне по своей ссылке.",
+      confirmLabel: "Освободить",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(d.id);
+    try {
+      await api(`/admin/course-devices/${d.id}/release`, { method: "POST" });
+      toast("Место освобождено");
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Не удалось освободить место", "error");
     } finally {
       setBusy(null);
     }
@@ -214,6 +248,13 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
                   <div className="list-chips">{d.blocked && <span className="chip chip-err">заблокировано</span>}</div>
                 </div>
                 <div className="list-actions">
+                  {/* У заблокированного кнопки нет: удаление сняло бы блокировку
+                      (сервер тоже откажет — access.ts releaseDevice). */}
+                  {!d.blocked && (
+                    <button type="button" className="btn small" disabled={busy === d.id} onClick={() => void releaseDevice(d)}>
+                      Освободить место
+                    </button>
+                  )}
                   <button type="button" className={`btn small ${d.blocked ? "" : "quiet"}`} disabled={busy === d.id} onClick={() => void toggleDevice(d)}>
                     {d.blocked ? "Разблокировать" : "Заблокировать"}
                   </button>
@@ -221,6 +262,16 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
               </div>
             ))}
           </div>
+        )}
+        {s.deviceEvents && s.deviceEvents.length > 0 && (
+          <ul className="device-events" data-testid="device-events">
+            {s.deviceEvents.map((e, i) => (
+              <li key={`${e.at}-${i}`} className="hint">
+                {EVENT_LABEL[e.action] ?? e.action}
+                {e.detail && ` · ${e.detail}`} · {ACTOR_LABEL[e.actor] ?? e.actor} · {timeAgo(e.at)}
+              </li>
+            ))}
+          </ul>
         )}
       </section>
     </>

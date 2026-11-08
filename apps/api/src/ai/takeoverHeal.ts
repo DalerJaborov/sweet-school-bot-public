@@ -1,5 +1,6 @@
 import { prisma, logError, logWarn, releaseTakeoverCausedBy } from "../db.js";
 import { isOwnMid } from "./ownSendLedger.js";
+import { queuePendingAiReply } from "../aiReplyRetry.js";
 
 /**
  * САМОЛЕЧЕНИЕ ЛОЖНОГО «ПЕРЕДАНО ЧЕЛОВЕКУ».
@@ -73,6 +74,17 @@ export async function healFalseTakeovers(): Promise<number> {
       await prisma.message.update({ where: { mid }, data: { byHuman: false } });
       if (await releaseTakeoverCausedBy(c.id, mid)) {
         healed += 1;
+        // Сообщение клиента, пришедшее во время ложной паузы, осталось без ответа: отдаём этот ход боту
+        // через очередь повторов (aiReplyRetry.ts) — она сама проверит, что хозяйка не ответила.
+        const lastIn = await prisma.message.findFirst({
+          where: { contactId: c.id, direction: "IN" },
+          orderBy: { createdAt: "desc" },
+          select: { text: true, createdAt: true },
+        });
+        if (lastIn?.text && lastIn.createdAt >= cause.createdAt) {
+          const answered = await prisma.message.count({ where: { contactId: c.id, direction: "OUT", createdAt: { gt: lastIn.createdAt } } });
+          if (!answered) await queuePendingAiReply(c.id, lastIn.text).catch((err) => logError("takeoverHeal:requeue", err));
+        }
         logWarn("takeoverHeal", `${c.id}: «передано человеку» снято — это было наше сообщение (${how})`);
       }
     } catch (err) {

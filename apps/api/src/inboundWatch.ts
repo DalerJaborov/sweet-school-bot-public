@@ -102,6 +102,8 @@ export function resetInboundWatch(): void {
  * тоже не тревога: так решил владелец.
  */
 export const UNANSWERED_AFTER_MS = 2 * 60_000;
+/** Начало текста, с которого site/router.ts записывает заявку на офлайн-курс как входящее. */
+const SITE_SIGNUP_PREFIX = "Заявка на офлайн-курс:";
 const LOOKBACK_MS = 24 * 3_600_000;
 /** Запас после конца паузы хозяйки, прежде чем молчание считается сбоем. */
 const TAKEOVER_GRACE_MS = 4 * 60_000;
@@ -130,6 +132,8 @@ export async function explainUnanswered(
     return { skip: true, why: "просили позвать человека" };
   }
   if (lastIn.text && isPureThanks(lastIn.text)) return { skip: true, why: "спасибо без вопроса" };
+  // Заявка с сайта (site/router.ts) записывается как входящее, но владельцу о ней уже ушло своё уведомление.
+  if (lastIn.text?.startsWith(SITE_SIGNUP_PREFIX)) return { skip: true, why: "заявка с сайта (владелец уже уведомлён)" };
   const note = deliberateSilenceSince(contactId, lastIn.createdAt);
   if (note) return { skip: true, why: note };
   const gate = await prisma.replyGate.findFirst({ where: { contactId, createdAt: { gte: lastIn.createdAt } } });
@@ -170,6 +174,21 @@ export async function explainUnanswered(
         dedupeKey: "takeover-due:" + contactId + ":" + lastIn.createdAt.getTime(),
       };
     }
+    // Подозрение «это наше эхо» бывает только в Instagram/Messenger (эхо приходит вебхуком Meta) и только
+    // если незадолго до причины бот сам слал вложение или пустое сообщение. Иначе это голос/фото хозяйки.
+    const ourMediaBefore =
+      cause && (contact.channel === "INSTAGRAM" || contact.channel === "MESSENGER")
+        ? await prisma.message.findFirst({
+            where: {
+              contactId,
+              direction: "OUT",
+              byHuman: false,
+              createdAt: { gte: new Date(cause.createdAt.getTime() - 10 * 60_000), lte: cause.createdAt },
+              OR: [{ text: null }, { text: "" }, { imageUrl: { not: null } }],
+            },
+          })
+        : null;
+    if (!ourMediaBefore) return { skip: true, why: "живая пауза хозяйки (фото или голос)" };
     return {
       skip: false,
       reason: `бот на паузе с ${fmt(contact.humanTakenOverAt, await offsetMs())}, а причина паузы — сообщение без текста (вложение): возможно, это было наше же эхо`,
@@ -183,7 +202,11 @@ export async function explainUnanswered(
   // эти строки уже видны владельцу в панели, повторная тревога была бы шумом.
   if (contact.channel === "WHATSAPP") {
     const inbox = await prisma.whatsAppInbox.findFirst({
-      where: { contactId, createdAt: { gte: new Date(lastIn.createdAt.getTime() - 60_000) } },
+      where: {
+        contactId,
+        createdAt: { gte: new Date(lastIn.createdAt.getTime() - 60_000) },
+        status: { in: ["attention", "blocked", "expired", "held"] },
+      },
     });
     if (inbox) return { skip: true, why: `WhatsApp: событие в очереди моста (${inbox.status})` };
   }
@@ -193,10 +216,34 @@ export async function explainUnanswered(
   return { skip: false, reason: "причина не найдена, смотрите журнал ошибок и переписку" };
 }
 
+/**
+ * Каждая тревога оставляет в настройках строку alertGate:* (alertGate.ts); без чистки их число растёт
+ * вечно. Раз в час удаляем те, чья последняя отметка старше недели (дедуп им давно не нужен).
+ */
+let lastCleanupAt = 0;
+async function cleanupAlertGateRows(now: Date): Promise<void> {
+  if (now.getTime() - lastCleanupAt < 3_600_000) return;
+  lastCleanupAt = now.getTime();
+  const rows = await prisma.setting.findMany({ where: { key: { startsWith: "alertGate:" } } });
+  const old: string[] = [];
+  for (const r of rows) {
+    try {
+      const st = JSON.parse(r.value) as { last?: number; sent?: number | null };
+      const at = Math.max(st.last ?? 0, st.sent ?? 0);
+      if (at && now.getTime() - at > 7 * 24 * 3_600_000) old.push(r.key);
+    } catch {
+      old.push(r.key);
+    }
+  }
+  if (old.length > 0) await prisma.setting.deleteMany({ where: { key: { in: old } } });
+}
+
 export async function checkUnansweredInbound(now = new Date()): Promise<number> {
   if ((await getSetting("unansweredAlertEnabled")) === "false") return 0;
   // Бот выключен владельцем (пауза, заморозка) — молчание осознанное, тревожить нечем.
   if ((await getSetting("aiEnabled")) !== "true" || (await getSetting("botFrozen")) === "true") return 0;
+
+  await cleanupAlertGateRows(now).catch((err) => logError("inboundWatch:cleanup", err));
 
   // Самолечение раньше сторожа: ложная пауза от нашего же эха снимается сама.
   await healFalseTakeovers().catch((err) => logError("takeoverHeal", err));
