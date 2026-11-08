@@ -62,7 +62,7 @@ const TAB_ICON: Partial<Record<Tab, JSX.Element>> = {
 };
 
 const TASK_TABS: Tab[] = ["receipts", "questions", "attention"];
-const CATALOG_TABS: Tab[] = ["courses", "texts"];
+const CATALOG_TABS: Tab[] = ["courses", "offer", "texts"];
 
 /** Разделы, которые умеет открывать ⌘K (apps/api/src/search.ts → SECTIONS). */
 const ALL_TABS = new Set<Tab>([
@@ -71,6 +71,7 @@ const ALL_TABS = new Set<Tab>([
   "questions",
   "recipes",
   "texts",
+  "offer",
 ]);
 function isTab(id: string): id is Tab {
   return ALL_TABS.has(id as Tab);

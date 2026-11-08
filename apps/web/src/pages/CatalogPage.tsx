@@ -4,13 +4,17 @@ import { SkeletonList } from "../components/Skeleton";
 
 const CoursesPage = lazyPage(() => import("./CoursesPage"), "CoursesPage");
 const TextsPage = lazyPage(() => import("./TextsPage"), "TextsPage");
+const OfferPage = lazyPage(() => import("./OfferPage"), "OfferPage");
 
 /**
  * «КУРСЫ И ЦЕНЫ» — одна кнопка внизу, два экрана под переключателем:
  * сами курсы (уроки, видео) и цены с реквизитами. Раньше «Тексты и цены» были
  * спрятаны в «Ещё», хотя цену меняют чаще, чем что-либо другое.
+ *
+ * 08.11.2026: цены и даты набора — свой экран «Цены и даты» (OfferPage,
+ * единственная дверь записи); «Тексты» — реквизиты, сертификат, карточка.
  */
-export type CatalogView = "courses" | "texts";
+export type CatalogView = "courses" | "offer" | "texts";
 
 export function CatalogPage(props: {
   view: CatalogView;
@@ -31,15 +35,23 @@ export function CatalogPage(props: {
         </button>
         <button
           role="tab"
+          aria-selected={view === "offer"}
+          className={view === "offer" ? "active" : ""}
+          onClick={() => onView("offer")}
+        >
+          Цены и даты
+        </button>
+        <button
+          role="tab"
           aria-selected={view === "texts"}
           className={view === "texts" ? "active" : ""}
           onClick={() => onView("texts")}
         >
-          Цены и тексты
+          Тексты
         </button>
       </div>
       <Suspense fallback={<SkeletonList rows={3} height={96} />}>
-        {view === "courses" ? <CoursesPage onReview={onReview} /> : <TextsPage />}
+        {view === "courses" ? <CoursesPage onReview={onReview} /> : view === "offer" ? <OfferPage /> : <TextsPage />}
       </Suspense>
     </>
   );

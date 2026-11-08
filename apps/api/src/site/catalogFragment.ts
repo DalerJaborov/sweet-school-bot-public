@@ -1,6 +1,9 @@
 /** Cookie-free HTML representation of the same public catalogue as /courses.
  * Prices and availability come exclusively from that catalogue, never a second
  * price table. Escape every database value, including attribute values. */
+// Only dependency: prices.ts (itself dependency-free) — the SSI fixture loads compiled dist directly.
+import { COURSE_TITLE_TG } from "../prices.js";
+
 type Lang = "ru" | "tg";
 type Course = {
   code: string; title: string; description: string | null; price: number;
@@ -38,7 +41,7 @@ function coverUrl(course: Course): string | null {
 
 function title(course: Course, lang: Lang): string {
   if (lang === "tg") {
-    const translated = ({ COURSE50: "Арт-десертҳо", COURSE70: "21 навъи ширинӣ" } as Record<string, string>)[course.code];
+    const translated = (COURSE_TITLE_TG as Record<string, string>)[course.code];
     if (translated) return translated;
   }
   return course.title.replace(/\s*\(\s*\d[\d\s.,]*\s*[^)]*\)\s*$/u, "").trim() || course.title;

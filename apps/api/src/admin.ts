@@ -9,13 +9,14 @@ import { prisma, getSetting, logError } from "./db.js";
 import { sendText } from "./instagram.js";
 import { upload, handleUpload } from "./upload.js";
 import { decideReceipt } from "./receiptDecision.js";
-import { isSettingKey, readSettingsMasked, writeSetting, writeSettings } from "./services/settingsService.js";
+import { isOfferKey, isSettingKey, readSettingsMasked, writeSetting, writeSettings } from "./services/settingsService.js";
 import { styleImportJob, archiveTestimonialsImportJob } from "./services/importService.js";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
 import { courseAdminRouter } from "./course/adminRoutes.js";
 import { manualEnrollmentRouter } from "./course/manualEnrollment.js";
 import { importRouter } from "./course/importRoutes.js";
 import { textsRouter } from "./textsRoutes.js";
+import { offerRouter } from "./offerRoutes.js";
 import { waitingRouter } from "./waiting.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
 import { metricsRouter } from "./metrics.js";
@@ -101,6 +102,10 @@ adminRouter.post("/admin-form/setting", express.urlencoded({ extended: false }),
   const key = parsed.data.key;
   if (!isSettingKey(key)) {
     res.status(400).send("Неизвестная настройка");
+    return;
+  }
+  if (isOfferKey(key)) {
+    res.status(400).send("Цены и даты меняются в панели, раздел «Цены и даты»");
     return;
   }
   void writeSetting(key, parsed.data.value).then(
@@ -1328,6 +1333,8 @@ adminRouter.use(manualEnrollmentRouter);
 adminRouter.use(importRouter);
 // «Тексты и цены» — цены, реквизиты, сертификат, офлайн (textsRoutes.ts).
 adminRouter.use(textsRouter);
+// «Цены и даты» — единственная дверь записи цен и дат набора (offerRoutes.ts).
+adminRouter.use(offerRouter);
 // Главный экран «Сегодня» — очередь дел и утренние числа (today.ts).
 adminRouter.use(todayRouter);
 adminRouter.use(waitingRouter);
