@@ -548,6 +548,7 @@ export async function aiReply(
           contact,
           replyText,
           attachments.some((a) => a.kind === "audio"),
+          text,
         );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         for (const part of toSend) {

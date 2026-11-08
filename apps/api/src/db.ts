@@ -76,6 +76,15 @@ export async function recordOutgoingMessage(contactId: string, text: string, mid
     if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
     if (!mid) return;
     const existing = await prisma.message.findUnique({ where: { mid } });
+    // Вложение в Instagram/Messenger уже записано пустой строкой (messaging/send.ts, защита от
+    // ложного «передано человеку»). Вторая запись с тем же mid несёт текст (например метку
+    // голосового, по которой voiceReply считает «не больше одного голосового подряд»):
+    // дописываем его в ту же строку, иначе история и правило голоса видят пустоту
+    // (инцидент 08.11.2026: три голосовых подряд в Instagram).
+    if (existing && !existing.byHuman && existing.contactId === contactId && !existing.text?.trim() && text.trim()) {
+      await prisma.message.update({ where: { mid }, data: { text } });
+      return;
+    }
     if (existing?.byHuman && existing.contactId === contactId) {
       await prisma.message.update({ where: { mid }, data: { byHuman: false, text } });
       const contact = await prisma.contact.findUnique({ where: { id: contactId } });
