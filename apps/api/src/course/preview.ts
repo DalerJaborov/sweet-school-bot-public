@@ -156,12 +156,10 @@ coursePreviewRouter.post(`${PREVIEW_API}/start`, (req: Request, res: Response) =
     return;
   }
   if (!rememberTicket(claims.jti, claims.exp * 1000)) {
-    res
-      .status(401)
-      .json({
-        error: "Эта ссылка предпросмотра уже открыта — нажмите кнопку в панели ещё раз",
-        reason: "preview_used",
-      });
+    res.status(401).json({
+      error: "Эта ссылка предпросмотра уже открыта — нажмите кнопку в панели ещё раз",
+      reason: "preview_used",
+    });
     return;
   }
   const session = jwt.sign(
