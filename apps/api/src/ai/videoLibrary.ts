@@ -1,7 +1,8 @@
 import { getSetting, logError, prisma, recordOutgoingMessage } from "../db.js";
 import { env } from "../env.js";
 import { sendVideoWithCaption } from "../messaging/send.js";
-import { detectClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
+import { comparableBotText } from "./humanText.js";
 import type { Contact } from "@prisma/client";
 
 /**
@@ -193,17 +194,22 @@ export function pickSet(library: VideoEntry[], room = SET_MAX): VideoEntry[] {
 
 /** Какие виды показа клиенту уже были: смотрим по записанным исходящим подписям. */
 async function alreadyShown(contactId: string, library: VideoEntry[]): Promise<{ showcase: boolean; howto: boolean }> {
+  // Сравнение после фильтра отправки: в истории лежит то, что увидел клиент (без
+  // тире, особые буквы по его стилю), а в библиотеке — исходная подпись.
   const byCaption = new Map<string, VideoKind>();
   for (const e of library) {
-    byCaption.set(e.caption.ru, e.kind);
-    byCaption.set(e.caption.tg, e.kind);
+    for (const caption of [e.caption.ru, e.caption.tg]) {
+      const key = comparableBotText(caption);
+      if (key) byCaption.set(key, e.kind);
+    }
   }
   const rows = await prisma.message.findMany({
-    where: { contactId, direction: "OUT", text: { in: [...byCaption.keys()] } },
+    where: { contactId, direction: "OUT", text: { not: null } },
+    orderBy: { createdAt: "desc" },
     select: { text: true },
-    take: 50,
+    take: 300,
   });
-  const kinds = new Set(rows.map((r) => byCaption.get(r.text ?? "")));
+  const kinds = new Set(rows.map((r) => byCaption.get(comparableBotText(r.text))));
   return { showcase: kinds.has("dessert"), howto: kinds.has("howto") };
 }
 
@@ -234,7 +240,7 @@ export async function maybeSendVideos(contact: Contact, text: string, ctx: Inten
     // Купившая курс — ученица, реклама ей не нужна.
     if ((await prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null } })) > 0) return "none";
     const shown = await alreadyShown(contact.id, library);
-    const lang = detectClientLanguage(text) === "tg" ? "tg" : "ru";
+    const lang = (await contactLanguage(contact.id, text)) === "tg" ? "tg" : "ru";
     const room = await bridgeRoom(contact.id);
     let list: VideoEntry[];
     if (intent.kind === "howto") {

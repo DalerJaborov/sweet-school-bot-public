@@ -48,8 +48,8 @@ describe("claimsReceiptSent — человек говорит, что чек/о�
   it("ответ на языке клиента; на сайте — про скрепку, в Instagram — «пришлите сюда»", () => {
     expect(receiptNotSeenReply("ru", true)).toContain("скрепкой");
     expect(receiptNotSeenReply("ru", false)).toContain("прямо сюда");
-    expect(receiptNotSeenReply("tg", true)).toContain("Чекро ҳоло намебинам");
-    expect(receiptNotSeenReply("tg", false)).toContain("ҳамин ҷо");
+    expect(receiptNotSeenReply("tg", true)).toContain("Чек хозир намебинам");
+    expect(receiptNotSeenReply("tg", false)).toContain("хамин чо");
     expect(receiptNotSeenReply("en", true)).toContain("paperclip");
   });
 });

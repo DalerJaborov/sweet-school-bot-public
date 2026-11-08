@@ -4,6 +4,7 @@ import { generateWithFallback, thinkingConfigFor } from "../gemini.js";
 import { logAiCall } from "../ai/aiLog.js";
 import { resolveGeminiKeys } from "../ai/geminiKeys.js";
 import type { ClientLanguage } from "../ai/clientLanguage.js";
+import { plainTajikLetters } from "../ai/humanText.js";
 
 /** Answers use only the authorized course's recipes and transcripts. Prompt
  * rules reduce invention but do not prove factual correctness; uncertain or
@@ -35,8 +36,7 @@ export type KnowledgeCourse = { title: string; description?: string | null; modu
 // an archived answer. Keep numbers and negations in the source excerpt.
 const KNOWLEDGE_FILLER = new Set(["как", "что", "это", "для", "или", "можно", "апачон", "апаи", "ширин", "ҳамин", "хамин"]);
 function knowledgeWords(text: string): Set<string> {
-  return new Set(text.normalize("NFKC").toLocaleLowerCase().replace(/ё/g, "е")
-    .replace(/ҷ/g, "ч").replace(/қ/g, "к").replace(/ӯ/g, "у").replace(/ғ/g, "г").replace(/ҳ/g, "х")
+  return new Set(plainTajikLetters(text.normalize("NFKC").toLocaleLowerCase().replace(/ё/g, "е"))
     .split(/[^\p{L}\p{N}]+/u)
     .filter((word) => word.length >= 3 && !KNOWLEDGE_FILLER.has(word)));
 }

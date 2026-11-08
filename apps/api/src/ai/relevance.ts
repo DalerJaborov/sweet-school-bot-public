@@ -267,9 +267,10 @@ export function decideAction(v: RelevanceVerdict, ctx: GateContext): RelevanceAc
   return "silent";
 }
 
-/** Нейтральный уточняющий вопрос. Таджикская фраза — дословно из шаблона самой Ширин. */
+/** Нейтральный уточняющий вопрос, коротко и без канцелярита (владелец 08.11.2026).
+ *  Таджикский — живой оборот операторов из разговорника («Чи хизмат кунем?»). */
 export function clarifyText(lang: "ru" | "tg" | "en"): string {
-  if (lang === "tg") return "Ассалому алейкум! Ба шумо кадом маълумоти курсро равон кунем?";
-  if (lang === "en") return "Hello! Which information about our courses would you like to get?";
-  return "Здравствуйте! Какая информация о наших курсах вас интересует?";
+  if (lang === "tg") return "Ассалому алейкум. Чи хизмат кунем?";
+  if (lang === "en") return "Hello! How can I help?";
+  return "Здравствуйте! Подскажите, что вас интересует?";
 }

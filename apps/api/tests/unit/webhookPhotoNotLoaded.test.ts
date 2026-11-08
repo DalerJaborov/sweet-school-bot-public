@@ -84,7 +84,7 @@ describe("Фото пришло, но не скачалось — честный
     await handleMessage(photoEvent);
 
     expect(sendToContact).toHaveBeenCalledTimes(1);
-    expect(String(sendToContact.mock.calls[0][1])).toContain("расм бор нашуд");
+    expect(String(sendToContact.mock.calls[0][1])).toContain("сурат кушода нашуд");
     expect(debounceMessage).not.toHaveBeenCalled();
     expect(aiReply).not.toHaveBeenCalled();
   });
@@ -92,7 +92,7 @@ describe("Фото пришло, но не скачалось — честный
   it("ответ на языке последнего сообщения клиентки (таджикский)", async () => {
     rescueIncomingImages.mockResolvedValue([]);
     await handleMessage(photoEvent);
-    expect(String(sendToContact.mock.calls[0][1])).toContain("расм бор нашуд");
+    expect(String(sendToContact.mock.calls[0][1])).toContain("сурат кушода нашуд");
   });
 
   it("картинка спаслась — обычный путь, без специального ответа", async () => {
