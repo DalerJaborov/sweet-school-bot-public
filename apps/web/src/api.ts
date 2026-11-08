@@ -44,9 +44,12 @@ export function logout() {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Тело ответа как есть — экрану «Цены и даты» нужны поля ошибок и список «Точно?». */
+  data: unknown;
+  constructor(status: number, message: string, data?: unknown) {
     super(message);
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -99,7 +102,7 @@ export async function api<T>(
     // Сервер иногда шлёт details (например, что именно не сошлось в воронке) —
     // без него владелец видел одну и ту же общую фразу на любую причину отказа.
     const details = data.details != null ? `: ${formatDetails(data.details)}` : "";
-    throw new ApiError(res.status, (data.error ?? `Ошибка ${res.status}`) + details);
+    throw new ApiError(res.status, (data.error ?? `Ошибка ${res.status}`) + details, data);
   }
   return data as T;
 }
@@ -280,9 +283,8 @@ export type ChatRow = {
   createdAt: string;
 };
 
-/** Раздел «Тексты и цены» (GET/PUT /admin/texts). */
+/** Раздел «Тексты» (GET/PUT /admin/texts). Цены и даты — «Цены и даты» (Offer ниже). */
 export type TextsForm = {
-  prices: { course50: number; course70: number; bundle: number };
   texts: {
     paymentPhone: string;
     paymentRecipient: string;
@@ -296,16 +298,8 @@ export type TextsForm = {
     afterPaymentRu: string;
     afterPaymentTg: string;
   };
-  offline: {
-    price: number;
-    days: number;
-    hours: string;
-    desserts: number;
-    address: string;
-    startDate: string;
-    infoRu: string;
-    infoTg: string;
-  };
+  /** Свой текст карточки очного курса; пусто — карточка собирается из «Цены и даты». */
+  offline: { infoRu: string; infoTg: string };
 };
 
 export type TextsPreview = {
@@ -320,6 +314,42 @@ export type TextsPreview = {
 };
 
 export type TextsResponse = TextsForm & { defaults: TextsForm; preview: TextsPreview };
+
+/** Раздел «Цены и даты» (GET/PUT /admin/v1/offer, POST /admin/v1/offer/preview). */
+export type Offer = {
+  prices: { course50: number; course70: number; bundle: number };
+  offline: {
+    price: number;
+    /** ГГГГ-ММ-ДД или "" — «дата уточняется». */
+    startDate: string;
+    timeFrom: string;
+    timeTo: string;
+    address: string;
+    seats: number | null;
+    days: number;
+    desserts: number;
+  };
+};
+export type BotSays = { ru: string; tg: string };
+export type OfferPreview = {
+  course50: BotSays;
+  course70: BotSays;
+  bundle: BotSays;
+  offline: BotSays & { source: "fields" | "custom" };
+};
+export type OfferHistoryRow = { field: string; label: string; before: string; after: string; actor: string; at: string };
+export type OfferSnapshot = {
+  offer: Offer;
+  /** Отпечаток сохранённого; возвращается при сохранении (защита от двух вкладок). */
+  version: string;
+  defaults: Offer;
+  today: string;
+  preview: OfferPreview;
+  warnings: string[];
+  history: OfferHistoryRow[];
+};
+export type PriceJump = { field: string; label: string; before: number; after: number; percent: number };
+export type OfferCheck = { errors: Record<string, string>; confirm: PriceJump[]; warnings: string[] };
 
 // ---- волна 2B: проверка OCR-рецептов, черновик от ИИ, импорт ----
 

@@ -102,8 +102,9 @@ export async function sendReceiptForReview(
   const inline_keyboard = input.needsCourseChoice
     ? [
         [
-          { text: "Арт-десерты · 50", callback_data: `c50:${input.receiptId}` },
-          { text: "21 рецепт · 70", callback_data: `c70:${input.receiptId}` },
+          // Без цены в подписи: цена живёт в «Цены и даты», а кнопка — про курс.
+          { text: "Арт-десерты", callback_data: `c50:${input.receiptId}` },
+          { text: "21 рецепт", callback_data: `c70:${input.receiptId}` },
         ],
         [
           { text: "Оба курса", callback_data: `cboth:${input.receiptId}` },
@@ -253,10 +254,14 @@ export async function sendTelegramVoice(
 }
 
 /**
- * Одноразовая Telegram-приглашалка через сам Telegram Bot API — то, что владелец
- * уже нажимает руками в приложении Telegram (member_limit: 1, срок действия).
- * Тут ровно то же самое, только по API, автоматически: отдельная своя система
- * одноразовых ссылок не нужна — Telegram уже гасит ссылку после первого входа.
+ * Telegram-приглашалка на одного человека через Bot API — то, что владелец
+ * нажимает руками в приложении Telegram (member_limit: 1, срок действия).
+ *
+ * ВАЖНО (ревью 08.11.2026): member_limit — это сколько человек могут БЫТЬ в
+ * группе по этой ссылке ОДНОВРЕМЕННО, а не сколько раз по ней войти (ФАКТ,
+ * core.telegram.org/bots/api#createchatinvitelink). Ученица вошла, вышла и
+ * переслала ссылку подруге — подруга войдёт. Поэтому после входа ссылку гасит
+ * САМ бот: groupAccess.ts handleChatMember → revokeInviteLink ниже.
  *
  * Бот школы должен быть администратором целевой группы/канала с правом
  * приглашать пользователей — иначе Telegram ответит 403.
@@ -266,7 +271,7 @@ export async function createOneTimeInviteLink(
   chatId: string,
   // Было 7 дней — владелец попросил больше (25.08.2026 веч.): человек может
   // отвлечься на неделю и вернуться к ссылке, которая уже истекла. Месяц —
-  // достаточный запас, при этом всё ещё "одноразовая" (member_limit:1).
+  // достаточный запас; после первого входа ссылку гасит бот (см. выше).
   expireSeconds = 30 * 24 * 3600
 ): Promise<string | null> {
   const controller = new AbortController();
@@ -325,6 +330,29 @@ function parseChatIds(raw: string | null | undefined): string[] {
     .map((v) => v.trim())
     .filter(Boolean);
 }
+
+/**
+ * Погасить ссылку-приглашение в группе chatId. true — Telegram подтвердил или
+ * ссылка уже мертва. Одна дверь для автоматических ссылок бота: отзыв после
+ * входа (groupAccess.ts) и замена ссылки при напоминании (joinReminder.ts).
+ */
+export async function revokeInviteLink(botToken: string, chatId: string, inviteLink: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/revokeChatInviteLink`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, invite_link: inviteLink }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = (await res.json()) as { ok?: boolean; description?: string };
+    if (data.ok || /invite_hash_expired|invite_hash_invalid/i.test(data.description ?? "")) return true;
+    throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+  } catch (err) {
+    logError("telegram:revokeInvite", err);
+    return false;
+  }
+}
+
 
 /**
  * ТЕХНИЧЕСКИЕ УВЕДОМЛЕНИЯ — ТОЛЬКО ВЛАДЕЛЬЦУ (решение 08.11.2026).

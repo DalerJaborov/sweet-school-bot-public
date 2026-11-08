@@ -45,6 +45,7 @@ const TestimonialsPage = lazyPage(() => import("./pages/TestimonialsPage"), "Tes
 const MediaExamplesPage = lazyPage(() => import("./pages/MediaExamplesPage"), "MediaExamplesPage");
 const ImportPage = lazyPage(() => import("./pages/ImportPage"), "ImportPage");
 const RecipeReviewPage = lazyPage(() => import("./pages/RecipeReviewPage"), "RecipeReviewPage");
+const LinksPage = lazyPage(() => import("./pages/LinksPage"), "LinksPage");
 
 /** Иконка каждого раздела — для сайдбара на ПК и нижней панели. */
 const TAB_ICON: Partial<Record<Tab, JSX.Element>> = {
@@ -56,11 +57,12 @@ const TAB_ICON: Partial<Record<Tab, JSX.Element>> = {
   money: Icons.money,
   summary: Icons.pulse,
   testimonials: Icons.testimonials,
+  links: Icons.attach,
   settings: Icons.settings,
 };
 
-const TASK_TABS: Tab[] = ["receipts", "questions"];
-const CATALOG_TABS: Tab[] = ["courses", "texts"];
+const TASK_TABS: Tab[] = ["receipts", "questions", "attention"];
+const CATALOG_TABS: Tab[] = ["courses", "offer", "texts"];
 
 /** Разделы, которые умеет открывать ⌘K (apps/api/src/search.ts → SECTIONS). */
 const ALL_TABS = new Set<Tab>([
@@ -69,6 +71,7 @@ const ALL_TABS = new Set<Tab>([
   "questions",
   "recipes",
   "texts",
+  "offer",
 ]);
 function isTab(id: string): id is Tab {
   return ALL_TABS.has(id as Tab);
@@ -96,6 +99,14 @@ export function App() {
   // Что требует внимания (чеки, вопросы, ждущие клиенты) — один источник для
   // экрана «Сегодня» и красных цифр на кнопках. Обновляется при смене раздела.
   const attention = useAttention(authed, tab);
+  // Чаты WhatsApp, где бот не смог ответить («Нужен ответ» в «Задачах»).
+  const [waAttention, setWaAttention] = useState(0);
+  useEffect(() => {
+    if (!authed) return;
+    api<{ chats: unknown[] }>("/admin/v1/conversations/attention")
+      .then((a) => setWaAttention(a.chats.length))
+      .catch(() => undefined); // сбой не должен гасить остальные цифры
+  }, [authed, tab]);
 
   useEffect(() => {
     applyTelegramChrome();
@@ -203,7 +214,7 @@ export function App() {
   if (!authed) return <Login onDone={() => setAuthed(true)} />;
 
   const data = attention.data;
-  const taskBadge = data ? data.receipts + data.questions : 0;
+  const taskBadge = (data ? data.receipts + data.questions : 0) + waAttention;
   const clientBadge = data ? data.waiting.length : 0;
   const badgeOf = (id: Tab) => (id === "receipts" ? taskBadge : id === "clients" ? clientBadge : 0);
   const badgeLabel = (id: Tab, n: number) => (id === "receipts" ? `${n} дел ждут` : `${n} ждут ответа`);
@@ -287,8 +298,9 @@ export function App() {
           {TASK_TABS.includes(tab) && (
             <TasksPage
               view={tab as TasksView}
-              counts={{ receipts: data?.receipts ?? 0, questions: data?.questions ?? 0 }}
+              counts={{ receipts: data?.receipts ?? 0, questions: data?.questions ?? 0, attention: waAttention }}
               onView={(v) => void goTo(v)}
+              onChange={() => setWaAttention((n) => Math.max(0, n - 1))}
             />
           )}
           {tab === "clients" && studentId && <StudentPage contactId={studentId} onBack={() => setStudentId(null)} />}
@@ -308,6 +320,7 @@ export function App() {
           {tab === "import" && <ImportPage onGo={(t) => (t === "recipes" ? openReview(null) : void goTo(t))} />}
           {tab === "quality" && <QualityPage />}
           {tab === "testimonials" && <TestimonialsPage />}
+          {tab === "links" && <LinksPage />}
           {tab === "settings" && <SettingsPage />}
         </Suspense>
 

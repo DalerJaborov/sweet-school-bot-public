@@ -11,11 +11,13 @@ export type Tab =
   | "recipes"
   | "receipts"
   | "questions"
+  | "attention"
   | "clients"
   | "more"
   | "summary"
   | "money"
   | "texts"
+  | "offer"
   | "courses"
   | "funnels"
   | "journal"
@@ -24,6 +26,7 @@ export type Tab =
   | "import"
   | "quality"
   | "testimonials"
+  | "links"
   | "settings";
 
 export type NavGroup = "main" | "expert";
@@ -46,13 +49,14 @@ export const BOTTOM_NAV: { id: Tab; label: string }[] = [
 ];
 
 /** В режиме сестры — только то, что нужно для разбора заявок и чеков. */
-export const SIMPLE_TABS: ReadonlySet<Tab> = new Set<Tab>(["home", "receipts", "questions", "clients", "more"]);
+export const SIMPLE_TABS: ReadonlySet<Tab> = new Set<Tab>(["home", "receipts", "questions", "attention", "clients", "links", "more"]);
 
 /** Разделы экрана «Ещё». Нижняя панель их не дублирует. */
 export const MORE_SECTIONS: SectionInfo[] = [
   { id: "money", label: "Деньги", about: "Сколько заработано и кто оплатил", group: "main" },
   { id: "summary", label: "Сводка дня", about: "Цифры за вчера и неделю", group: "main" },
   { id: "testimonials", label: "Отзывы", about: "Что говорят ученицы", group: "main" },
+  { id: "links", label: "Ссылки", about: "Для рекламы и приглашения в группы Telegram", group: "main" },
   { id: "settings", label: "Настройки", about: "Подключения и работа помощника", group: "main" },
   { id: "funnels", label: "Автосообщения", about: "Цепочки сообщений, которые уходят сами", group: "expert" },
   { id: "journal", label: "История переписки", about: "Кто и как проходит автосообщения", group: "expert" },
@@ -79,8 +83,8 @@ export function bottomNavFor(simple: boolean): { id: Tab; label: string }[] {
 
 /** Разделы, которые подсвечивают одну кнопку внизу. */
 export function navOwner(tab: Tab): Tab {
-  if (tab === "questions") return "receipts";
-  if (tab === "texts" || tab === "recipes") return "courses";
+  if (tab === "questions" || tab === "attention") return "receipts";
+  if (tab === "texts" || tab === "offer" || tab === "recipes") return "courses";
   if (MORE_SECTIONS.some((s) => s.id === tab)) return "more";
   return tab;
 }

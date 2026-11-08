@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
-import { loadContent, renderSite, WEB_ROOT } from "./build-site-pages.mjs";
+import { loadContent, renderSite, resolveSsiFallback, WEB_ROOT } from "./build-site-pages.mjs";
 
 const DEFAULT_APP_PATHS = ["/course", "/l", "/panel", "/api", "/admin"];
 const normalizedText = (value) => (value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
@@ -30,7 +30,8 @@ export function auditSite(files, { origin, appPaths = DEFAULT_APP_PATHS } = {}) 
       if (!file.endsWith(".html")) continue;
       const url = new URL(routeForFile(file), base).href;
       // jsdom does not load subresources or execute scripts with these defaults.
-      const dom = new JSDOM(html, { url });
+      // Nginx SSI facts ({{offline.*}}) are audited with their build-time fallback values.
+      const dom = new JSDOM(resolveSsiFallback(html), { url });
       doms.push(dom);
       const doc = dom.window.document;
       const noindex = [...doc.querySelectorAll('meta[name="robots" i], meta[name="googlebot" i]')]

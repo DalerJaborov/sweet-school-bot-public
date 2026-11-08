@@ -438,3 +438,40 @@ describe("/api/site", () => {
     );
   });
 });
+
+describe("/api/site/offer-fact — факты очного курса для страниц сайта (SSI)", () => {
+  const store: Record<string, string> = {};
+  beforeEach(async () => {
+    const db = mockPrisma();
+    for (const k of Object.keys(store)) delete store[k];
+    db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
+      store[where.key] !== undefined ? { key: where.key, value: store[where.key] } : null
+    );
+    const { resetSalesTextsCache } = await import("../../src/services/salesTextsService.js");
+    resetSalesTextsCache();
+  });
+  afterEach(restorePrisma);
+  const fact = async (q: string) => {
+    const res = await fetch(`${base}/api/site/offer-fact?${q}`);
+    return { status: res.status, text: await res.text(), cookie: res.headers.get("set-cookie") };
+  };
+
+  it("умолчания: 700, 13:40–16:30, «21 десерт», адрес Воданасос/Рудаки 177 — без куки", async () => {
+    expect(await fact("key=offline.price")).toEqual({ status: 200, text: "700", cookie: null });
+    expect((await fact("key=offline.hours")).text).toBe("13:40–16:30");
+    expect((await fact("key=offline.dessertsRu")).text).toBe("21 десерт");
+    expect((await fact("key=contact.address&lang=ru")).text).toBe("Душанбе, ориентир Воданасос, Рудаки 177");
+    expect((await fact("key=contact.address&lang=tg")).text).toBe("Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177");
+    expect((await fact("key=contact.street&lang=ru")).text).toBe("ориентир Воданасос, Рудаки 177");
+    expect((await fact("key=contact.mapsQuery&lang=tg")).text).toBe(encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177"));
+  });
+
+  it("адрес из панели экранируется под место вставки; неизвестный ключ — 400", async () => {
+    store.offlineCourseAddress = `Айни 5 <b>"дом" 'А'</b>`;
+    expect((await fact("key=contact.address&lang=tg")).text).toBe("Айни 5 &lt;b&gt;&quot;дом&quot; &#39;А&#39;&lt;/b&gt;");
+    const street = (await fact("key=contact.street&lang=ru")).text;
+    expect(JSON.parse(`"${street}"`)).toBe(`Айни 5 <b>"дом" 'А'</b>`);
+    expect(street).not.toMatch(/[<']/);
+    expect((await fact("key=secret")).status).toBe(400);
+  });
+});

@@ -10,6 +10,8 @@ import { getPrices } from "../services/priceService.js";
 import { getOfflineFacts } from "../services/salesTextsService.js";
 import { offlineCourseCard } from "../ai/offlineCourse.js";
 import { courseDateLabel, toIsoDay, upcomingOfflineStartDate } from "../ai/courseDate.js";
+import { daysWordRu, dessertsWordRu, hoursValue, offlineAddress, parseHours, streetAddress } from "../ai/offlineFacts.js";
+import { onOfferSaved } from "../services/offerService.js";
 import { notifyOwnerDirect } from "../systemAlerts.js";
 import { clientIp } from "../course/access.js";
 import { createRateLimiter } from "../services/rateLimit.js";
@@ -17,6 +19,7 @@ import { visitorOf } from "./visitor.js";
 import type { Attachment } from "../ai/media.js";
 import type { Contact, Message } from "@prisma/client";
 import { renderCatalogFragment, renderCatalogUnavailable } from "./catalogFragment.js";
+import { rememberContactSource } from "../links/siteLinks.js";
 
 /**
  * ПУБЛИЧНОЕ API САЙТА shirinsweets.online — каталог, чат с ботом, заявка на
@@ -67,6 +70,10 @@ export function resetCatalogCache(): void {
   catalogCache = null;
 }
 
+// Сохранили «Цены и даты» — витрина и факты для страниц сайта пересобираются
+// со следующего запроса, а не через минуту.
+onOfferSaved(resetCatalogCache);
+
 /** Только для тестов: сбросить лимиты и кэш каталога между кейсами. */
 export function resetSiteRateLimits(): void {
   chatPerVisitor.reset();
@@ -106,6 +113,85 @@ siteRouter.get(`${API_BASE}/catalog-fragment`, async (req: Request, res: Respons
     logError("site:catalogFragment", err);
     res.send(renderCatalogUnavailable(query.data.lang));
   }
+});
+
+/**
+ * ФАКТ ОЧНОГО КУРСА ДЛЯ СТРАНИЦ САЙТА (Nginx SSI, 08.11.2026).
+ *
+ * Тексты страниц сайта собираются при сборке, а цена, часы, дни и число
+ * десертов меняются в панели. Раньше «700 сомони» и «13:40–16:30» были
+ * вписаны в тексты страниц: смена в панели доходила до бота и карточек, но не
+ * до прозы сайта. Теперь в тексте стоит {{offline.price}}, сборка превращает
+ * его в SSI-вставку с запасным значением, а Nginx на лету подставляет ответ
+ * отсюда. Наружу — только цифры, двоеточие и тире: значение вставляется и в
+ * HTML, и в <title>, и в JSON-LD, поэтому никакого текста владельца здесь нет.
+ * Без куки и до middleware посетителя, как у catalog-fragment.
+ */
+const OFFER_FACT_KEYS = [
+  "offline.price",
+  "offline.days",
+  "offline.daysRu",
+  "offline.desserts",
+  "offline.dessertsRu",
+  "offline.timeFrom",
+  "offline.timeTo",
+  "offline.hours",
+  // Адрес очного курса для подвала, JSON-LD и ссылки на карту (08.11.2026) —
+  // то же поле «Цены и даты», что у карточки бота и напоминания.
+  "contact.address",
+  "contact.street",
+  "contact.mapsQuery",
+] as const;
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+siteRouter.get(`${API_BASE}/offer-fact`, async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  res.type("text/plain");
+  const key = z.enum(OFFER_FACT_KEYS).safeParse(req.query.key);
+  if (!key.success) {
+    res.status(400).send("");
+    return;
+  }
+  const facts = await getOfflineFacts();
+  // Адрес — текст владельца, поэтому экранируется под место вставки: подвал
+  // (HTML), разметка поисковиков (строка JSON внутри <script>), ссылка на карту.
+  if (key.data.startsWith("contact.")) {
+    const lang = req.query.lang === "tg" ? "tg" : "ru";
+    const address = offlineAddress(facts, lang).trim();
+    if (!address) {
+      res.status(503).send("");
+      return;
+    }
+    const out =
+      key.data === "contact.address"
+        ? escapeHtml(address)
+        : key.data === "contact.street"
+          ? JSON.stringify(streetAddress(address)).slice(1, -1).replace(/</g, "\\u003c").replace(/'/g, "\\u0027")
+          : encodeURIComponent(offlineAddress(facts, "ru"));
+    res.send(out);
+    return;
+  }
+  const range = parseHours(facts.hours);
+  const value = {
+    "offline.price": String(facts.price),
+    "offline.days": String(facts.days),
+    "offline.daysRu": daysWordRu(facts.days),
+    "offline.desserts": String(facts.desserts),
+    "offline.dessertsRu": dessertsWordRu(facts.desserts),
+    "offline.timeFrom": range?.from ?? "",
+    "offline.timeTo": range?.to ?? "",
+    "offline.hours": range ? hoursValue(range) : "",
+  }[key.data as Exclude<(typeof OFFER_FACT_KEYS)[number], `contact.${string}`>];
+  // Пусто или что-то кроме цифр/времени («8 дней» — число и одно слово) — 503,
+  // и Nginx покажет запасное значение сборки.
+  if (!value || !/^(?:[0-9:–]+|[0-9]+ [а-яё]+)$/u.test(value)) {
+    res.status(503).send("");
+    return;
+  }
+  res.send(value);
 });
 
 // Кука ставится на ЛЮБОЕ обращение к /api/site/* (контракт), поэтому
@@ -269,8 +355,12 @@ const MSG_SELECT = { id: true, direction: true, byHuman: true, text: true, image
 
 /** Контакт посетителя. Ник «site-<6 знаков>» — чтобы в панели и карточках
  *  владельцу было видно, что человек с сайта, и чем один отличается от другого. */
-async function siteContact(v: Visitor): Promise<Contact> {
-  return upsertContact(v.id, `site-${v.id.slice(0, 6)}`, "WEB");
+async function siteContact(v: Visitor, req: Request): Promise<Contact> {
+  const contact = await upsertContact(v.id, `site-${v.id.slice(0, 6)}`, "WEB");
+  // С какой рекламной ссылки пришёл (кука /go/<код>, links/siteLinks.ts) —
+  // запоминается один раз, без новых вопросов к человеку.
+  await rememberContactSource(contact, req);
+  return contact;
 }
 
 async function findSiteContact(v: Visitor): Promise<Contact | null> {
@@ -310,7 +400,7 @@ siteRouter.post(`${API_BASE}/chat/start`, async (req: Request, res: Response) =>
     return;
   }
   const v = visitor(res);
-  const contact = await siteContact(v);
+  const contact = await siteContact(v, req);
   // Язык сайта — лучшая подсказка о языке человека до первого сообщения:
   // модель и карточки (offlineCourse.ts) смотрят на preferredLanguage.
   if (parsed.data.lang && contact.preferredLanguage !== parsed.data.lang) {
@@ -375,7 +465,7 @@ siteRouter.post(`${API_BASE}/chat/send`, parseImage, async (req: Request, res: R
   }
   const text = parsed.data.text ?? "";
 
-  const contact = await siteContact(v);
+  const contact = await siteContact(v, req);
 
   // Картинка = чек: тот же конвейер, что у Instagram (rescue → очередь → разбор
   // в aiReply). Сохраняется ДО записи сообщения, чтобы в ленте сайта чек был
@@ -455,7 +545,7 @@ siteRouter.post(`${API_BASE}/offline-signup`, async (req: Request, res: Response
   if (!limit.ok) return tooMany(res, limit);
 
   const { name, phone, lang } = parsed.data;
-  const contact = await siteContact(visitor(res));
+  const contact = await siteContact(visitor(res), req);
   if (lang && contact.preferredLanguage !== lang) {
     await prisma.contact
       .update({ where: { id: contact.id }, data: { preferredLanguage: lang } })
