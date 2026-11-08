@@ -26,6 +26,8 @@ export const env = {
   elevenLabsSimilarity: Number(process.env.ELEVENLABS_SIMILARITY) || 0,
   /// Метка эмоции в начале голосового для v3/v4, например «[warm]». Пусто — без метки.
   elevenLabsTag: (process.env.ELEVENLABS_TAG ?? "").trim(),
+  /// Темп готового голосового (ffmpeg atempo): 1.0 — как есть, 1.07 — чуть быстрее. У v4 своего ползунка скорости нет.
+  elevenLabsTempo: Number(process.env.ELEVENLABS_TEMPO) || 1,
   /// Публичный адрес самого бота — нужен, чтобы собрать ссылку на загруженный файл
   /// (фото/видео шага воронки), которую сможет скачать сервер Meta.
   /// Без этого медиа-вложения в воронках не работают — Meta не может скачать файл.

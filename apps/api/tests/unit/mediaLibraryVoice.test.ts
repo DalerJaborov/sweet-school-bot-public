@@ -132,3 +132,13 @@ describe("decorateForV3 — одна метка в начале; v3 своя, v4
     expect((out.match(/\[/g) ?? []).length).toBe(1);
   });
 });
+
+describe("voiceFilter — темп только для озвучки бота", () => {
+  it("1.0 и мусор дают чистый фильтр, 1.07 добавляет atempo", async () => {
+    const { voiceFilter, VOICE_FILTER } = await import("../../src/ai/audioConvert.js");
+    expect(voiceFilter()).toBe(VOICE_FILTER);
+    expect(voiceFilter(1)).toBe(VOICE_FILTER);
+    expect(voiceFilter(Number.NaN)).toBe(VOICE_FILTER);
+    expect(voiceFilter(1.07)).toBe(`atempo=1.070,${VOICE_FILTER}`);
+  });
+});

@@ -7,8 +7,16 @@ import { spawn } from "node:child_process";
  * Перекодируем через ffmpeg (он уже стоит на сервере для видео уроков); если ffmpeg
  * недоступен или упал — возвращаем null, и вызывающий оставляет исходный файл.
  */
-/** Только выравнивание громкости. Без ускорения (владелец 08.11.2026 вечером: 1.3x «тараторит»), без шумов и фильтров. */
+/** Только выравнивание громкости. Без шумов и фильтров (решение владельца). */
 export const VOICE_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=9";
+/**
+ * Фильтр с темпом: озвучка бота может идти чуть быстрее (ELEVENLABS_TEMPO, владелец выбирает на слух;
+ * прежние 1.3x «тараторили»). Настоящие записи Ширин из панели темп не трогает (tempo = 1).
+ */
+export function voiceFilter(tempo = 1): string {
+  const t = Number.isFinite(tempo) && tempo > 0.5 && tempo < 2 && Math.abs(tempo - 1) > 0.001 ? tempo : 0;
+  return t ? `atempo=${t.toFixed(3)},${VOICE_FILTER}` : VOICE_FILTER;
+}
 
 export type VoiceFormat = "ogg" | "aac";
 /** WhatsApp - ogg/opus (настоящее голосовое); Instagram и Messenger принимают aac/m4a/wav/mp4, но не ogg. */
@@ -17,7 +25,7 @@ const CODEC_ARGS: Record<VoiceFormat, string[]> = {
   aac: ["-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "1", "-f", "adts"],
 };
 
-export function toOpusOgg(input: Buffer, timeoutMs = 30_000, format: VoiceFormat = "ogg"): Promise<Buffer | null> {
+export function toOpusOgg(input: Buffer, timeoutMs = 30_000, format: VoiceFormat = "ogg", tempo = 1): Promise<Buffer | null> {
   return new Promise((resolve) => {
     let done = false;
     const finish = (value: Buffer | null) => {
@@ -26,7 +34,7 @@ export function toOpusOgg(input: Buffer, timeoutMs = 30_000, format: VoiceFormat
       resolve(value);
     };
     try {
-      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-af", VOICE_FILTER, ...CODEC_ARGS[format], "pipe:1"], {
+      const ff = spawn("ffmpeg", ["-v", "error", "-i", "pipe:0", "-vn", "-af", voiceFilter(tempo), ...CODEC_ARGS[format], "pipe:1"], {
         stdio: ["pipe", "pipe", "ignore"],
       });
       const chunks: Buffer[] = [];
