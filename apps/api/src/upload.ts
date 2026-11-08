@@ -85,7 +85,15 @@ mediaRouter.use("/media", (_req, res, next) => {
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   next();
 });
-mediaRouter.use("/media", express.static(UPLOAD_DIR));
+// .aac отдаём как audio/aac (по умолчанию mime-таблица даёт audio/x-aac, который Instagram/Messenger могут не принять).
+mediaRouter.use(
+  "/media",
+  express.static(UPLOAD_DIR, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith(".aac")) res.setHeader("Content-Type", "audio/aac");
+    },
+  })
+);
 
 /**
  * Копия присланного чека у нас на диске — чтобы показать её владельцу в Telegram
