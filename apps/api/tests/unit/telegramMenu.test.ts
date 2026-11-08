@@ -16,6 +16,12 @@ const handleManualLinkCommand = vi.fn(async () => true);
 vi.mock("../../src/course/manualLink.js", () => ({
   handleManualLinkCommand: (...a: unknown[]) => handleManualLinkCommand(...a),
 }));
+const createSiteLink = vi.fn(async (i: { label?: string | null }) => ({ code: "abc234", label: i.label ?? null }));
+vi.mock("../../src/links/siteLinks.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/links/siteLinks.js")>()),
+  createSiteLink: (...a: unknown[]) => createSiteLink(...(a as [{ label?: string | null }])),
+  shortUrl: (c: string) => `https://x.test/go/${c}`,
+}));
 vi.mock("../../src/dailyReport.js", () => ({
   buildReport: vi.fn(async () => "ОТЧЁТ"),
   offsetMs: vi.fn(async () => 0),
@@ -108,5 +114,24 @@ describe("Меню быстрых действий", () => {
   });
   it("ответ на чужое сообщение из чужого чата не работает", async () => {
     expect(await handleMenuCommand({ ...msg("@x", 999), reply_to_message: { text: "Кого найти? Ответьте на это сообщение ником" } })).toBe(false);
+  });
+  it("«Ссылка на сайт»: три шага и короткая ссылка", async () => {
+    await handleMenuCommand(msg("🔗 Ссылка на сайт"));
+    expect(JSON.stringify(sendWithMarkup.mock.calls[0]?.[3])).toContain("mn:lt:online");
+    await handleMenuCallback("tok", { id: "c", data: "mn:lt:online", message: { chat: { id: 111 } } });
+    await handleMenuCallback("tok", { id: "c", data: "mn:ll:online:tg", message: { chat: { id: 111 } } });
+    await handleMenuCallback("tok", { id: "c", data: "mn:ls:online:tg:instagram", message: { chat: { id: 111 } } });
+    expect(createSiteLink).toHaveBeenCalledWith({ target: "online", lang: "tg", source: "instagram", label: undefined });
+    expect(sendTelegramMessage.mock.calls.at(-1)?.[2]).toContain("https://x.test/go/abc234");
+  });
+  it("блогер: спрашивает имя, ответ создаёт ссылку с именем", async () => {
+    await handleMenuCallback("tok", { id: "c", data: "mn:ls:art:ru:blogger", message: { chat: { id: 111 } } });
+    const prompt = sendWithMarkup.mock.calls.at(-1)?.[2] as string;
+    await handleMenuCommand({ ...msg("Малика"), reply_to_message: { text: prompt } });
+    expect(createSiteLink).toHaveBeenCalledWith({ target: "art", lang: "ru", source: "blogger", label: "Малика" });
+  });
+  it("мусорный шаг ссылки ничего не создаёт", async () => {
+    await handleMenuCallback("tok", { id: "c", data: "mn:ls:evil:tg:ads", message: { chat: { id: 111 } } });
+    expect(createSiteLink).not.toHaveBeenCalled();
   });
 });
