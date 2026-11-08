@@ -109,12 +109,13 @@ export function ReceiptsPage() {
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <Person person={r.contact} note={timeAgo(r.createdAt)} />
                   <div className="list-chips" style={{ marginTop: 6 }}>
-                    <span className={`chip ${r.kind === "valid" ? "chip-ok" : r.kind === "unchecked" ? "" : "chip-warn"}`}>
-                      {r.kind === "valid" ? "похож на настоящий" : r.kind === "unchecked" ? "перепроверяется" : "подозрительный"}
+                    <span className={`chip ${r.kind === "valid" ? "chip-ok" : r.kind === "unchecked" || r.kind === "duplicate" ? "" : "chip-warn"}`}>
+                      {r.kind === "valid" ? "похож на настоящий" : r.kind === "unchecked" ? "перепроверяется" : r.kind === "duplicate" ? "повтор того же перевода" : "подозрительный"}
                     </span>
                     {r.amount != null && <span className="chip">{money(r.amount)}</span>}
                     {r.linkSent && <span className="chip chip-ok">ссылка ушла</span>}
                     {r.ownerDecision === "REJECTED" && <span className="chip chip-err">отклонён</span>}
+                    {r.ownerDecision === "HANDLED" && <span className="chip">обработан вручную</span>}
                   </div>
                   {r.reason && <div className="list-sub" style={{ marginTop: 4 }}>{r.reason}</div>}
                 </div>

@@ -254,6 +254,10 @@ model ReceiptCheck {
   /// дважды (сразу и из очереди перепроверки), а сообщение должно уйти один раз.
   customerNotifiedAt DateTime?
   awaitingDeliveryChoice Boolean @default(false)
+  /// Карточки этого чека в Telegram владельцу: JSON [{chatId, messageId}]. Нужны,
+  /// чтобы закрыть карточку (убрать кнопки), когда доступ уже выдан другим путём —
+  /// иначе кнопки остаются «живыми» и нажатие ломается (08.11.2026).
+  ownerAlerts String?
 }
 
 /// Журнал вызовов Gemini — модель, токены, оценочная стоимость (см. ai/pricing.ts).

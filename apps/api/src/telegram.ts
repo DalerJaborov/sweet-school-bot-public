@@ -96,7 +96,7 @@ export async function sendReceiptForReview(
      *  по умолчанию). См. c50/c70/cboth в telegramWebhook.ts handleDecision. */
     needsCourseChoice?: boolean;
   }
-): Promise<boolean> {
+): Promise<{ chatId: string; messageId: number } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const inline_keyboard = input.needsCourseChoice
@@ -129,12 +129,13 @@ export async function sendReceiptForReview(
       }),
       signal: controller.signal,
     });
-    const data = (await res.json()) as { ok?: boolean; description?: string };
+    const data = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
-    return true;
+    // id сообщения нужен, чтобы позже закрыть карточку (receiptAlerts.ts).
+    return typeof data.result?.message_id === "number" ? { chatId: ownerChatId, messageId: data.result.message_id } : null;
   } catch (err) {
     logError("telegram:review", err);
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -178,7 +179,8 @@ export async function answerCallback(botToken: string, callbackId: string, text:
     const res = await fetch(`${API}/bot${botToken}/answerCallbackQuery`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: callbackId, text }),
+      // Лимит Telegram на всплывающую подсказку — 200 символов; длиннее — ошибка и «кнопка не работает».
+      body: JSON.stringify({ callback_query_id: callbackId, text: text.length > 190 ? `${text.slice(0, 187)}...` : text }),
     });
     const data = (await res.json()) as { ok?: boolean; description?: string };
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);

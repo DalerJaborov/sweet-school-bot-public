@@ -60,7 +60,7 @@ export async function decideReceipt(
     const check = await prisma.receiptCheck.findUnique({ where: { id: receiptId } });
     if (!check) return { ok: false, reason: "not_found", message: "Чек не найден" };
     if (check.ownerDecision && check.ownerDecision !== "PENDING") {
-      return { ok: false, reason: "already_decided", message: "Решение уже принято" };
+      return { ok: false, reason: "already_decided", message: "Уже обработано" };
     }
     if (check.amount == null) {
       return { ok: false, reason: "needs_course", message: "Сумма на чеке не прочиталась — выберите курс явно" };
@@ -78,7 +78,7 @@ export async function decideReceipt(
   if (claim.count === 0) {
     const existing = await prisma.receiptCheck.findUnique({ where: { id: receiptId } });
     if (!existing) return { ok: false, reason: "not_found", message: "Чек не найден" };
-    return { ok: false, reason: "already_decided", message: "Решение уже принято" };
+    return { ok: false, reason: "already_decided", message: "Уже обработано" };
   }
   const receipt = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, include: { contact: true } });
   if (!receipt) return { ok: false, reason: "not_found", message: "Чек не найден" };
@@ -133,6 +133,22 @@ export async function decideReceipt(
       grant,
       note: grant.length > 0 ? `выбрано владельцем вручную: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "уже куплено",
     };
+  }
+
+  // ДОСТУП ПО ЭТОМУ КУРСУ БЫЛ ОТОЗВАН РАНЕЕ. Выдача никогда не оживляет
+  // отозванное (grantCourses пропускает такую покупку), и раньше нажатие
+  // «Подтвердить» упиралось в "не настроена группа" и оставляло карточку с
+  // живыми кнопками (08.11.2026). Закрываем чек понятным ответом: вернуть
+  // доступ можно осознанно в «Клиентах».
+  const revokedBefore = await prisma.purchase.count({
+    where: { contactId: receipt.contactId, course: { in: plan.grant }, revokedAt: { not: null } },
+  });
+  if (plan.grant.length > 0 && revokedBefore > 0) {
+    await prisma.receiptCheck.update({
+      where: { id: receiptId },
+      data: { ownerDecision: "APPROVED", decidedAt: new Date(), reason: `${receipt.reason} (доступ был отозван ранее)` },
+    });
+    return { ok: true, status: "approved_no_link", message: "Доступ по этому курсу был отозван ранее. Вернуть его можно в «Клиентах»." };
   }
 
   // A previous send failure preserves the paid purchase. Retry its delivery,

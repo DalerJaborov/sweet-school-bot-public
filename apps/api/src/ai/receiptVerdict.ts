@@ -7,11 +7,12 @@ import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automatio
 import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
-import { allocate } from "../courses.js";
+import { allocate, type Course } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
+import { rememberAlert } from "../receiptAlerts.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -32,6 +33,17 @@ const ALT_SCREENSHOT_TEXT: Record<ClientLanguage, string> = {
  * таблицы «Тексты и цены», что у бота.
  */
 export async function confirmRequisitesToCustomer(contact: Contact, lastText: string | null): Promise<void> {
+  // Второй скриншот ТОГО ЖЕ перевода (экран проверки получателя после оплаты):
+  // человек только что заплатил и получил ссылку - "переводите и пришлите чек"
+  // его запутало бы. Отвечаем, что перевод уже принят.
+  const justPaid = await prisma.receiptCheck.findFirst({
+    where: { contactId: contact.id, linkSent: true, createdAt: { gte: new Date(Date.now() - 2 * SAME_TRANSFER_WINDOW_MS) } },
+    select: { id: true },
+  });
+  if (justPaid) {
+    await tellAlreadyAccepted(contact, lastText);
+    return;
+  }
   const texts = await getSalesTexts();
   const line = paymentLine(texts);
   const byLang: Record<ClientLanguage, string> = {
@@ -103,40 +115,81 @@ export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: 
     .catch((err) => logError("receiptVerdict:notifyCustomerForwarded", err));
 }
 
-/** Чек месячной давности — это уже не «забыл отправить», такой стоит показать человеку глазами. */
-const RECEIPT_ANCIENT_DAYS = 30;
-/** С какого расхождения дату стоит УПОМЯНУТЬ владельцу в карточке (не блокируя):
- *  полсуток покрывают любой часовой пояс и любое «отправил на следующий день». */
+/** Давнишний чек: старше этого — скорее чужой старый скриншот, стоит показать
+ *  человеку глазами. НЕРАСПОЗНАННАЯ дата сама по себе поводом больше не служит
+ *  (08.11.2026): на настоящих чеках Душанбе Сити время часто не читается. */
+const RECEIPT_STALE_HOURS = 72;
+/** Дата «из будущего» дальше этого — похоже на подделку; меньше — часовой пояс. */
+const RECEIPT_FUTURE_HOURS = 12;
+/** С какого расхождения дату стоит УПОМЯНУТЬ в карточке (не блокируя). */
 const RECEIPT_ODD_DATE_HOURS = 12;
+/** Два скриншота одного перевода (подтверждение + экран проверки получателя)
+ *  приходят подряд; чек, пришедший в этом окне после уже принятого, — не новый. */
+export const SAME_TRANSFER_WINDOW_MS = 15 * 60_000;
+/** Одна сумма на двух экранах может отличаться (списано 650 ₽ ≈ 73, зачислено 71.45). */
+const SAME_TRANSFER_AMOUNT_GAP = 5;
 
-/** Карточка сомнительного чека владельцу в Telegram — с фото и кнопками
- *  «Подтвердить»/«Отклонить». Если Telegram не настроен, чек просто остаётся во
- *  вкладке «Чеки» панели: тихо потерять его нельзя. */
+async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<void> {
+  const lastIn = lastText?.trim()
+    ? { text: lastText }
+    : await prisma.message.findFirst({
+        where: { contactId: contact.id, direction: "IN", text: { not: null } },
+        orderBy: { createdAt: "desc" },
+        select: { text: true },
+      });
+  const text = DUPLICATE_PAYMENT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  if (await isBotFrozen()) return;
+  await sendToContact(contact, text)
+    .then((mid) => (mid ? recordOutgoingMessage(contact.id, text, mid) : undefined))
+    .catch((err) => logError("receiptVerdict:alreadyAccepted", err));
+}
+
+/** Курсы уже реально доставлены человеку (ссылка выдана) — например, соседним
+ *  разбором второго скриншота того же перевода. */
+async function coursesAlreadyDelivered(contactId: string, courses: Course[]): Promise<boolean> {
+  const n = await prisma.purchase.count({
+    where: {
+      contactId,
+      course: { in: courses },
+      revokedAt: null,
+      accessDeliveryUncertainAt: null,
+      OR: [{ inviteLink: { not: null } }, { accessIssuedAt: { not: null } }],
+    },
+  });
+  return n >= courses.length;
+}
+
+/** Карточка владельцу в Telegram — с фото и кнопками «Подтвердить»/«Отклонить».
+ *  Только при реальном сомнении; текст короткий: сумма, что смущает, что видит ИИ.
+ *  Если Telegram не настроен, чек остаётся во вкладке «Чеки»: тихо потерять нельзя. */
 async function askOwner(
   contact: Contact,
   receiptId: string,
   verdict: { amount: number | null; receiptAt: Date | null; imageUrl: string | null },
-  reason: string
+  doubts: string[],
+  modelReason: string
 ): Promise<void> {
   if (await isBotFrozen()) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken || !verdict.imageUrl) return;
 
-  // Карточки подозрительных чеков — владельцу и сестре (telegramSummaryChatIds).
+  // Карточки сомнительных чеков — владельцу и сестре (telegramSummaryChatIds).
   const recipients = await summaryChatIds();
   if (recipients.length === 0) return;
 
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   const caption =
     `💳 Чек требует проверки\nОт: ${who}\n` +
-    `Сумма: ${verdict.amount != null ? `${verdict.amount} сомони` : "не разобрана"}\n` +
-    `Дата на чеке: ${verdict.receiptAt ? verdict.receiptAt.toLocaleString("ru-RU") : "не разобрана"}\n` +
-    `Причина: ${reason}`;
+    `Сумма: ${verdict.amount != null ? `${Math.round(verdict.amount * 100) / 100} сомони` : "не разобрана"}\n` +
+    (verdict.receiptAt ? `Дата на чеке: ${verdict.receiptAt.toLocaleString("ru-RU")}\n` : "") +
+    `Что смущает: ${doubts.length > 0 ? doubts.join("; ") : "требуется взгляд человека"}` +
+    (modelReason ? `\nНа чеке: ${modelReason.slice(0, 200)}` : "");
 
   const needsCourseChoice = verdict.amount == null;
   for (const chatId of recipients) {
     if (await isBotFrozen()) return;
-    await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice });
+    const sent = await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice });
+    if (sent) await rememberAlert(receiptId, sent);
   }
 }
 
@@ -162,8 +215,24 @@ export async function handleReceiptVerdict(
     await askDeliveryChoice(contact);
     return;
   }
-  let kind = verdict.kind;
+  // ТОТ ЖЕ СКРИНШОТ ПРИСЛАН ВТОРОЙ РАЗ ТЕМ ЖЕ ЧЕЛОВЕКОМ (двойной тап, «где ссылка?»).
+  // Раньше он перезаписывал уже закрытую строку и звал владельца заново. Теперь
+  // строку не трогаем: принятый — «уже приняли», ждущий владельца — молчим
+  // (человек уже знает, что чек у Ширин), отклонённый — решение владельца в силе.
+  if (!existingId && previous && previous.contactId === contact.id && previous.kind !== "unchecked") {
+    if (previous.linkSent || previous.ownerDecision === "APPROVED" || previous.ownerDecision === "HANDLED" || previous.kind === "duplicate") {
+      await tellAlreadyAccepted(contact);
+      return;
+    }
+    if (previous.ownerDecision === "PENDING" || previous.ownerDecision === "REJECTED") return;
+  }
+  let kind: string = verdict.kind;
   let reason = verdict.reason;
+  // Что смущает — по-человечески, для карточки владельцу. «hard» — жёсткие
+  // стопы защиты от обмана: по ним клиентку не просим «пришлите ещё».
+  const doubts: string[] = [];
+  let hard = false;
+  let conversionFailed = false;
 
   // ЧЕК ИЗ-ЗА ГРАНИЦЫ. Переводим по текущему курсу и дальше работаем уже с сомони.
   let amount = verdict.amount;
@@ -172,7 +241,9 @@ export async function handleReceiptVerdict(
     const converted = await toSomoni(amount, currency);
     if (converted == null) {
       kind = "suspicious";
+      conversionFailed = true;
       reason = `${reason} (чек в ${currency}, курс сейчас недоступен — проверьте сумму сами)`;
+      doubts.push(`чек в ${currency}, курс сейчас недоступен`);
       amount = null;
     } else {
       reason = `${reason} (${verdict.amount} ${currency} ≈ ${Math.round(converted)} сомони по курсу)`;
@@ -184,40 +255,75 @@ export async function handleReceiptVerdict(
   const blocked = await prisma.blockedReceipt.findUnique({ where: { imageHash: verdict.imageHash } });
   if (blocked) {
     kind = "suspicious";
+    hard = true;
     reason = `В чёрном списке: ${blocked.reason}`;
+    doubts.push("чек из чёрного списка");
   }
 
-  // Тот же скриншот уже открывал доступ раньше.
+  // Тот же скриншот уже открывал доступ (другому человеку — свой повтор отсеян выше).
   const reused = await prisma.receiptCheck.findFirst({ where: { imageHash: verdict.imageHash, linkSent: true } });
   if (reused) {
     kind = "suspicious";
+    hard = true;
     reason = `Этот же скриншот уже открывал доступ раньше (${reused.createdAt.toLocaleString("ru-RU")})`;
+    doubts.push("этот скриншот уже открывал доступ раньше");
   }
 
   // ВОЗМОЖНОЕ РЕДАКТИРОВАНИЕ СУММЫ/ДАТЫ.
   if (verdict.tamperingSuspected) {
     kind = "suspicious";
+    hard = true;
     reason = `${reason} (похоже, сумма или дата на чеке отредактированы — смотрите внимательно)`;
+    doubts.push("признаки подделки: сумма или дата похожи на отредактированные");
   }
 
-  // Дата на самом чеке.
+  // Дата на самом чеке — МЯГКИЙ признак. Не прочиталась — не беда; давнишняя
+  // или «из будущего» — повод показать человеку.
   if (kind === "valid" && verdict.receiptAt) {
     const ageHours = (Date.now() - verdict.receiptAt.getTime()) / 3_600_000;
-    if (ageHours > RECEIPT_ANCIENT_DAYS * 24) {
+    if (ageHours > RECEIPT_STALE_HOURS) {
       kind = "suspicious";
-      reason = `${reason} (чек старше ${RECEIPT_ANCIENT_DAYS} дней — проверьте глазами)`;
+      hard = true;
+      const days = Math.round(ageHours / 24);
+      reason = `${reason} (чек старше ${RECEIPT_STALE_HOURS} ч — проверьте глазами)`;
+      doubts.push(`чек давнишний (около ${days} дн.)`);
+    } else if (ageHours < -RECEIPT_FUTURE_HOURS) {
+      kind = "suspicious";
+      hard = true;
+      reason = `${reason} (дата на чеке впереди на ${Math.round(-ageHours)} ч)`;
+      doubts.push("дата на чеке из будущего");
     } else if (Math.abs(ageHours) > RECEIPT_ODD_DATE_HOURS) {
       const hours = Math.round(Math.abs(ageHours));
       reason = `${reason} (дата на чеке ${ageHours > 0 ? "старше" : "впереди"} на ${hours} ч — возможно, другой часовой пояс)`;
     }
   }
 
-  // ПОВТОРНЫЙ ЧЕК: та же сумма уже открывала доступ за последние двое суток —
-  // почти наверняка тот же перевод прислан ещё раз (другой скриншот того же
-  // чека). Не выдаём второй курс за те же деньги; клиентке говорим, что уже
-  // принято, владельцу — на глаза, а не в автомат.
-  let duplicatePayment = false;
+  // ВТОРОЙ СКРИНШОТ ТОГО ЖЕ ПЕРЕВОДА: за последние минуты у человека уже есть
+  // принятый (или ждущий владельца) чек почти на ту же сумму. Это не новый
+  // платёж и не повод для тревоги.
+  let sameTransfer: "settled" | "pending" | null = null;
   if (kind === "valid" && amount != null) {
+    const recent = await prisma.receiptCheck.findFirst({
+      where: {
+        contactId: contact.id,
+        imageHash: { not: verdict.imageHash },
+        kind: { not: "duplicate" },
+        createdAt: { gte: new Date(Date.now() - SAME_TRANSFER_WINDOW_MS) },
+        OR: [{ linkSent: true }, { ownerDecision: "PENDING" }, { ownerDecision: "APPROVED" }],
+      },
+      orderBy: { createdAt: "desc" },
+      select: { amount: true, linkSent: true, ownerDecision: true },
+    });
+    if (recent?.amount != null && Math.abs(recent.amount - amount) <= SAME_TRANSFER_AMOUNT_GAP) {
+      sameTransfer = recent.linkSent || recent.ownerDecision === "APPROVED" ? "settled" : "pending";
+    }
+  }
+
+  // ПОВТОРНЫЙ ЧЕК: та же сумма уже открывала доступ за последние двое суток, но
+  // это не соседний скриншот — может быть второй платёж. Не выдаём второй курс
+  // за те же деньги; клиентке говорим, что уже принято, владельцу — на глаза.
+  let duplicatePayment = false;
+  if (kind === "valid" && amount != null && !sameTransfer) {
     const sameAmount = await prisma.receiptCheck.findFirst({
       where: {
         contactId: contact.id,
@@ -230,27 +336,35 @@ export async function handleReceiptVerdict(
     });
     if (sameAmount) {
       duplicatePayment = true;
+      hard = true;
       kind = "suspicious";
       reason = `${reason} (такая же сумма уже открыла доступ ${sameAmount.createdAt.toLocaleString("ru-RU")} — похоже, тот же перевод прислан второй раз)`;
+      doubts.push("такая же сумма уже открыла доступ — повтор или второй платёж");
     }
   }
 
   const plan = amount != null ? await allocate(contact.id, amount) : null;
-  if (kind === "valid" && plan && plan.grant.length === 0) {
+  if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
+    hard = true;
     reason = `${reason} (${plan.note})`;
+    doubts.push(plan.note);
   }
 
-  const ageMs = verdict.receiptAt ? Date.now() - verdict.receiptAt.getTime() : NaN;
-  const isClean = kind === "valid" && verdict.confidence >= RECEIPT_CONFIDENCE_THRESHOLD &&
-    amount != null && Number.isFinite(amount) && amount > 0 &&
-    verdict.recipientMatches === true && Boolean(verdict.currency) &&
-    Number.isFinite(ageMs) && ageMs >= -15 * 60_000 && ageMs <= RECEIPT_ODD_DATE_HOURS * 3_600_000;
+  // ЧТО МЕШАЕТ АВТОПРИНЯТИЮ у чека, который сам по себе выглядит настоящим.
+  // Дата здесь не участвует. Достаточно: завершённый перевод (kind valid),
+  // получатель наш, сумма в допуске, валюта известна, ИИ уверен.
+  const causes: string[] = [];
+  if (verdict.confidence < RECEIPT_CONFIDENCE_THRESHOLD) causes.push("ИИ не уверен, что это чек");
+  if (!conversionFailed && !(amount != null && Number.isFinite(amount) && amount > 0)) causes.push("сумма не прочиталась");
+  if (verdict.recipientMatches !== true) causes.push("не удалось подтвердить получателя (наш номер)");
+  if (!verdict.currency) causes.push("не определена валюта");
+  const isClean = kind === "valid" && causes.length === 0 && !sameTransfer;
+  if (kind === "valid" && !sameTransfer) doubts.push(...causes);
   if (await isBotFrozen()) return;
 
-  // Owner-authorized heuristic automation: all readable receipt checks must pass.
-  // This is not a bank settlement confirmation; uncertain cases remain for review.
   let linkSent = false;
+  let closedAsDuplicate: "settled" | "pending" | null = sameTransfer;
   if (isClean && plan && plan.grant.length > 0) {
     const granted = await withVerifiedReceiptDelivery(contact.id, verdict.imageHash, () => grantCourses(contact, plan, amount as number, verdict));
     // grantCourses can pause and roll back its own new purchase. Do not turn
@@ -260,19 +374,37 @@ export async function handleReceiptVerdict(
     if (linkSent) {
       reason = `${reason} (${plan.note})`;
       await markExamplesAsSuccessful(contact.id).catch((err) => logError("receiptVerdict:markSuccess", err));
+    } else if (await coursesAlreadyDelivered(contact.id, plan.grant)) {
+      // Соседний разбор второго скриншота того же перевода успел раньше.
+      closedAsDuplicate = "settled";
     }
   }
-  if (!isClean) reason = `${reason} (не все признаки чека подтверждены: требуется проверка)`;
+  if (!isClean && !closedAsDuplicate) {
+    if (doubts.length === 0) doubts.push(verdict.kind === "suspicious" ? "ИИ счёл чек сомнительным" : "требуется взгляд человека");
+    if (kind === "valid") reason = `${reason} (${causes.join("; ")})`;
+  } else if (isClean && !linkSent && !closedAsDuplicate && doubts.length === 0) {
+    doubts.push("доступ автоматически выдать не удалось");
+  }
 
-  const waitingForChoice = isClean && await awaitingDeliveryChoice(contact.id);
-  const needsOwner = !linkSent && !waitingForChoice;
+  const waitingForChoice = isClean && (await awaitingDeliveryChoice(contact.id));
+  const needsOwner = !linkSent && !waitingForChoice && !closedAsDuplicate;
   const knownFraud = Boolean(blocked) || Boolean(reused);
-  const askClientFirst = !isClean && needsOwner && !knownFraud && !duplicatePayment && !contact.askedAltScreenshotAt;
+  // «Пришлите другой скриншот» — один раз и только если чек реально нечитаем
+  // (сумма/валюта/уверенность), а не при любом сомнении и не при жёстких стопах.
+  const unreadable =
+    verdict.confidence < RECEIPT_CONFIDENCE_THRESHOLD ||
+    (!conversionFailed && amount == null) ||
+    !verdict.currency ||
+    (verdict.kind === "valid" && verdict.recipientMatches !== true);
+  const askClientFirst = !isClean && needsOwner && !hard && unreadable && !contact.askedAltScreenshotAt;
   if (askClientFirst) reason = `${reason} (попросили клиента прислать другой скриншот)`;
+  if (closedAsDuplicate) {
+    reason = `${reason} (второй скриншот того же перевода — ${closedAsDuplicate === "settled" ? "доступ уже открыт" : "чек уже у владельца"})`;
+  }
 
   const data = {
     contactId: contact.id,
-    kind,
+    kind: closedAsDuplicate ? "duplicate" : kind,
     confidence: verdict.confidence,
     reason,
     linkSent,
@@ -282,6 +414,7 @@ export async function handleReceiptVerdict(
     amount: amount != null ? Math.round(amount) : null,
     ownerDecision: needsOwner ? "PENDING" : null,
     awaitingDeliveryChoice: waitingForChoice,
+    ...(closedAsDuplicate ? { decidedAt: new Date() } : {}),
   };
 
   let saved: { id: string } | null = null;
@@ -313,7 +446,11 @@ export async function handleReceiptVerdict(
   }
 
   if (await isBotFrozen()) return;
-  if (saved && askClientFirst) {
+  if (saved && closedAsDuplicate === "settled") {
+    await tellAlreadyAccepted(contact);
+  } else if (saved && closedAsDuplicate === "pending") {
+    // Молчим: человек уже получил «передаю Ширин», карточка у владельца одна.
+  } else if (saved && askClientFirst) {
     const lastIn = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "IN", text: { not: null } },
       orderBy: { createdAt: "desc" },
@@ -331,26 +468,16 @@ export async function handleReceiptVerdict(
       logError("receiptVerdict:setAltFlag", err);
     });
   } else if (saved && duplicatePayment) {
-    const lastIn = await prisma.message.findFirst({
-      where: { contactId: contact.id, direction: "IN", text: { not: null } },
-      orderBy: { createdAt: "desc" },
-      select: { text: true },
-    });
-    const text = DUPLICATE_PAYMENT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    await tellAlreadyAccepted(contact);
     if (await isBotFrozen()) return;
-    await sendToContact(contact, text)
-      .then((mid) => (mid ? recordOutgoingMessage(contact.id, text, mid) : undefined))
-      .catch((err) => logError("receiptVerdict:duplicateNotice", err));
-    if (await isBotFrozen()) return;
-    await askOwner(contact, saved.id, verdict, reason);
+    await askOwner(contact, saved.id, verdict, doubts, verdict.reason);
   } else if (saved && needsOwner) {
     if (contact.askedAltScreenshotAt) {
       await prisma.contact.update({ where: { id: contact.id }, data: { askedAltScreenshotAt: null } }).catch((err) => {
         logError("receiptVerdict:resetAltFlagAfterSecond", err);
       });
-      reason = `${reason} (уже просили прислать другой скриншот)`;
     }
-    await askOwner(contact, saved.id, verdict, reason);
+    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason);
     // Мошеннику (чёрный список, повторный скриншот) ничего не обещаем —
     // владелец сам решит, что ему сказать.
     if (!knownFraud) await notifyCustomerReceiptForwarded(contact, saved);

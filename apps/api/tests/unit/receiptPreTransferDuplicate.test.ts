@@ -104,14 +104,26 @@ describe("тот же перевод второй раз", () => {
     expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
   });
   it.each([
-    { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) },
-    { receiptAt: new Date(Date.now() + 3600000) }, { recipientMatches: false },
+    { recipientMatches: false },
     { recipientMatches: undefined }, { amount: null }, { currency: null },
     { tamperingSuspected: true }, { confidence: 49 },
+    // давнишний чек и дата «из будущего» — мягкий признак, но за пределами окна это стоп
+    { receiptAt: new Date(Date.now() - 4 * 24 * 3600000) },
+    { receiptAt: new Date(Date.now() + 20 * 3600000) },
   ])("incomplete or suspicious evidence never auto-grants: %j", async (overrides) => {
     await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
     expect(grantCourses).not.toHaveBeenCalled();
     expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: false, ownerDecision: "PENDING" }) }));
+  });
+
+  // 08.11.2026: нераспознанная дата сама по себе больше не повод для проверки.
+  it.each([
+    { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) }, { receiptAt: new Date(Date.now() + 3600000) },
+  ])("дата не мешает автопринятию честного чека: %j", async (overrides) => {
+    await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+    expect(sendReceiptForReview).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
   });
 
 });

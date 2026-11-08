@@ -22,6 +22,7 @@ import { freeLessonRouter } from "./site/freeLesson.js";
 import { goRouter } from "./links/siteLinks.js";
 import { maybeSendDailyReport } from "./dailyReport.js";
 import { retryUncheckedReceipts } from "./receiptRetry.js";
+import { closeSettledReceiptAlerts } from "./receiptAlerts.js";
 import { retryPendingAiReplies } from "./aiReplyRetry.js";
 import { runJoinReminders } from "./joinReminder.js";
 import { runOfflineReminders } from "./offlineReminder.js";
@@ -227,6 +228,7 @@ setInterval(() => {
     if (!frozen) {
       tasks.push(
         withTimeout("receiptRetry", retryUncheckedReceipts().catch((err) => logError("receiptRetry", err))),
+        withTimeout("receiptAlertsSweep", closeSettledReceiptAlerts().then(() => undefined).catch((err) => logError("receiptAlertsSweep", err))),
         withTimeout("aiReplyRetry", retryPendingAiReplies().catch((err) => logError("aiReplyRetry", err))),
         withTimeout("followUp", runDueFollowUps().catch((err) => logError("followUp", err))),
         withTimeout("joinReminder", runJoinReminders().catch((err) => logError("joinReminder", err))),
