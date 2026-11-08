@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FreeLessonSettings } from "../components/FreeLessonSettings";
 import { WhatsAppSettings } from "../components/WhatsAppSettings";
+import { MetaPurchaseSettings } from "../components/MetaPurchaseSettings";
 import { KnowledgeReview } from "../components/KnowledgeReview";
 
 /** Ответ живой проверки модели (POST /admin/gemini-test). */
@@ -318,6 +319,7 @@ export function SettingsPage() {
       <h2>{Icons.settings} Настройки</h2>
       <FreeLessonSettings />
       <WhatsAppSettings />
+      <MetaPurchaseSettings />
       <KnowledgeReview />
       <p className="hint">Подключения и подсказки для помощника. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}

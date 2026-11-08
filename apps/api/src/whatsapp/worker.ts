@@ -5,6 +5,7 @@ import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
 import { attentionError, classifyAttention } from "./attention.js";
+import { recordAdReferral } from "../metaConversions.js";
 
 let ingesting = false;
 const processing = new Set<string>();
@@ -34,6 +35,10 @@ export async function ingestWhatsAppEvents(): Promise<void> {
           humanTakenOverAt: new Date(e.timestamp), humanTakeoverMid: whatsappMessageId(e.accountId, e.messageId),
         } });
       });
+      if (e.type === "incoming" && e.ad) {
+        await recordAdReferral(contact.id, { adId: e.ad.sourceId, ctwaClid: e.ad.ctwaClid, source: e.ad.sourceType ?? "whatsapp_ad" })
+          .catch((err) => logError("whatsapp:adReferral", err));
+      }
       await bridgeRequest(`/events/${encodeURIComponent(e.id)}/ack`, {});
     }
   } finally { ingesting = false; }
