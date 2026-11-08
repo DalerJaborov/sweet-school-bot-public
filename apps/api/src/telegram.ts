@@ -342,6 +342,31 @@ function parseChatIds(raw: string | null | undefined): string[] {
  * ссылка уже мертва. Одна дверь для автоматических ссылок бота: отзыв после
  * входа (groupAccess.ts) и замена ссылки при напоминании (joinReminder.ts).
  */
+/**
+ * Состоит ли человек в группе прямо сейчас. Возвращает статус Telegram
+ * ("member", "left", "kicked"…) или null, если узнать не вышло (сеть, нет прав
+ * у бота). Вызывающий код при null должен отказать, а не гадать: приглашение,
+ * выданное тому, кто уже внутри, можно переслать другому человеку.
+ */
+export async function getChatMemberStatus(botToken: string, chatId: string, userId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/getChatMember`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, user_id: Number(userId) }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = (await res.json()) as { ok?: boolean; result?: { status?: string }; description?: string };
+    // «Участника нет» Telegram отдаёт ошибкой — для нас это «не в группе».
+    if (!data.ok && /user not found|participant_id_invalid/i.test(data.description ?? "")) return "left";
+    if (!data.ok || !data.result?.status) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+    return data.result.status;
+  } catch (err) {
+    logError("telegram:getChatMember", err);
+    return null;
+  }
+}
+
 export async function revokeInviteLink(botToken: string, chatId: string, inviteLink: string): Promise<boolean> {
   try {
     const res = await fetch(`${API}/bot${botToken}/revokeChatInviteLink`, {
