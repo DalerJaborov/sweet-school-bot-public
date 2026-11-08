@@ -6,21 +6,21 @@ import { Switch } from "../src/components/Switch";
 import { InstallSteps } from "../src/components/InstallApp";
 import { activeCards, type Attention } from "../src/panel/useAttention";
 import { BOTTOM_NAV, MORE_SECTIONS, bottomNavFor, isAllowed, navOwner } from "../src/panel/nav";
-import { setSimpleMode, isSimpleMode, setTheme, currentTheme, applyTheme } from "../src/panel/prefs";
+import { setShowEscalations, isShowEscalations, setSimpleMode, isSimpleMode, setTheme, currentTheme, applyTheme } from "../src/panel/prefs";
 import { detectPlatform } from "../src/panel/pwa";
 
 afterEach(() => {
   cleanup();
   setSimpleMode(false);
+  setShowEscalations(true);
   setTheme("light");
 });
 
-const empty: Attention = { receipts: 0, questions: 0, notOpened: 0, waiting: [], aiOff: false, queue: [], problems: [] };
+const empty: Attention = { receipts: 0, questions: 0, notOpened: 0, waiting: [], queue: [], problems: [] };
 const busy: Attention = {
   receipts: 2,
   questions: 1,
   notOpened: 0,
-  aiOff: false,
   waiting: [
     {
       contactId: "w1",
@@ -28,7 +28,7 @@ const busy: Attention = {
       channel: "INSTAGRAM",
       channelLabel: "Instagram",
       replyUrl: "https://ig.me/m/demo",
-      lastText: "Позовите Ширин",
+      reason: "Просит позвать Ширин",
       at: new Date().toISOString(),
     },
     {
@@ -37,7 +37,7 @@ const busy: Attention = {
       channel: "WEB",
       channelLabel: "Сайт",
       replyUrl: null,
-      lastText: "Здравствуйте",
+      reason: "Помощник не смог ответить",
       at: new Date().toISOString(),
     },
   ],
@@ -101,9 +101,24 @@ describe("Сегодня", () => {
     vi.unstubAllGlobals();
   });
 
-  it("помощник выключен — карточка так и говорит", () => {
-    today({ ...busy, aiOff: true });
-    expect(screen.getByText(/Помощник сейчас выключен/)).toBeTruthy();
+  it("на карточке нет текста чужой переписки — только имя, канал и причина", () => {
+    today(busy);
+    expect(screen.getByText(/Просит позвать Ширин/)).toBeTruthy();
+    expect(screen.getByText(/Помощник не смог ответить/)).toBeTruthy();
+    expect(screen.queryByText(/Здравствуйте/)).toBeNull();
+  });
+
+  it("тумблер «Показывать клиентов, которым нужен ответ»: по умолчанию включён, выключенный прячет карточку", () => {
+    expect(isShowEscalations()).toBe(true);
+    expect(activeCards(busy, false, false)).not.toContain("waiting");
+    render(<MorePage onGo={vi.fn()} onLogout={vi.fn()} />);
+    const sw = screen.getByTestId("switch-escalations") as HTMLInputElement;
+    expect(sw.checked).toBe(true);
+    fireEvent.click(sw);
+    expect(isShowEscalations()).toBe(false);
+    cleanup();
+    today(busy);
+    expect(screen.queryByText("Клиенты ждут ответа")).toBeNull();
   });
 
   it("сбои показаны прямо в карточке и ведут в сводку", () => {
