@@ -1,3 +1,4 @@
+import { silenceIfFollowedByBusiness } from "./profiles.js";
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
@@ -505,6 +506,10 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // блок можно из панели «Ученицы».
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return;
   if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
+
+  // На кого подписана Ширин (знакомые, родня, поставщики) — бот молчит; платящих
+  // и тех, кто прислал картинку (возможный чек), не трогаем. См. profiles.ts.
+  if (await silenceIfFollowedByBusiness(contact, { hasImage: attachments.some((a) => a.kind === "image") })) return;
 
 
   // ФЛИРТ / ОСКОРБЛЕНИЯ / РЕКЛАМНЫЙ СПАМ / ВИДЕО БЕЗ ТЕКСТА в директе от того,
