@@ -11,6 +11,7 @@ import {
   saveLanguage,
   saveProgress,
   saveProgressBeacon,
+  startPreview,
   type CourseInfo,
   type CourseView,
   type DeviceLimitData,
@@ -38,6 +39,7 @@ import {
   type OfflineLesson,
 } from "../offline";
 import { environment } from "../install/detect";
+import { forgetPreviewTicket, isPreview, previewTicket } from "../preview";
 import { reloadWithoutToken } from "../install/reload";
 import { useOnline } from "./useOnline";
 
@@ -105,6 +107,31 @@ export function useCourse() {
    *    телефоне для тихого восстановления сессии (api.ts), адрес чистим.
    */
   const bootstrap = useCallback(async (silent = false, replaceOldest = false) => {
+    // Предпросмотр владельца: билет → кука, дальше только чтение. Ни входа по
+    // ссылке, ни сохранённой копии /me в телефоне — данные ученицы на этом же
+    // устройстве не должны смешаться с предпросмотром (см. preview.ts).
+    if (isPreview()) {
+      try {
+        const ticket = previewTicket();
+        if (ticket) {
+          await startPreview(ticket);
+          forgetPreviewTicket();
+        }
+        const fresh = await loadCourse();
+        setView(fresh);
+        setSource("network");
+        setError(null);
+      } catch (err) {
+        if (!silent || err instanceof CourseError) {
+          setError(
+            err instanceof CourseError
+              ? { message: err.message, reason: err.reason }
+              : { message: "", reason: "network" },
+          );
+        }
+      }
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     // Короткая ссылка /l/<код> — код в пути; старая ?token= — тоже принимаем.
     const shortMatch = /^\/l\/([A-Za-z0-9]{6,32})$/.exec(window.location.pathname);
@@ -181,9 +208,12 @@ export function useCourse() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      void registerServiceWorker();
-      void requestPersistentStorage();
-      await sweepPartials().catch(() => undefined);
+      // Предпросмотр не трогает хранилище телефона: ни офлайн-кеша, ни уборки.
+      if (!isPreview()) {
+        void registerServiceWorker();
+        void requestPersistentStorage();
+        await sweepPartials().catch(() => undefined);
+      }
       if (!cancelled) await bootstrap();
     })();
     return () => {
@@ -196,7 +226,7 @@ export function useCourse() {
   // каждые 10 секунд, и перечитывать базу из-за этого незачем.
   const lessonIds = lessons.map((l) => l.id).join(",");
   useEffect(() => {
-    if (!lessonIds) {
+    if (!lessonIds || isPreview()) {
       setOffline({});
       return;
     }
@@ -223,12 +253,17 @@ export function useCourse() {
     const came = online && !wasOnline.current;
     wasOnline.current = online;
     if (!came) return;
+    if (isPreview()) {
+      void bootstrap(true);
+      return;
+    }
     void flushProgressQueue((item) => saveProgress(item.lessonId, item.positionSec, item.percent))
       .catch(() => undefined)
       .then(() => bootstrap(true));
   }, [online, bootstrap]);
 
   const cacheLesson = useCallback(async (lesson: LessonView) => {
+    if (isPreview()) return;
     if (offlineRef.current[lesson.id] || savingRef.current[lesson.id] !== undefined || !navigator.onLine) return;
     setSaving((s) => ({ ...s, [lesson.id]: 0 }));
     try {
@@ -261,6 +296,8 @@ export function useCourse() {
   const reportProgress = useCallback(
     (lesson: LessonView, positionSec: number, percent: number, via: ProgressVia = "fetch") => {
       setView((v) => (v ? patchProgress(v, lesson.id, positionSec, percent) : v));
+      // Предпросмотр: «продолжить с 12:30» видно в этой вкладке, но никуда не уходит.
+      if (isPreview()) return;
       if (percent >= 95) void markCompleted(lesson.id).catch(() => undefined);
       if (navigator.onLine) {
         if (via === "beacon") saveProgressBeacon(lesson.id, positionSec, percent);
@@ -279,6 +316,7 @@ export function useCourse() {
   );
 
   const noteOpened = useCallback((lessonId: string) => {
+    if (isPreview()) return;
     void markUsed(lessonId).catch(() => undefined);
     // С первого открытого урока можно предлагать установку на экран «Домой»:
     // до этого человек ещё не понял, зачем ему приложение.
@@ -297,7 +335,7 @@ export function useCourse() {
       // перечитываем: без этого сменились бы только надписи интерфейса.
       const fresh = await loadCourse();
       setView(fresh);
-      void saveMe(fresh).catch(() => undefined);
+      if (!isPreview()) void saveMe(fresh).catch(() => undefined);
     } catch {
       // Не долетело — надписи уже на новом языке, содержимое подтянется при
       // следующем открытии. Пугать человека ошибкой тут не за что.

@@ -1,6 +1,8 @@
 import { Onboarding } from "./Onboarding";
 import type { CourseInfo, LessonView } from "./api";
-import { useCourse } from "./hooks/useCourse";
+import { useCourse, type CourseState } from "./hooks/useCourse";
+import { PreviewStrip } from "./components/PreviewStrip";
+import { isPreview } from "./preview";
 import { useScreen } from "./hooks/useScreen";
 import { ChatPage } from "./screens/ChatPage";
 import { CourseLessons } from "./screens/CourseLessons";
@@ -31,6 +33,17 @@ import { ToolsScreen } from "./screens/ToolsScreen";
  */
 export function CourseApp() {
   const state = useCourse();
+  // «Посмотреть как ученица» из панели: те же экраны, сверху — полоса
+  // «Предпросмотр» (preview.ts, components/PreviewStrip.tsx).
+  return (
+    <>
+      {isPreview() && <PreviewStrip t={state.t} />}
+      <CourseScreens state={state} />
+    </>
+  );
+}
+
+function CourseScreens({ state }: { state: CourseState }) {
   const { screen, go, back } = useScreen();
   const { view, error, t, courses, lessons } = state;
 

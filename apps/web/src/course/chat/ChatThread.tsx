@@ -4,6 +4,7 @@ import type { Dict } from "../i18n";
 import { Illustration } from "../components/Illustration";
 import { Composer } from "./Composer";
 import { enqueue, flushQueue, readQueue, type QueuedChat } from "./queue";
+import { isPreview } from "../preview";
 
 /**
  * ЧАТ С УЧИТЕЛЬНИЦЕЙ — лента и поле. Одна на все курсы человека.
@@ -20,6 +21,22 @@ import { enqueue, flushQueue, readQueue, type QueuedChat } from "./queue";
  * (тогда `lessonId` — урок, о котором спрашивают).
  */
 export function ChatThread({ t, lessonId, online }: { t: Dict; lessonId: string | null; online: boolean }) {
+  // Предпросмотр владельца: ни ленты, ни поля. Иначе неотправленный вопрос лёг
+  // бы в очередь телефона и ушёл бы позже как вопрос настоящей ученицы.
+  if (isPreview()) {
+    return (
+      <div className="chat">
+        <div className="chat-empty" role="status">
+          <Illustration kind="chat" size={72} />
+          <p>{t.previewChatOff}</p>
+        </div>
+      </div>
+    );
+  }
+  return <LiveChatThread t={t} lessonId={lessonId} online={online} />;
+}
+
+function LiveChatThread({ t, lessonId, online }: { t: Dict; lessonId: string | null; online: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
