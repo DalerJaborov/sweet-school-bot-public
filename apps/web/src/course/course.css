@@ -2205,3 +2205,25 @@ html.is-preview {
   outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
+/* ===== Упрощение 08.11.2026: список уроков строками, плеер без героя ===== */
+.lessons { display: flex; flex-direction: column; gap: 10px; }
+.lesson-card-btn { flex-direction: row; align-items: center; gap: 14px; padding: 12px 14px; }
+.lesson-num {
+  flex: none; width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--c-accent-soft); color: var(--c-accent); font-weight: 700; font-size: 17px;
+}
+.lesson-num.is-done { background: var(--c-accent); color: var(--c-on-accent, #fff); }
+.lesson-card-body { flex: 1; min-width: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.lesson-title { font-size: 16px; font-weight: 600; line-height: 1.3; }
+.lesson-go { flex: none; color: var(--c-accent); display: flex; }
+.lesson-progress-line { display: block; height: 4px; border-radius: 2px; background: var(--c-accent-soft); overflow: hidden; }
+.lesson-progress-line > span { display: block; height: 100%; background: var(--c-accent); }
+.lesson-chips { padding: 0 14px 12px 72px; }
+.topbar-full { margin: 0 -8px 12px; flex-wrap: wrap; }
+.topbar-full .topbar-title { flex: 1 1 100px; }
+.topbar-full .page-head-tools { margin-left: auto; }
+.player-wrap { margin: 0 -16px 12px; }
+@media (min-width: 720px) { .player-wrap { margin: 0 0 12px; border-radius: var(--r-2); overflow: hidden; } }
+.player.is-portrait:not(.is-fullscreen) .player-video { aspect-ratio: auto; height: 62dvh; object-fit: contain; }
+.player-mark { left: auto; top: 8px; right: 10px; font-size: 11px; opacity: 0.7; transition: none; }

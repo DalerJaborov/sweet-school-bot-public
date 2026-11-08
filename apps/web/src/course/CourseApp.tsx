@@ -80,7 +80,7 @@ function CourseScreens({ state }: { state: CourseState }) {
   if (screen.name === "chat") return <ChatPage state={state} lessonId={screen.lessonId} onBack={back} />;
   if (screen.name === "tools") {
     const course = courses.find((c) => c.id === screen.courseId);
-    if (course) return <ToolsScreen t={t} course={course} onBack={back} />;
+    if (course) return <ToolsScreen state={state} course={course} onBack={back} />;
   }
   if (screen.name === "course" && courses.length > 1) {
     const course = courses.find((c) => c.id === screen.courseId);

@@ -1,7 +1,6 @@
 import type { LessonView } from "../api";
-import { useReducedMotion } from "../hooks/useReducedMotion";
 import { formatDuration, formatTime, type Dict } from "../i18n";
-import { offlineUrls, type OfflineLesson } from "../offline";
+import type { OfflineLesson } from "../offline";
 
 /**
  * КАРТОЧКА УРОКА В ЖУРНАЛЬНОЙ СЕТКЕ (визуальная система 04.09.2026,
@@ -34,8 +33,6 @@ export type LessonCardProps = {
   lesson: LessonView;
   /** Порядковый номер урока в курсе (1-based) — печатается в углу обложки. */
   number: number;
-  /** Следующий непройденный урок курса — карточка на всю ширину сетки, с тизером. */
-  isNext?: boolean;
   saved?: OfflineLesson;
   savingPercent?: number;
   online: boolean;
@@ -46,14 +43,12 @@ export function LessonCard({
   t,
   lesson,
   number,
-  isNext = false,
-  saved,
+    saved,
   savingPercent,
   online,
   onOpen,
 }: LessonCardProps) {
   const isSaved = Boolean(saved);
-  const reduceMotion = useReducedMotion();
   const unavailable = !lesson.ready || (!online && !isSaved);
   const resumable = lesson.ready && !lesson.completed && lesson.positionSec >= RESUME_AFTER_SEC;
   const inProgress = lesson.ready && !lesson.completed && lesson.percent > 0;
@@ -72,15 +67,10 @@ export function LessonCard({
 
   const ariaLabel = [lesson.title, note, hint, chip].filter(Boolean).join(", ");
 
-  // Без сети постер берём из телефона (SW отдаст его из IndexedDB) — coverUrl
-  // там не лежит, поэтому онлайн-обложка используется только онлайн.
-  const posterFallback = !online && saved?.poster ? offlineUrls.poster(lesson.id) : lesson.posterUrl;
-  const cover = online ? (lesson.coverUrl ?? posterFallback) : posterFallback;
-  const showTeaser = isNext && Boolean(lesson.teaserUrl) && !unavailable;
   const numberLabel = String(number).padStart(2, "0");
 
   return (
-    <li className={["lesson-card", unavailable ? "off" : "", isNext ? "is-next" : ""].filter(Boolean).join(" ")}>
+    <li className={["lesson-card", unavailable ? "off" : ""].filter(Boolean).join(" ")}>
       <button
         type="button"
         className="lesson-card-btn"
@@ -88,35 +78,8 @@ export function LessonCard({
         aria-label={ariaLabel}
         onClick={() => onOpen(lesson, resumable ? lesson.positionSec : 0)}
       >
-        <span className={lesson.completed ? "lesson-cover is-done" : "lesson-cover"} aria-hidden="true">
-          {showTeaser ? (
-            <video
-              className="lesson-cover-media"
-              src={lesson.teaserUrl ?? undefined}
-              poster={cover ?? undefined}
-              muted
-              autoPlay={!reduceMotion}
-              preload={reduceMotion ? "none" : "metadata"}
-              loop
-              playsInline
-            />
-          ) : cover ? (
-            <img src={cover} alt="" loading="lazy" decoding="async" />
-          ) : (
-            <span className="lesson-cover-ph">
-              <PlayGlyph />
-            </span>
-          )}
-          <span className="lesson-number">{numberLabel}</span>
-          {lesson.completed && (
-            <span className="lesson-ribbon">
-              <CheckGlyph />
-            </span>
-          )}
-          {inProgress && (
-            <span className="lesson-progress" style={{ width: `${Math.max(0, Math.min(100, lesson.percent))}%` }} />
-          )}
-          {isNext && !showTeaser && <span className="lesson-eyebrow">{t.nextLesson}</span>}
+        <span className={lesson.completed ? "lesson-num is-done" : "lesson-num"} aria-hidden="true">
+          {lesson.completed ? <CheckGlyph /> : numberLabel}
         </span>
         <span className="lesson-card-body">
           <span className="lesson-title">{lesson.title}</span>
@@ -125,6 +88,14 @@ export function LessonCard({
             {hint && <span className="lesson-hint"> · {hint}</span>}
           </span>
           {chip && <span className={isSaved && savingPercent === undefined ? "chip chip-ok" : "chip"}>{chip}</span>}
+          {inProgress && (
+            <span className="lesson-progress-line" aria-hidden="true">
+              <span style={{ width: `${Math.max(0, Math.min(100, lesson.percent))}%` }} />
+            </span>
+          )}
+        </span>
+        <span className="lesson-go" aria-hidden="true">
+          <PlayGlyph />
         </span>
       </button>
 

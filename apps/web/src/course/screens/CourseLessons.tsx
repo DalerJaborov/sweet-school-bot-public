@@ -3,7 +3,7 @@ import { AskFab } from "../components/AskFab";
 import { Banner } from "../components/Banner";
 import { LessonList } from "../components/LessonList";
 import type { CourseState } from "../hooks/useCourse";
-import { BackButton } from "./BackButton";
+import { TopBar } from "../components/TopBar";
 import { ToolGlyph } from "./ToolsScreen";
 
 /** Уроки одного курса — экран для тех, у кого курсов два. */
@@ -25,10 +25,7 @@ export function CourseLessons({
   const { t, lang, view, offline, saving, online, source } = state;
   return (
     <div className="page has-fab">
-      <header className="topbar">
-        <BackButton t={t} onClick={onBack} />
-        <h1 className="topbar-title">{course.title}</h1>
-      </header>
+      <TopBar state={state} title={course.title} onBack={onBack} />
       {course.description && <p className="sub">{course.description}</p>}
       {(course.toolsData?.length ?? 0) > 0 && (
         <button type="button" className="tools-entry" onClick={() => onOpenTools(course)}>
