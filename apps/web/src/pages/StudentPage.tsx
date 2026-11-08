@@ -103,7 +103,7 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
   async function releaseDevice(d: StudentDevice) {
     const ok = await confirmDialog({
       title: `Освободить место «${d.label}»?`,
-      message: "На этом устройстве уроки закроются. Ученица сможет открыть курс на новом телефоне по своей ссылке.",
+      message: "Старый телефон и старая ссылка закроются, ученице в чат уйдёт новая ссылка. Откроет её на новом телефоне.",
       confirmLabel: "Освободить",
       danger: true,
     });

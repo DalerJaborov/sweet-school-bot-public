@@ -16,6 +16,9 @@ vi.mock("../../src/storage/s3.js", () => ({
   listBuckets: vi.fn(),
 }));
 
+const approveTransferByOwner = vi.hoisted(() => vi.fn());
+vi.mock("../../src/course/phoneChange.js", () => ({ approveTransferByOwner }));
+
 import { courseAdminRouter } from "../../src/course/adminRoutes.js";
 
 /**
@@ -56,16 +59,25 @@ const device = {
 };
 
 describe("POST /admin/course-devices/:id/release", () => {
-  it("освобождает одно устройство и пишет в журнал «хозяйка»", async () => {
+  it("освобождение идёт как перенос: ссылка меняется, а не просто удаляется устройство", async () => {
     db.model("device").findUnique.mockResolvedValue(device);
+    approveTransferByOwner.mockResolvedValue(true);
 
     const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
 
     expect(res.status).toBe(200);
-    expect(db.model("device").delete).toHaveBeenCalledWith({ where: { id: "device-1" } });
-    expect(db.model("accessEvent").create).toHaveBeenCalledWith({
-      data: { contactId: "contact-1", deviceId: "device-1", action: "released", actor: "owner", detail: "iPhone · TJ" },
-    });
+    expect(approveTransferByOwner).toHaveBeenCalledWith("contact-1");
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+  });
+
+  it("новая ссылка не ушла — ошибка простыми словами, место не освобождено", async () => {
+    db.model("device").findUnique.mockResolvedValue(device);
+    approveTransferByOwner.mockResolvedValue(false);
+
+    const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
+
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: string }).error).toContain("место не освобождено");
   });
 
   it("устройства уже нет — 404 простыми словами, ничего не удаляем", async () => {

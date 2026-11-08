@@ -28,7 +28,8 @@ import { resetTodayCache } from "../today.js";
 import { softDeleteLesson, restoreLesson, listTrash, vacateTrashedOrder } from "./lessonTrash.js";
 import { createVideoChunkRouter } from "./videoChunks.js";
 import { issuePreviewTicket } from "./preview.js";
-import { recordAccessEvent, releaseDevice } from "./access.js";
+import { recordAccessEvent } from "./access.js";
+import { approveTransferByOwner } from "./phoneChange.js";
 
 /**
  * АДМИНКА ПЛАТФОРМЫ — курсы, уроки, видео, рецепты, устройства и вопросы.
@@ -738,9 +739,12 @@ courseAdminRouter.post("/admin/course-devices/:id", async (req, res) => {
  * «ОСВОБОДИТЬ МЕСТО» (08.11.2026). До этого у владельца были только
  * «Заблокировать» и «Разблокировать» — а заблокированное устройство место
  * ЗАНИМАЕТ, и ученице с новым телефоном, исчерпавшей свои две замены в месяц,
- * помочь из панели было нечем. Удаляет одно устройство через ту же дверь, что
- * и замена самой ученицей (access.ts releaseDevice), с записью в журнал.
- * Права — как у всей панели: маршрут под requireAuth админки.
+ * помочь из панели было нечем. Идёт тем же путём, что кнопка «Разрешить
+ * перенос» в боте (phoneChange.ts): месячный счёт сбрасывается, ВСЕ устройства
+ * и старая ссылка аннулируются, новая ссылка уходит ученице в чат. Просто
+ * удалить одно устройство нельзя: место занял бы первый, у кого есть прежняя
+ * ссылка (подруга, старый телефон). Журнал пишется. Не ушла ссылка —
+ * ничего не меняется. Права — как у всей панели.
  */
 courseAdminRouter.post("/admin/course-devices/:id/release", async (req, res) => {
   const device = await prisma.device.findUnique({ where: { id: req.params.id } });
@@ -748,7 +752,10 @@ courseAdminRouter.post("/admin/course-devices/:id/release", async (req, res) => 
     res.status(404).json({ error: "Устройство не найдено — возможно, место уже освобождено" });
     return;
   }
-  await releaseDevice(device, "owner");
+  if (!device.contactId || !(await approveTransferByOwner(device.contactId))) {
+    res.status(502).json({ error: "Не вышло: новая ссылка не ушла ученице, место не освобождено. Попробуйте позже или напишите ей сами." });
+    return;
+  }
   res.json({ ok: true });
 });
 
