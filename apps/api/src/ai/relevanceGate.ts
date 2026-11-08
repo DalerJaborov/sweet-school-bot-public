@@ -115,7 +115,7 @@ export async function passesRelevanceGate(
       if (contact.channel !== "WHATSAPP") return true; // Instagram: как раньше — голос уходит модели целиком
       const v: RelevanceVerdict = { cls: "unclear", source: "fallback", reason: "голосовое не удалось расшифровать" };
       await journal(contact, "[голосовое]", v, "attention");
-      await markAttention(contact);
+      await markAttention(contact, "voice_unreadable");
       return false;
     }
   }
@@ -168,15 +168,15 @@ export async function passesRelevanceGate(
   await journal(contact, body, verdict, action);
 
   if (action === "reply") return true;
-  if (action === "attention") await markAttention(contact);
+  if (action === "attention") await markAttention(contact, "unclear_message");
   return false;
 }
 
 /** Список «нужен человек»: в WhatsApp это строка очереди со статусом attention. */
-async function markAttention(contact: Contact): Promise<void> {
+async function markAttention(contact: Contact, reason: string): Promise<void> {
   const turn = currentWhatsAppTurn();
   if (!turn) return;
   await prisma.whatsAppInbox
-    .update({ where: { id: turn.inboxId }, data: { status: "attention" } })
+    .update({ where: { id: turn.inboxId }, data: { status: "attention", attentionReason: reason } })
     .catch((err) => logError("relevanceGate:attention", err));
 }
