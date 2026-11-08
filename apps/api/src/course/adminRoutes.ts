@@ -28,7 +28,7 @@ import { resetTodayCache } from "../today.js";
 import { softDeleteLesson, restoreLesson, listTrash, vacateTrashedOrder } from "./lessonTrash.js";
 import { createVideoChunkRouter } from "./videoChunks.js";
 import { issuePreviewTicket } from "./preview.js";
-import { recordAccessEvent, releaseDevice } from "./access.js";
+import { recordAccessEvent, releaseDevice, DeviceBlockedError } from "./access.js";
 
 /**
  * АДМИНКА ПЛАТФОРМЫ — курсы, уроки, видео, рецепты, устройства и вопросы.
@@ -748,7 +748,15 @@ courseAdminRouter.post("/admin/course-devices/:id/release", async (req, res) => 
     res.status(404).json({ error: "Устройство не найдено — возможно, место уже освобождено" });
     return;
   }
-  await releaseDevice(device, "owner");
+  try {
+    await releaseDevice(device, "owner");
+  } catch (err) {
+    if (err instanceof DeviceBlockedError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
   res.json({ ok: true });
 });
 

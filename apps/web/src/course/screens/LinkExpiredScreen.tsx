@@ -94,14 +94,15 @@ export function LinkExpiredScreen({
  * Экспортирована для теста.
  */
 export function chatUrl(school: SchoolContacts | null, channel: string | null, text: string | null): string | null {
-  // Купившая через сайт переписывается в чате сайта — туда же пришла ссылка.
-  if (channel === "WEB") return "/";
+  // Купившую через чат сайта в чат сайта НЕ ведём (ревью PR 59): он привязан к
+  // старому браузеру, в новом пуст. Её ссылку шлёт хозяйка — значит, писать
+  // хозяйке туда, где она отвечает: WhatsApp, затем Instagram.
   if (!school) return null;
   const wa = school.whatsapp
     ? text
       ? `${school.whatsapp}${school.whatsapp.includes("?") ? "&" : "?"}text=${encodeURIComponent(text)}`
       : school.whatsapp
     : null;
-  if (channel === "WHATSAPP") return wa ?? school.instagram ?? school.telegram;
+  if (channel === "WHATSAPP" || channel === "WEB") return wa ?? school.instagram ?? school.telegram;
   return school.instagram ?? wa ?? school.telegram;
 }
