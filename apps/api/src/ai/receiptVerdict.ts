@@ -163,11 +163,34 @@ async function notifyHashTaken(contact: Contact, otherContactId: string, amount:
   }
 }
 
+const CHOICE_REMINDER_TEXT: Record<ClientLanguage, string> = {
+  ru: "Чек получила. Ответьте, пожалуйста, есть ли у вас Telegram - сразу пришлю ссылки.",
+  tg: "Чекро гирифтам. Лутфан ҷавоб диҳед, Telegram доред? - ҳамон замон линкҳоро мефиристам.",
+  en: "Got your receipt. Please tell me whether you have Telegram - I will send the links right away.",
+};
+
+/** Вопрос про Telegram уже задан, а клиентка прислала ещё один чек: молчать нельзя. */
+async function remindDeliveryChoice(contact: Contact): Promise<void> {
+  const lastIn = await prisma.message.findFirst({
+    where: { contactId: contact.id, direction: "IN", text: { not: null } },
+    orderBy: { createdAt: "desc" },
+    select: { text: true },
+  });
+  const text = CHOICE_REMINDER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  if (await isBotFrozen()) return;
+  await sendToContact(contact, text)
+    .then((mid) => (mid ? recordOutgoingMessage(contact.id, text, mid) : undefined))
+    .catch((err) => logError("receiptVerdict:choiceReminder", err));
+}
+
 async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<boolean> {
   // Ссылки ещё нет (ждём ответа про Telegram) - не обещаем "ссылка выше", а
   // спрашиваем снова.
   if (await awaitingDeliveryChoice(contact.id)) {
-    return askDeliveryChoice(contact);
+    // Вопрос ещё не задавали - задаём; уже задан - напоминаем, но не молчим.
+    if (await askDeliveryChoice(contact)) return true;
+    await remindDeliveryChoice(contact);
+    return true;
   }
   const lastIn = lastText?.trim()
     ? { text: lastText }
@@ -213,7 +236,8 @@ async function askOwner(
   doubts: string[],
   modelReason: string,
   willOpen: string | null = null,
-  closeAsDuplicate = false
+  closeAsDuplicate = false,
+  noCourseForAmount = false
 ): Promise<void> {
   if (await isBotFrozen()) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
@@ -232,7 +256,8 @@ async function askOwner(
     (willOpen != null ? `Подтвердить откроет: ${willOpen}\n` : "") +
     (modelReason ? `\nНа чеке: ${modelReason.slice(0, 200)}` : "");
 
-  const needsCourseChoice = verdict.amount == null;
+  // Нет суммы или сумма не подходит ни к одному курсу: вместо "Подтвердить" - выбор курса.
+  const needsCourseChoice = verdict.amount == null || noCourseForAmount;
   for (const chatId of recipients) {
     if (await isBotFrozen()) return;
     const sent = await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice, closeAsDuplicate });
@@ -280,7 +305,7 @@ export async function handleReceiptVerdict(
           },
         })) > 0;
       if (tjs && !explainedByOtherReceipt) {
-        const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(verdict.amount as number));
+        const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(Math.round(verdict.amount as number)));
         if (state === "served") {
           await prisma.receiptCheck.update({
             where: { id: existingId },
@@ -542,9 +567,12 @@ export async function handleReceiptVerdict(
       ? own.grant.map((c) => COURSE_TITLE[c]).join(", ")
       : own.duplicate
         ? "ничего - курс по этой сумме у клиентки уже есть"
-        : "ничего - сумма не сходится с ценами курсов"
+        : own.revoked.length > 0
+          ? "ничего - доступ по курсу был отозван ранее (вернуть можно в Клиентах)"
+          : "ничего - сумма не сходится с ценами курсов"
     : null;
   const closeAsDuplicate = Boolean(own?.duplicate);
+  const noCourseForAmount = Boolean(own) && own!.wanted.length === 0;
   const waitingForChoice = isClean && (await awaitingDeliveryChoice(contact.id));
   const needsOwner = !linkSent && !waitingForChoice && !closedAsDuplicate;
   const knownFraud = Boolean(blocked) || Boolean(reused);
@@ -607,6 +635,10 @@ export async function handleReceiptVerdict(
   }
 
   if (await isBotFrozen()) return;
+  if (saved && waitingForChoice && contact.deliveryChoicePromptState === "WAITING") {
+    // Второй платёж прошёл, а вопрос про Telegram задан раньше и ждёт ответа.
+    await remindDeliveryChoice(contact);
+  }
   if (saved && closedAsDuplicate === "settled") {
     await tellAlreadyAccepted(contact);
     if (!sameTransferProven) {
@@ -637,14 +669,14 @@ export async function handleReceiptVerdict(
     const told = await tellAlreadyAccepted(contact);
     if (!told) await notifyCustomerReceiptForwarded(contact, saved);
     if (await isBotFrozen()) return;
-    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate, noCourseForAmount);
   } else if (saved && needsOwner) {
     if (contact.askedAltScreenshotAt) {
       await prisma.contact.update({ where: { id: contact.id }, data: { askedAltScreenshotAt: null } }).catch((err) => {
         logError("receiptVerdict:resetAltFlagAfterSecond", err);
       });
     }
-    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate, noCourseForAmount);
     // Мошеннику (чёрный список, повторный скриншот) ничего не обещаем —
     // владелец сам решит, что ему сказать.
     if (!knownFraud && !maybeServed) await notifyCustomerReceiptForwarded(contact, saved);

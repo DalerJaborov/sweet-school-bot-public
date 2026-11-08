@@ -131,9 +131,26 @@ export async function coursesForAmount(amount: number): Promise<Course[]> {
 export async function planForAmount(
   contactId: string,
   rawAmount: number
-): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; amount: number }> {
+): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; revoked: Course[]; retry: Course[]; amount: number }> {
   const amount = Math.round(rawAmount);
-  const [wanted, owned] = await Promise.all([coursesForAmount(amount), ownedCourses(contactId).catch(() => [] as Course[])]);
-  const grant = wanted.filter((c) => !owned.includes(c));
-  return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0, amount };
+  const wanted = await coursesForAmount(amount);
+  const rows = await prisma.purchase
+    .findMany({
+      where: { contactId, course: { in: wanted } },
+      select: { course: true, revokedAt: true, inviteLink: true, deliveryAwaitingChoice: true },
+    })
+    .catch(() => []);
+  const revoked: Course[] = [];
+  const retry: Course[] = [];
+  const owned: Course[] = [];
+  for (const r of rows ?? []) {
+    const c = r.course as Course;
+    if (r.revokedAt) revoked.push(c);
+    // Куплен, но ссылка не ушла (сбой отправки) и не ждёт ответа про Telegram:
+    // решение владельца ПОВТОРИТ доставку, значит это не "дубль".
+    else if (r.inviteLink === null && r.deliveryAwaitingChoice === false) retry.push(c);
+    else owned.push(c);
+  }
+  const grant = wanted.filter((c) => !revoked.includes(c) && !owned.includes(c));
+  return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0 && revoked.length === 0, revoked, retry, amount };
 }

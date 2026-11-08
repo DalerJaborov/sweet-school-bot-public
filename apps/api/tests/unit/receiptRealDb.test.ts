@@ -308,7 +308,7 @@ describe("настоящая база: ревью 4", () => {
     expect(args.caption).toMatch(/сумма не сходится/);
   });
 
-  it("второй платёж, пока ждём ответа про Telegram: клиентке уходит 'передаю Ширин', а не тишина", async () => {
+  it("второй платёж, пока ждём ответа про Telegram: клиентке уходит напоминание, а не тишина", async () => {
     const c = await db.contact.create({
       data: { id: "d4", igUserId: "ig-d4", username: "d4", deliveryChoicePromptState: "WAITING" },
     });
@@ -322,7 +322,7 @@ describe("настоящая база: ревью 4", () => {
     await handleReceiptVerdict(c, verdict("second70", { amount: 70 }));
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
     expect(sendToContact).toHaveBeenCalledTimes(1);
-    expect(String(sendToContact.mock.calls[0][1])).toMatch(/Ширин/);
+    expect(String(sendToContact.mock.calls[0][1])).toMatch(/Telegram/);
   });
 
   it("округление: 43.6 автоматика и панель считают одинаково (оба - курс 50)", async () => {
@@ -337,5 +337,51 @@ describe("настоящая база: ревью 4", () => {
     grantCourses.mockResolvedValueOnce(["COURSE50"]);
     await decideReceipt(r.id, "approve");
     expect((grantCourses.mock.calls[1][1] as { grant: string[] }).grant).toEqual(["COURSE50"]);
+  });
+});
+
+describe("настоящая база: ревью 5", () => {
+  it("недоплата 40 после 'Подтвердить': нужен явный выбор курса, ссылка 'выше' не обещается", async () => {
+    const c = await newContact("e1");
+    const r = await db.receiptCheck.create({
+      data: { contactId: c.id, kind: "suspicious", confidence: 90, reason: "r", imageHash: "u40", amount: 40, ownerDecision: "PENDING" },
+    });
+    const first = await decideReceipt(r.id, "approve");
+    expect(first).toMatchObject({ ok: false, reason: "needs_course" });
+    expect((await db.receiptCheck.findUnique({ where: { id: r.id } }))?.ownerDecision).toBe("PENDING");
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    const chosen = await decideReceipt(r.id, "approve", "COURSE50");
+    expect(chosen).toMatchObject({ ok: true, status: "approved" });
+  });
+
+  it("недоплата 40: в карточке вместо 'Подтвердить' выбор курса", async () => {
+    const c = await newContact("e2");
+    await handleReceiptVerdict(c, verdict("c40", { amount: 40 }));
+    expect((sendReceiptForReview.mock.calls[0][2] as { needsCourseChoice: boolean }).needsCourseChoice).toBe(true);
+  });
+
+  it("второй платёж, пока вопрос про Telegram ждёт ответа: клиентке уходит напоминание", async () => {
+    const c = await db.contact.create({ data: { id: "e3", igUserId: "ig-e3", username: "e3", deliveryChoicePromptState: "WAITING" } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await handleReceiptVerdict(c, verdict("p50", { amount: 50 }));
+    expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
+  });
+
+  it("курс 50 куплен, но не доставлен: карточка честно 'откроет Арт-десерты', не 'дубль'", async () => {
+    const c = await newContact("e4");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, source: "RECEIPT" } });
+    await handleReceiptVerdict(c, verdict("r50", { amount: 50, tamperingSuspected: true }));
+    const args = sendReceiptForReview.mock.calls[0][2] as { caption: string; closeAsDuplicate: boolean };
+    expect(args.closeAsDuplicate).toBe(false);
+    expect(args.caption).toMatch(/Подтвердить откроет: Арт-десерты/);
+  });
+
+  it("курс 70 отозван, чек на 70: карточка говорит про отзыв, не обещает курс", async () => {
+    const c = await newContact("e5");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, revokedAt: new Date(), inviteLink: "https://x/l/abc" } });
+    await handleReceiptVerdict(c, verdict("r70", { amount: 70, tamperingSuspected: true }));
+    const args = sendReceiptForReview.mock.calls[0][2] as { caption: string };
+    expect(args.caption).toMatch(/отозван/);
   });
 });

@@ -185,12 +185,12 @@ describe("GET /admin/today", () => {
     expect(body.goodNews.filter((n) => n.who.handle === "@madina").map((n) => n.kind)).toEqual(["certificate"]);
   });
 
-  it("guessCourse: те же допуски, что у allocate()", () => {
-    expect(guessCourse(48, DEFAULT_PRICES)).toBe("Арт-десерты");
-    expect(guessCourse(70, DEFAULT_PRICES)).toBe("21 рецепт");
-    expect(guessCourse(100, DEFAULT_PRICES)).toBe("оба курса");
-    expect(guessCourse(120, DEFAULT_PRICES)).toBe("оба курса");
-    expect(guessCourse(20, DEFAULT_PRICES)).toBeNull();
-    expect(guessCourse(null, DEFAULT_PRICES)).toBeNull();
+  it("guessCourse: те же допуски, что у allocate()", async () => {
+    expect(await guessCourse(48, DEFAULT_PRICES)).toBe("Арт-десерты");
+    expect(await guessCourse(70, DEFAULT_PRICES)).toBe("21 рецепт");
+    expect(await guessCourse(100, DEFAULT_PRICES)).toBe("оба курса");
+    expect(await guessCourse(120, DEFAULT_PRICES)).toBe("оба курса");
+    expect(await guessCourse(20, DEFAULT_PRICES)).toBeNull();
+    expect(await guessCourse(null, DEFAULT_PRICES)).toBeNull();
   });
 });

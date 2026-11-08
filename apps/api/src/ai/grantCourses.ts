@@ -82,6 +82,10 @@ export async function grantCourses(
     return true;
   };
 
+  // Сумма делится только между НОВЫМИ курсами: повтор доставки уже созданной
+  // покупки не должен уменьшать долю (35 вместо 70).
+  const already = await prisma.purchase.findMany({ where: { contactId: contact.id, course: { in: plan.grant } }, select: { course: true } });
+  const newCount = Math.max(1, plan.grant.length - (already ?? []).length);
   for (const course of plan.grant) {
     if (await stopIfFrozen()) return done;
     let purchaseId: string | null = null;
@@ -94,7 +98,7 @@ export async function grantCourses(
     } else {
       try {
         const purchase = await prisma.purchase.create({ data: {
-          contactId: contact.id, course, amount: Math.round(amount / plan.grant.length),
+          contactId: contact.id, course, amount: Math.round(amount / newCount),
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS",
         } });
         purchaseId = purchase.id;

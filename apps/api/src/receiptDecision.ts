@@ -4,7 +4,7 @@ import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { sendToContact } from "./messaging/send.js";
 import { markExamplesAsSuccessful } from "./ai/styleLearning.js";
-import { planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
+import { coursesForAmount, planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
 import { closeCards } from "./receiptAlerts.js";
 import { getPrices } from "./services/priceService.js";
 import { grantCourses } from "./ai.js";
@@ -89,6 +89,9 @@ async function decideReceiptInner(
     if (check.amount == null) {
       return { ok: false, reason: "needs_course", message: "Сумма на чеке не прочиталась — выберите курс явно" };
     }
+    if ((await coursesForAmount(Math.round(check.amount))).length === 0) {
+      return { ok: false, reason: "needs_course", message: "Сумма не подходит ни к одному курсу — выберите курс явно" };
+    }
   }
 
   // Атомарный "захват" решения: UPDATE с условием в WHERE, а не отдельные
@@ -161,7 +164,7 @@ async function decideReceiptInner(
   // выбранного курса, а не угаданное число.
   let amount: number;
   let plan: Allocation;
-  if (receipt.amount != null) {
+  if (receipt.amount != null && (await coursesForAmount(Math.round(receipt.amount))).length > 0) {
     amount = receipt.amount;
     // ТОЛЬКО курсы, которые даёт сама сумма чека, и только те, которых у клиентки
     // ещё нет (ревью PR 67): allocate() ради удобства раскладки мог выдать
