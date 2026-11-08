@@ -47,6 +47,18 @@ if (!syncLangOnEntry()) {
 
   bindLangSwitch();
   bindMobileMenu();
+  document.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll<HTMLDetailsElement>(".sticky-contacts[open]").forEach(menu => {
+      menu.open = false;
+      menu.querySelector<HTMLElement>("summary")?.focus();
+    });
+  });
+  document.addEventListener("click", event => {
+    document.querySelectorAll<HTMLDetailsElement>(".sticky-contacts[open]").forEach(menu => {
+      if (!menu.contains(event.target as Node)) menu.open = false;
+    });
+  });
   bindChatButtons();
   const trial = document.getElementById("free-lesson-island");
   if (trial) createRoot(trial).render(<FreeLesson lang={lang} />);
@@ -80,8 +92,10 @@ if (!syncLangOnEntry()) {
     document.addEventListener("click", (e) => {
       const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-chat]");
       if (!target) return;
+      if ((e as MouseEvent).metaKey || (e as MouseEvent).ctrlKey || (e as MouseEvent).shiftKey || (e as MouseEvent).altKey) return;
+      if (!chatAvailable && target instanceof HTMLAnchorElement) return;
       e.preventDefault();
-      if (chatAvailable) { openChat(target.dataset.prefill); return; }
+      if (chatAvailable) { openChat(target.dataset.prefill || target.dataset.chat); return; }
       const courseSection = document.getElementById("courses-island");
       if (courseSection) {
         const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -103,6 +117,13 @@ function bindMobileMenu() {
     const open = nav.dataset.open !== "true";
     nav.dataset.open = String(open);
     btn.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && nav.dataset.open === "true") {
+      nav.dataset.open = "false";
+      btn.setAttribute("aria-expanded", "false");
+      btn.focus();
+    }
   });
   nav.addEventListener("click", (e) => {
     if ((e.target as HTMLElement).closest("a")) {

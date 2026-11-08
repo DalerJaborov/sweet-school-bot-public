@@ -31,7 +31,7 @@ export function ErrorScreen({
   /** Контакты из уже загруженного /me, если они есть; иначе спросим сами. */
   school?: SchoolContacts | null;
 }) {
-  const title = error.reason === "network" || !error.message ? t.networkError : error.message;
+  const title = error.reason === "network" ? t.networkError : t.errorTitles[error.reason] ?? t.unavailableTitle;
   const help = t.help[error.reason];
   const [fetched, setFetched] = useState<SchoolContacts | null>(null);
   useEffect(() => {

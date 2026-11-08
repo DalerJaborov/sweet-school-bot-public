@@ -34,6 +34,8 @@ const RU = {
   retry: "Попробовать снова",
   back: "Назад",
   close: "Закрыть",
+  unavailableTitle: "Не удалось открыть уроки. Попробуйте ещё раз.",
+  errorTitles: { device_limit: "Достигнут лимит устройств", revoked: "Доступ закрыт", blocked: "Устройство заблокировано", no_session: "Откройте свою ссылку на уроки", not_found: "Ссылка больше не действует" } as Record<string, string>,
   networkError: "Не получается связаться с Ширин. Проверьте интернет.",
   errorStatus: (code: number) => `Ошибка ${code}`,
   /** Подсказки к отказам: разные причины требуют разных действий от человека. */
@@ -243,6 +245,8 @@ const TG: typeof RU = {
   retry: "Боз кӯшиш кунед",
   back: "Ба қафо",
   close: "Пӯшед",
+  unavailableTitle: "Дарсҳо кушода нашуданд. Боз кӯшиш кунед.",
+  errorTitles: { device_limit: "Ҳадди дастгоҳҳо пур шуд", revoked: "Дастрасӣ баста шуд", blocked: "Дастгоҳ баста шуд", no_session: "Пайванди дарсҳоятонро кушоед", not_found: "Пайванд дигар кор намекунад" } as Record<string, string>,
   networkError: "Бо Ширин алоқа баста нашуд. Интернетатонро тафтиш кунед.",
   errorStatus: (code: number) => `Хатогии ${code}`,
   help: {

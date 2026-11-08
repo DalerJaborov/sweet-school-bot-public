@@ -147,6 +147,44 @@ describe("ChatWidget", () => {
   });
 });
 
+describe("chat keyboard and draft continuity", () => {
+  it("focuses the input only after history is ready", async () => {
+    mockApi();
+    render(<ChatWidget t={dict("ru")} lang="ru" onClose={() => {}} />);
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Сообщение")));
+  });
+  it("does not steal focus from a control chosen while history is loading", async () => {
+    let finish!: (value: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+    render(<ChatWidget t={dict("ru")} lang="ru" onClose={() => {}} />);
+    const close = screen.getByRole("button", { name: dict("ru").close });
+    close.focus();
+    await act(async () => finish(json({ visitorId: "test", messages: [] })));
+    expect(document.activeElement).toBe(close);
+  });
+  it("a successful send keeps the next draft and input focus", async () => {
+    let finish!: (value: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((url: string) => url.endsWith("/send")
+      ? new Promise<Response>(resolve => { finish = resolve; })
+      : Promise.resolve(json({ visitorId: "test", messages: [] }))));
+    render(<ChatWidget t={dict("ru")} lang="ru" onClose={() => {}} />);
+    const input = screen.getByLabelText("Сообщение");
+    await waitFor(() => expect((input as HTMLTextAreaElement).disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "Первый вопрос" } });
+    fireEvent.click(screen.getByLabelText("Отправить"));
+    fireEvent.change(input, { target: { value: "Следующий вопрос" } });
+    await act(async () => finish(json({ messages: [msg("sent", "client", "Первый вопрос")], pending: false })));
+    expect((input as HTMLTextAreaElement).value).toBe("Следующий вопрос");
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: " Привет " } });
+    fireEvent.click(screen.getByLabelText("Отправить"));
+    await act(async () => finish(json({ messages: [msg("sent-2", "client", "Привет")], pending: false })));
+    expect((input as HTMLTextAreaElement).value).toBe("");
+    expect(document.activeElement).toBe(input);
+  });
+});
+
 describe("linkify", () => {
   it("находит ссылки и отличает платформенную /l/", () => {
     const parts = linkify("Смотри https://example.com/a и /l/Ab3kQ9xZ", "https://shirinsweets.online");

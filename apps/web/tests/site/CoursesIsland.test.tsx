@@ -69,11 +69,13 @@ describe("CoursesIsland", () => {
     expect(screen.getByAltText("Обложка курса «Торты»")).toBeTruthy();
   });
 
-  it("покупка идёт человеку в WhatsApp с актуальной ценой и составом, без приёма чека", async () => {
+  it("покупка открывает чат с курсом и актуальной ценой, WhatsApp остаётся запасным путём", async () => {
     mockFetch(catalog);
     render(<CoursesIsland t={dict("ru")} />);
     await waitFor(() => screen.getByText("Арт-десерты"));
-    const link = screen.getByRole("link", { name: "Купить курс «Арт-десерты» в WhatsApp" });
+    const link = screen.getByRole("link", { name: "Купить курс «Арт-десерты»" });
+    expect(link.getAttribute("data-chat")).toContain("Арт-десерты");
+    expect(link.getAttribute("data-chat")).toContain("50 сомони");
     const url = new URL(link.getAttribute("href")!);
     expect(url.hostname).toBe("api.whatsapp.com");
     expect(url.searchParams.get("phone")).toBe("992905355355");
@@ -81,7 +83,7 @@ describe("CoursesIsland", () => {
     expect(url.searchParams.get("text")).toContain("50 сомони");
     const bundleLink = screen.getAllByRole("link").at(-1)!;
     expect(new URL(bundleLink.getAttribute("href")!).searchParams.get("text")).toContain("100 сомони");
-    expect(screen.getByText(/После ручной проверки оплаты/)).toBeTruthy();
+    expect(screen.getByText(/После подтверждения оплаты/)).toBeTruthy();
     expect(screen.queryByLabelText(/Прикрепить чек/)).toBeNull();
   });
 

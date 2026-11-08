@@ -24,6 +24,12 @@ afterEach(() => {
 });
 
 describe("ErrorScreen", () => {
+  it("keeps unknown server failures in the selected language", () => {
+    const tg = dict("tg");
+    render(<ErrorScreen t={tg} error={{ message: "Temporary unavailable", reason: "internal_error" }} onRetry={() => {}} school={contacts} />);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(tg.unavailableTitle);
+    expect(screen.queryByText("Temporary unavailable")).toBeNull();
+  });
   it("ГЛАВНОЕ: ссылка не действует — «Купить курс» и WhatsApp с готовым текстом", async () => {
     render(<ErrorScreen t={t} error={{ message: "Ссылка не действует", reason: "not_found" }} onRetry={() => undefined} />);
 

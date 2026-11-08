@@ -79,6 +79,7 @@ export function CoursesIsland({ t, only }: { t: Dict; only?: string }) {
               </div>
               <a
                 className="btn"
+                data-chat={t.orderBundle(courses.map((c) => t.courseTitle(c.code, displayTitle(c.title))).join(" + "), t.currency(bundle.price, courses[0].currency))}
                 href={whatsappOrderUrl(
                   data.contacts.whatsapp,
                   t.orderBundle(
@@ -87,7 +88,7 @@ export function CoursesIsland({ t, only }: { t: Dict; only?: string }) {
                   ),
                 )}
               >
-                {t.whatsappBuy}
+                {t.buyBundle}
               </a>
             </div>
           </article>
@@ -183,9 +184,10 @@ function CourseCard({ course, t, whatsapp }: { course: SiteCourse; t: Dict; what
         <a
           className="btn"
           aria-label={t.buyCourseAria(title)}
+          data-chat={t.orderCourse(title, t.currency(course.price, course.currency))}
           href={whatsappOrderUrl(whatsapp, t.orderCourse(title, t.currency(course.price, course.currency)))}
         >
-          {t.whatsappBuy}
+          {t.buyCourse}
         </a>
       </div>
     </article>

@@ -11,18 +11,19 @@ const catalog = () => ({
 });
 
 describe("server catalogue HTML", () => {
-  it("uses actual catalogue prices, normalises titles and keeps manual purchase instructions", () => {
+  it("uses actual catalogue prices, normalises titles and offers chat with a safe no-JavaScript fallback", () => {
     const html = renderCatalogFragment(catalog(), "ru");
     expect(html).toContain('data-server-catalog="ready"');
     for (const price of [81, 113, 177, 194]) expect(html).toContain(`${price} сомони`);
     expect(html).not.toContain("Арт-десерты (81 сомони)");
-    expect(html).toContain("После ручной проверки оплаты");
+    expect(html).toContain("После подтверждения оплаты");
+    expect(html).toContain("data-chat=");
     expect(html).not.toContain("<script");
     expect(html).toContain("21 видеоурок");
     expect(html).toContain("1 ч 30 мин видео");
     expect(html).toContain("выгода 17 сомони");
     expect(html).toContain("course-course50-sm.webp 800w");
-    expect(html).toContain('aria-label="Купить курс «21 рецепт» в WhatsApp"');
+    expect(html).toContain('aria-label="Купить курс «21 рецепт»"');
   });
 
   it("localises Tajik and filters a course without advertising the bundle", () => {

@@ -2149,3 +2149,13 @@ span.ingredient-row {
 .recipe-originals .photos { display: block; }
 .recipe-originals .photos a { display: block; max-width: 640px; margin: 0 auto 16px; }
 .recipe-originals .photos img { width: 100%; height: auto; max-height: none; aspect-ratio: auto; }
+
+/* Long names must wrap rather than widen the whole phone viewport. */
+.greeting, .tool-name, .course-card-title, .course-card-preview, .lesson-title { overflow-wrap: anywhere; min-width: 0; }
+.pc-text { white-space: nowrap; flex-shrink: 0; }
+.pc-row { flex-wrap: wrap; }
+@media (max-width: 380px) {
+  .course-card { flex-direction: column; align-items: stretch; padding: 20px; }
+  .course-card-side { flex-direction: row; justify-content: space-between; gap: 16px; }
+  .course-card-side .ring { width: 72px; height: 72px; }
+}
