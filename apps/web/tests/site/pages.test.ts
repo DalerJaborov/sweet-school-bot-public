@@ -207,4 +207,33 @@ describe("Адрес очного курса — одно поле панели 
       expect(JSON.stringify(JSON.parse(ld))).toMatch(/"streetAddress":"(ориентир Воданасос, Рудаки 177|назди Воданасос, кӯчаи Рӯдакӣ 177)"/);
     }
   });
+
+  it("hero crossfades 5 real dessert photos: first is LCP, the rest lazy and decorative; reduced motion stays static", () => {
+    const body = files.get("ru/index.html")!;
+    const start = body.indexOf('<div class="hero-photo hero-slides"');
+    const slot = body.slice(start, body.indexOf("</section>", start));
+    expect(start).toBeGreaterThan(0);
+    expect(slot).toContain('data-slides="5"');
+    expect(slot.split("<img ").length - 1).toBe(5);
+    expect(slot.split('fetchpriority="high"').length - 1).toBe(1);
+    expect(slot.split('loading="lazy"').length - 1).toBe(4);
+    expect(slot.split('class="hero-slide-wrap"').length - 1 + slot.split('class="hero-slide-wrap" ').length - 1).toBeGreaterThanOrEqual(0);
+    expect(slot.split('aria-hidden="true"').length - 1).toBeGreaterThanOrEqual(4);
+    const css = fs.readFileSync("src/site/site.css", "utf8");
+    const rm = css.slice(css.indexOf("prefers-reduced-motion: reduce", css.indexOf(".hero-slides")));
+    expect(rm.slice(0, 260)).toContain(".hero-slide-wrap { display: none; }");
+  });
+
+  it("online-course program shows all 21 desserts as a grid, in Russian on both languages", () => {
+    const { site } = content;
+    for (const key of ["online-kurs.html", "tg/online-kurs.html"]) {
+      const body = files.get(key)!;
+      const start = body.indexOf('<div class="dessert-all">');
+      expect(start).toBeGreaterThan(0);
+      const grid = body.slice(start, body.indexOf("</section>", start));
+      expect(grid.split("<figure ").length - 1).toBe(21);
+      expect(body).not.toContain('class="dessert-scroll"');
+      for (const d of site.desserts) expect(grid).toContain(d.ru.replace(/"/g, "&quot;").replace(/«/g, "«"));
+    }
+  });
 });

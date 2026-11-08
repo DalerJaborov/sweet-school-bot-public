@@ -2026,3 +2026,28 @@ section[id] { scroll-margin-top: 96px; }
 @media (max-width: 420px) {
   .logo-word { height: 38px; }
 }
+
+/* Hero slideshow: fast crossfade of real dessert photos, pure CSS. Slot ratio is fixed, so no layout shift. */
+.hero-slides { --period: 2.8s; overflow: hidden; border-radius: var(--r-4); }
+.hero-slides > picture, .hero-slides > img { animation: hero-first calc(var(--period) * var(--slides)) infinite; }
+.hero-slide-wrap { position: absolute; inset: 0; z-index: 2; opacity: 0; animation: hero-next calc(var(--period) * var(--slides)) infinite; animation-delay: calc(var(--period) * var(--i)); animation-fill-mode: backwards; }
+.hero-slide-wrap picture, .hero-slide-wrap img { display: block; width: 100%; height: 100%; object-fit: cover; }
+@keyframes hero-first { 0%, 18% { opacity: 1; } 24%, 94% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes hero-next { 0% { opacity: 0; } 6%, 18% { opacity: 1; } 24%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .hero-slides > picture, .hero-slides > img { animation: none; }
+  .hero-slide-wrap { display: none; }
+}
+
+/* Online-course program: all 21 desserts at once as a grid (no horizontal scroll). */
+.dessert-all { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.dessert-all .dessert-photo { width: auto; max-width: none; }
+.dessert-all .dessert-photo figcaption { font-size: 12px; line-height: 1.25; overflow-wrap: anywhere; }
+.dessert-name .ico { flex-direction: column; gap: 8px; padding: 8px; text-align: center; font-size: 13px; }
+.dessert-name .ico b { font-size: 12.5px; line-height: 1.25; font-weight: 600; overflow-wrap: break-word; }
+.dessert-name .ico svg { width: 22px; height: 22px; color: var(--c-accent); }
+@media (min-width: 720px) {
+  .dessert-all { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+  .dessert-all .dessert-photo figcaption { font-size: 13px; }
+  .dessert-name .ico b { font-size: 14px; }
+}

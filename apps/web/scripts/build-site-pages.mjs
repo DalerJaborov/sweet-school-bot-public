@@ -370,6 +370,12 @@ function heroMedia(media, page) {
 }
 
 
+/** Фото для быстрой смены в герое (после основного LCP-кадра): только реальные десерты школы, крупные. */
+const HERO_SLIDE_NAMES = ["Клубника в шоколаде", "Пирожное «Рафаэлло»", "Шоколадный торт", "Пирожное «Шу»"];
+function heroExtraSlides(media, first) {
+  return HERO_SLIDE_NAMES.map((n) => media?.desserts?.[n]).filter((e) => e?.src && e.src !== first?.src);
+}
+
 // Shared outline vocabulary for decorative content; source copy remains intact.
 function contentIcon(symbol) {
   const paths = {
@@ -392,15 +398,21 @@ const SECTIONS = {
     // первая запись media.desserts. Без media.json просто нет .hero-photo —
     // раскладка герой-карточки (grid) одинаково работает и с фото, и без него.
     const heroEntry = s.compact ? null : heroMedia(media, page);
+    // Слайдшоу: первый кадр — LCP (eager, прелоад); остальные lazy и кроссфейдятся чистым CSS
+    // (без JS, без сдвига раскладки: слот имеет фиксированное соотношение сторон).
+    const extras = heroEntry ? heroExtraSlides(media, heroEntry) : [];
     const photo = heroEntry
-      ? `<div class="hero-photo">${mediaImg(
+      ? `<div class="hero-photo${extras.length ? " hero-slides" : ""}" ${extras.length ? `data-slides="${extras.length + 1}" style="--slides:${extras.length + 1}"` : ""}>${mediaImg(
           heroEntry,
           L(heroEntry.alt, lang) || L(page.h1, lang),
           {
             eager: true,
             sizes: HERO_SIZES,
+            cls: extras.length ? "hero-slide" : "",
           },
-        )}</div>`
+        )}${extras
+          .map((e, i) => `<span class="hero-slide-wrap" style="--i:${i + 1}" aria-hidden="true">${mediaImg(e, "", { sizes: HERO_SIZES, cls: "hero-slide" })}</span>`)
+          .join("")}</div>`
       : "";
     return `<section class="hero${s.compact ? " hero-compact" : ""}"><div class="wrap"><div class="hero-grid${photo ? " has-photo" : ""}"><div class="hero-card">
 
@@ -493,7 +505,20 @@ const SECTIONS = {
     // mode:"list" (страница онлайн-курса) — вся карусель видна сразу, без
     // сворачивания: там это единственный список программы на странице.
     if (s.mode !== "accordion") {
-      const body = `<div class="dessert-scroll">${desserts.map(card).join("")}</div>`;
+      // Все десерты сеткой сразу (без горизонтальной прокрутки, где на телефоне видно 2 из 21).
+      // Названия десертов не переводим: и в таджикской версии — русские, как в самом курсе.
+      // Реальное фото берём из media.desserts, затем из фото уроков (lessonSamples); нет фото —
+      // плитка с названием, пустых серых квадратов нет.
+      const lessonPhoto = (ru) => (media?.lessonSamples ?? []).find((x) => x.title?.ru === ru)?.image;
+      const tile = (d) => {
+        const ru = d.ru ?? L(d, "ru");
+        const entry = photos?.[ru] ?? lessonPhoto(ru);
+        const img = entry ? mediaImg(entry, ru, { sizes: "(min-width: 720px) 180px, 31vw" }) : "";
+        return img
+          ? `<figure class="dessert-photo">${img}<figcaption>${esc(ru)}</figcaption></figure>`
+          : `<figure class="dessert-photo dessert-name"><span class="ico"><span aria-hidden="true">${contentIcon(d.icon)}</span><b>${esc(ru)}</b></span></figure>`;
+      };
+      const body = `<div class="dessert-all">${desserts.map(tile).join("")}</div>`;
       return wrap(s, `${sectionHead(s, lang)}${body}`, ctx);
     }
     // mode:"accordion" (главная) — карусель всегда видна (первые
