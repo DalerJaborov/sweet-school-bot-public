@@ -78,6 +78,23 @@ describe("POST /admin/course-devices/:id/release", () => {
     expect(db.model("device").delete).not.toHaveBeenCalled();
   });
 
+  it("ЗАБЛОКИРОВАННОЕ не освобождается: 409 «сначала разблокируйте», блокировка остаётся", async () => {
+    db.model("device").findUnique.mockResolvedValue({ ...device, blockedAt: new Date() });
+
+    const res = await fetch(`${base}/admin/course-devices/device-1/release`, { method: "POST" });
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain("разблокируйте");
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+    expect(db.model("accessEvent").create).not.toHaveBeenCalled();
+  });
+
+  it("дверь сама защищает: releaseDevice отказывает заблокированному для ЛЮБОГО вызывающего", async () => {
+    const { releaseDevice, DeviceBlockedError } = await import("../../src/course/access.js");
+    await expect(releaseDevice({ ...device, blockedAt: new Date() } as never, "bot")).rejects.toBeInstanceOf(DeviceBlockedError);
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+  });
+
   it("блокировка и разблокировка тоже попадают в журнал", async () => {
     db.model("device").update.mockResolvedValue({ ...device, blockedAt: new Date() });
 
