@@ -28,13 +28,13 @@ export type DeviceInfo = {
   blocked: boolean;
 };
 
-/** Тело ответа 429 device_limit: что занято и сколько замен осталось. */
-export type DeviceLimitData = { devices: DeviceInfo[]; swapsLeft: number };
+/** Тело ответа 429 device_limit: что занято и модель занятого телефона (null — неизвестна). */
+export type DeviceLimitData = { devices: DeviceInfo[]; phone: string | null };
 
 export class CourseError extends Error {
   status: number;
   reason: string;
-  /** Доп. поля ответа: при device_limit — устройства и число замен. */
+  /** Доп. поля ответа: при device_limit — устройства и модель телефона. */
   data?: Record<string, unknown>;
   constructor(status: number, message: string, reason: string, data?: Record<string, unknown>) {
     super(message);
@@ -47,9 +47,9 @@ export class CourseError extends Error {
   deviceLimit(): DeviceLimitData | null {
     if (this.reason !== "device_limit" || !this.data) return null;
     const devices = this.data.devices;
-    const swapsLeft = this.data.swapsLeft;
-    if (!Array.isArray(devices) || typeof swapsLeft !== "number") return null;
-    return { devices: devices as DeviceInfo[], swapsLeft };
+    const phone = this.data.phone;
+    if (!Array.isArray(devices)) return null;
+    return { devices: devices as DeviceInfo[], phone: typeof phone === "string" && phone ? phone : null };
   }
 }
 
@@ -305,19 +305,52 @@ export function browserFingerprint(): string {
   return parts.join("~");
 }
 
+const RECOVERY_KEY = "course.recoveryCode";
+
 /**
- * Вход по ссылке из переписки. `replaceOldest` — ученица подтвердила на
- * экране лимита, что это её новый телефон: сервер вытеснит самое старое
- * устройство. Без подтверждения на 429 прилетает CourseError c `data`:
- * список устройств и сколько замен осталось (см. CourseError.deviceLimit).
+ * Публичный код покупательницы (его выводит сервер из ссылки; сам код ссылки
+ * из него не восстановить). Нужен экрану ошибки: ссылка к тому времени уже
+ * убрана из адреса. Хранилища может не быть (приватный режим) — тогда без кода.
  */
-export function openWithToken(token: string, replaceOldest = false): Promise<{ ok: boolean; contactId: string }> {
+function rememberRecoveryCode(code: unknown): void {
+  if (typeof code !== "string" || !/^[0-9A-F]{4}-[0-9A-F]{4}$/.test(code)) return;
+  try {
+    localStorage.setItem(RECOVERY_KEY, code);
+  } catch {
+    // нет хранилища — не страшно
+  }
+}
+
+export function storedRecoveryCode(): string | null {
+  try {
+    const code = localStorage.getItem(RECOVERY_KEY);
+    return code && /^[0-9A-F]{4}-[0-9A-F]{4}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Вход по ссылке из переписки. На втором телефоне сервер отвечает 429 с `data`:
+ * список устройств и модель занятого телефона (см. CourseError.deviceLimit).
+ */
+export async function openWithToken(token: string): Promise<{ ok: boolean; contactId: string }> {
+  try {
+    const res = await openRequest(token);
+    rememberRecoveryCode((res as { recoveryCode?: unknown }).recoveryCode);
+    return res;
+  } catch (err) {
+    if (err instanceof CourseError) rememberRecoveryCode(err.data?.recoveryCode);
+    throw err;
+  }
+}
+
+function openRequest(token: string): Promise<{ ok: boolean; contactId: string }> {
   return request("/open", {
     method: "POST",
     body: JSON.stringify({
       token,
       fingerprint: browserFingerprint(),
-      ...(replaceOldest ? { replaceOldest: true } : {}),
     }),
   });
 }
@@ -329,22 +362,6 @@ export function openWithToken(token: string, replaceOldest = false): Promise<{ o
  */
 export function pairDevice(pair: string): Promise<{ ok: boolean; contactId: string }> {
   return request("/pair", { method: "POST", body: JSON.stringify({ pair }) }, true);
-}
-
-export type TransferStatus = "sent" | "cooldown" | "owner_asked" | "send_failed";
-
-/** «Перенести на этот телефон»: код подтверждения уйдёт в чат покупательницы. */
-export function requestTransfer(token: string): Promise<{ status: TransferStatus }> {
-  return request("/transfer/request", { method: "POST", body: JSON.stringify({ token }) }, true);
-}
-
-/** Ввод кода: сервер аннулирует старый телефон и открывает этот. */
-export function confirmTransfer(token: string, code: string): Promise<{ ok: boolean }> {
-  return request(
-    "/transfer/confirm",
-    { method: "POST", body: JSON.stringify({ token, code, fingerprint: browserFingerprint() }) },
-    true,
-  );
 }
 
 export function loadCourse(): Promise<CourseView> {

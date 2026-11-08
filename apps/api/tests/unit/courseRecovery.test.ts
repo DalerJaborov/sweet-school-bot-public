@@ -125,36 +125,62 @@ describe("maybeRestoreAccess", () => {
     expect(counted).toBeTruthy();
   });
 
-  it("«сменила телефон»: ссылка выдаётся, а ВСЕ старые устройства аннулируются, перенос тратится", async () => {
+  it("«сменила телефон» без доказательств: ссылка НЕ выдаётся, устройства целы, ей «пришлите чек или код», владельцу карточка с кнопкой", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    db.model("device").findMany.mockResolvedValue([{ id: "old-1", userAgent: "Android", lastCity: "TJ", lastSeenAt: new Date("2026-11-07") }]);
+
+    const result = await maybeRestoreAccess(contact, "я сменила телефон, дайте ссылку");
+
+    expect(result).toMatchObject({ handled: true, outcome: "escalated" });
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+    expect(String(sendText.mock.calls[0][1])).toContain("чек об оплате картинкой или код из вашей ссылки");
+    expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("mn:tr:");
+  });
+
+  it("«сменила телефон» с её чеком картинкой: бот переносит сам — новая ссылка, все старые устройства снимаются", async () => {
     db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
     db.model("receiptCheck").count.mockResolvedValue(1);
     db.model("device").findMany.mockResolvedValue([{ id: "old-1" }, { id: "old-2" }]);
 
-    const result = await maybeRestoreAccess(contact, "я сменила телефон, дайте ссылку");
+    const result = await maybeRestoreAccess(contact, "я сменила телефон", ["hash-1"]);
 
     expect(result).toMatchObject({ handled: true, outcome: "reissued" });
     expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["old-1", "old-2"] } } });
     const upd = db.model("contact").update.mock.calls[0][0] as { data: { deviceSwaps: number } };
     expect(upd.data.deviceSwaps).toBe(1);
+    expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
   });
 
-  it("ГЛАВНОЕ: второй перенос в этом месяце бот не делает — ссылки нет, владельцу сводка", async () => {
-    const twice = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date("2026-11-01") } as unknown as Contact;
+  it("ГЛАВНОЕ: второй перенос в этом месяце бот не делает даже с доказательством — ей «30 дней», владельцу сводка", async () => {
+    const twice = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * 86_400_000) } as unknown as Contact;
     db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
     db.model("receiptCheck").count.mockResolvedValue(1);
     db.model("device").findMany.mockResolvedValue([
       { id: "d1", userAgent: "Android", lastCity: "TJ", lastSeenAt: new Date("2026-11-07"), blockedAt: null },
     ]);
 
-    const result = await maybeRestoreAccess(twice, "сменила телефон, пишет что открыт на 2 устройствах");
+    const result = await maybeRestoreAccess(twice, "сменила телефон, пишет что открыт на 2 устройствах", ["hash-1"]);
 
     expect(result).toMatchObject({ handled: true, outcome: "escalated" });
     expect(db.model("device").deleteMany).not.toHaveBeenCalled();
-    expect(String(sendText.mock.calls[0][1])).toContain("один раз в месяц");
+    expect(String(sendText.mock.calls[0][1])).toContain("один раз в 30 дней");
     const alert = String(sendTelegramMessage.mock.calls[0][2]);
-    expect(alert).toContain("ВТОРОЙ раз");
-    expect(alert).toContain("2026-11-01");
+    expect(alert).toContain("ещё раз в этом месяце");
     expect(alert).toContain("Android");
+  });
+
+  it("смена телефона без следа оплаты в базе — только к владельцу, без переноса", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(0);
+    db.model("purchase").count.mockResolvedValue(0);
+
+    const result = await maybeRestoreAccess(contact, "сменила телефон", ["hash-1"]);
+
+    expect(result).toMatchObject({ handled: true, outcome: "escalated" });
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("чека в базе нет");
   });
 
   it("обычная просьба о ссылке устройства не трогает", async () => {
@@ -235,7 +261,7 @@ describe("maybeRestoreAccess", () => {
     db.model("receiptCheck").count.mockResolvedValue(1);
     db.model("contact").findUnique.mockResolvedValue({ accessTokenId: "Ab3kQ9xZpm", accessIssuedAt: new Date() });
     sendText.mockRejectedValueOnce(new Error("24h window closed"));
-    expect(await maybeRestoreAccess(contact, "ссылка не открывается на новом телефоне")).toMatchObject({ outcome: "escalated" });
+    expect(await maybeRestoreAccess(contact, "ссылка не открывается")).toMatchObject({ outcome: "escalated" });
     expect(db.model("contact").update).not.toHaveBeenCalled();
     expect(db.model("device").delete).not.toHaveBeenCalled();
     expect(db.model("purchase").update).not.toHaveBeenCalled();

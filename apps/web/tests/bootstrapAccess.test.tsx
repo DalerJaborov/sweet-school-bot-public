@@ -6,8 +6,6 @@ const api = vi.hoisted(() => ({
   loadCourse: vi.fn(),
   openWithToken: vi.fn(),
   pairDevice: vi.fn(),
-  requestTransfer: vi.fn(),
-  confirmTransfer: vi.fn(),
   saveProgress: vi.fn(async () => ({ completed: false })),
   saveProgressBeacon: vi.fn(() => true),
   saveLanguage: vi.fn(async () => ({ ok: true })),
@@ -82,47 +80,20 @@ describe("useCourse: вход по ссылке", () => {
     expect(window.location.search).toBe("?token=abc");
   });
 
-  it("лимит устройств: экран с устройствами, перенос по коду повторяет вход и чистит адрес", async () => {
+  it("лимит устройств (второй телефон): экран с моделью занятого телефона, адрес не чистится, повторных входов нет", async () => {
     window.history.replaceState(null, "", "/course?token=abc");
     api.openWithToken.mockRejectedValueOnce(
       new CourseError(429, "лимит", "device_limit", {
-        devices: [{ id: "d1", label: "iPhone", city: null, lastSeenAt: null, blocked: false }],
-        swapsLeft: 1,
+        devices: [{ id: "d1", label: "Android", city: null, lastSeenAt: null, blocked: false }],
+        phone: "SM-A515F",
       }),
     );
-    api.requestTransfer.mockResolvedValue({ status: "sent" });
-    api.confirmTransfer.mockResolvedValue({ ok: true });
     const { result } = renderHook(() => useCourse());
     await waitFor(() => expect(result.current.deviceLimit).not.toBeNull());
+    expect(result.current.deviceLimit?.phone).toBe("SM-A515F");
     expect(result.current.error).toBeNull();
-    // Токен всё ещё в адресе — иначе подтвердить перенос было бы нечем.
     expect(window.location.search).toBe("?token=abc");
-
-    await act(async () => {
-      expect(await result.current.requestTransferCode()).toBe("sent");
-    });
-    expect(api.requestTransfer).toHaveBeenCalledWith("abc");
-
-    await act(async () => {
-      expect(await result.current.confirmTransferCode("123456")).toBe(true);
-    });
-    expect(api.confirmTransfer).toHaveBeenCalledWith("abc", "123456");
-    await waitFor(() => expect(result.current.deviceLimit).toBeNull());
-    expect(reload.reloadWithoutToken).toHaveBeenCalledTimes(1);
-  });
-
-  it("неверный код переноса — вход не повторяется, экран остаётся", async () => {
-    window.history.replaceState(null, "", "/course?token=abc");
-    api.openWithToken.mockRejectedValueOnce(
-      new CourseError(429, "лимит", "device_limit", { devices: [], swapsLeft: 1 }),
-    );
-    api.confirmTransfer.mockRejectedValue(new CourseError(400, "код", "bad_code"));
-    const { result } = renderHook(() => useCourse());
-    await waitFor(() => expect(result.current.deviceLimit).not.toBeNull());
-    await act(async () => {
-      expect(await result.current.confirmTransferCode("000000")).toBe(false);
-    });
-    expect(result.current.deviceLimit).not.toBeNull();
+    expect(api.openWithToken).toHaveBeenCalledTimes(1);
     expect(reload.reloadWithoutToken).not.toHaveBeenCalled();
   });
 
@@ -139,7 +110,7 @@ describe("useCourse: вход по ссылке", () => {
   it("успешный вход по токену — адрес без токена (перезагрузка ради личного манифеста)", async () => {
     window.history.replaceState(null, "", "/course?token=abc");
     renderHook(() => useCourse());
-    await waitFor(() => expect(api.openWithToken).toHaveBeenCalledWith("abc", false));
+    await waitFor(() => expect(api.openWithToken).toHaveBeenCalledWith("abc"));
     await waitFor(() => expect(reload.reloadWithoutToken).toHaveBeenCalledTimes(1));
     // Именно перезагрузка, а не /me на месте: манифест должен приехать с кукой.
     expect(api.loadCourse).not.toHaveBeenCalled();

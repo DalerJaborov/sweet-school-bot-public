@@ -51,7 +51,7 @@ function CourseScreens({ state }: { state: CourseState }) {
   // настоящий, лимит устройств — даём заменить старое, и только потом ошибки.
   if (state.inAppTrap) return <EscapeInAppScreen t={t} env={environment()} />;
   if (state.deviceLimit) {
-    return <DeviceLimitScreen t={t} limit={state.deviceLimit} onRequest={state.requestTransferCode} onConfirm={state.confirmTransferCode} />;
+    return <DeviceLimitScreen t={t} limit={state.deviceLimit} />;
   }
   if (error) return <ErrorScreen t={t} error={error} onRetry={state.retry} school={view?.school} />;
   if (!view) return <Splash t={t} />;

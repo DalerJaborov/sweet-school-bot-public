@@ -6,7 +6,7 @@ const sendTelegramMessage = vi.fn(async () => undefined);
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
 
-import { issueMagicLink, verifyMagicLink, openByLink, currentAccess, statusFor } from "../../src/course/access.js";
+import { issueMagicLink, verifyMagicLink, openByLink, currentAccess, statusFor, phoneLabel, devicePhoneMessage } from "../../src/course/access.js";
 import { courseTokenSecret } from "../../src/course/tokenSecret.js";
 import { env } from "../../src/env.js";
 
@@ -469,14 +469,14 @@ describe("политика «один телефон»", () => {
     };
   }
 
-  async function open(ua: string, existing: unknown[], extra: { replaceOldest?: boolean } = {}) {
+  async function open(ua: string, existing: unknown[]) {
     const { token } = issueMagicLink("contact-1");
     arrange(db);
     db.model("device").count.mockResolvedValue(existing.length);
     db.model("device").findMany.mockResolvedValue(existing);
     db.model("device").update.mockImplementation(async ({ where }: { where: { id: string } }) => ({ id: where.id, blockedAt: null, secret: "s-old" }));
     db.model("device").create.mockResolvedValue({ id: "device-new", blockedAt: null, secret: "s-new" });
-    return openByLink(fakeReq({ "user-agent": ua, "x-forwarded-for": "10.0.0.1" }), fakeRes() as never, token, undefined, extra.replaceOldest ?? false);
+    return openByLink(fakeReq({ "user-agent": ua, "x-forwarded-for": "10.0.0.1" }), fakeRes() as never, token, undefined);
   }
 
   it("другая ОС — это другой телефон: стоп, владелец не тревожится", async () => {
@@ -534,24 +534,22 @@ describe("политика «один телефон»", () => {
     expect(result).toMatchObject({ ok: false, reason: "device_limit" });
   });
 
-  it("«это мой новый телефон»: все старые устройства удаляются, новое создаётся, перенос тратится", async () => {
-    const result = await open(IPHONE, [occupied({ lastSeenAt: new Date() })], { replaceOldest: true });
-    // count остаётся замоканным на 1, поэтому проверяем сам перенос, а не итоговый вход.
-    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["device-old"] } } });
-    const upd = db.model("contact").update.mock.calls[0][0] as { data: { deviceSwaps: number } };
-    expect(upd.data.deviceSwaps).toBe(1);
-    expect(result.ok === true || result.ok === false).toBe(true);
+  it("второй телефон: отказ с понятным текстом «купите курс для него», ничего не удаляется и не переносится", async () => {
+    const result = await open(IPHONE, [occupied({ lastSeenAt: new Date() })]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+    expect((result as { message: string }).message).toMatch(/Этот курс открывается на/);
+    expect((result as { message: string }).message).toMatch(/купите курс для него/);
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(db.model("contact").update).not.toHaveBeenCalled();
   });
 
-  it("второй перенос в тот же месяц не выполняется", async () => {
-    const { token } = issueMagicLink("contact-1");
-    arrange(db, { contact: { deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * 86_400_000) } as never });
-    db.model("device").count.mockResolvedValue(1);
-    db.model("device").findMany.mockResolvedValue([occupied({ lastSeenAt: new Date() })]);
-
-    const result = await openByLink(fakeReq({ "user-agent": IPHONE }), fakeRes() as never, token, undefined, true);
-
-    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
-    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+  it("phoneLabel: модель Android, iPhone, неизвестная модель — null", () => {
+    expect(phoneLabel(IPHONE)).toBe("iPhone");
+    expect(phoneLabel(ANDROID_A)).toMatch(/^[A-Za-z0-9 -]{3,}$/);
+    expect(phoneLabel(ANDROID_REDUCED)).toBeNull();
+    expect(phoneLabel(WINDOWS)).toBeNull();
+    expect(phoneLabel(null)).toBeNull();
+    expect(devicePhoneMessage(null)).toBe("Этот курс открывается на вашем основном телефоне. Чтобы смотреть на другом телефоне, купите курс для него");
+    expect(devicePhoneMessage("iPhone")).toContain("на телефоне iPhone.");
   });
 });

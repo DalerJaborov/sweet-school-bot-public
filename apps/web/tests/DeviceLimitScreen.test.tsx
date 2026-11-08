@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { describe, it, expect, afterEach } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
 import { DeviceLimitScreen } from "../src/course/screens/DeviceLimitScreen";
 import { dict, formatLastSeen } from "../src/course/i18n";
 import type { DeviceLimitState } from "../src/course/hooks/useCourse";
@@ -9,25 +9,9 @@ const DAY = 86_400_000;
 
 function limit(over: Partial<DeviceLimitState> = {}): DeviceLimitState {
   return {
-    devices: [
-      {
-        id: "d1",
-        label: "iPhone",
-        city: "Душанбе",
-        lastSeenAt: new Date(Date.now() - DAY).toISOString(),
-        blocked: false,
-      },
-      {
-        id: "d2",
-        label: "Компьютер",
-        city: null,
-        lastSeenAt: new Date(Date.now() - 30 * DAY).toISOString(),
-        blocked: true,
-      },
-    ],
-    swapsLeft: 1,
+    devices: [{ id: "d1", label: "Android", city: "Душанбе", lastSeenAt: new Date(Date.now() - DAY).toISOString(), blocked: false }],
+    phone: "SM-A515F",
     school: null,
-    busy: false,
     ...over,
   };
 }
@@ -35,73 +19,45 @@ function limit(over: Partial<DeviceLimitState> = {}): DeviceLimitState {
 afterEach(cleanup);
 
 /**
- * Лимит устройств (дизайн доступа 03.09.2026): вместо тупика «напишите нам» —
- * список занятого и кнопка «заменить самое старое», пока замены есть.
+ * Второй телефон (владелец 08.11.2026): кнопки «Перенести» и ввода кода нет,
+ * экран говорит, на каком телефоне курс открыт, и ведёт к покупке для другого.
  */
 describe("DeviceLimitScreen", () => {
-  const noop = { onRequest: async () => "sent" as const, onConfirm: async () => true };
-
-  it("перечисляет устройства: подпись, город, «вчера», значок блокировки", () => {
-    render(<DeviceLimitScreen t={t} limit={limit()} {...noop} />);
-    expect(screen.getByText("iPhone · Душанбе")).toBeTruthy();
-    expect(screen.getByText("Компьютер")).toBeTruthy();
-    expect(screen.getByText("в сети вчера")).toBeTruthy();
-    expect(screen.getByText("заблокировано")).toBeTruthy();
-  });
-
-  it("ГЛАВНОЕ: сообщение про другой телефон, «Перенести» просит код, потом ввод кода", async () => {
-    const onRequest = vi.fn(async () => "sent" as const);
-    const onConfirm = vi.fn(async () => true);
-    render(<DeviceLimitScreen t={t} limit={limit()} onRequest={onRequest} onConfirm={onConfirm} />);
+  it("ГЛАВНОЕ: называет модель занятого телефона и ведёт на покупку #kupit", () => {
+    render(<DeviceLimitScreen t={t} limit={limit()} />);
     expect(screen.getByText(t.deviceLimitTitle)).toBeTruthy();
-    expect(screen.getByText(/нажмите «Перенести», вам придёт код в WhatsApp/)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: t.transferButton }));
-    await screen.findByText(t.transferSent);
-    expect(onRequest).toHaveBeenCalledTimes(1);
-
-    const input = screen.getByLabelText(t.transferCodeLabel) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "12ab34" } }); // буквы отбрасываются
-    expect(input.value).toBe("1234");
-    fireEvent.change(input, { target: { value: "123456" } });
-    fireEvent.click(screen.getByRole("button", { name: t.transferConfirm }));
-    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith("123456"));
+    expect(
+      screen.getByText("Этот курс открывается на телефоне SM-A515F. Чтобы смотреть на другом телефоне, купите курс для него."),
+    ).toBeTruthy();
+    const buy = screen.getByRole("link", { name: t.deviceLimitBuy }) as HTMLAnchorElement;
+    expect(buy.getAttribute("href")).toBe("https://shirinsweets.online/online-kurs#kupit");
   });
 
-  it("неверный код — подсказка, форма остаётся", async () => {
-    render(<DeviceLimitScreen t={t} limit={limit()} onRequest={async () => "sent"} onConfirm={async () => false} />);
-    fireEvent.click(screen.getByRole("button", { name: t.transferButton }));
-    const input = await screen.findByLabelText(t.transferCodeLabel);
-    fireEvent.change(input, { target: { value: "000000" } });
-    fireEvent.click(screen.getByRole("button", { name: t.transferConfirm }));
-    await screen.findByText(t.transferBadCode);
+  it("iPhone — подпись «iPhone»; модель неизвестна — «вашем основном телефоне»", () => {
+    const { rerender } = render(<DeviceLimitScreen t={t} limit={limit({ phone: "iPhone" })} />);
+    expect(screen.getByText(/на телефоне iPhone\./)).toBeTruthy();
+    rerender(<DeviceLimitScreen t={t} limit={limit({ phone: null })} />);
+    expect(screen.getByText(/на вашем основном телефоне\./)).toBeTruthy();
   });
 
-  it("перенос в этом месяце уже был — «спросили Ширин», без поля кода", async () => {
-    render(<DeviceLimitScreen t={t} limit={limit()} onRequest={async () => "owner_asked"} onConfirm={async () => true} />);
-    fireEvent.click(screen.getByRole("button", { name: t.transferButton }));
-    await screen.findByText(t.transferOwnerAsked);
-    expect(screen.queryByLabelText(t.transferCodeLabel)).toBeNull();
+  it("кнопок переноса и поля кода нет; есть подсказка про смену телефона через чат", () => {
+    render(<DeviceLimitScreen t={t} limit={limit()} />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByLabelText(/код/i)).toBeNull();
+    expect(screen.getByText(/сменила телефон/)).toBeTruthy();
   });
 
-  it("не удалось отправить код — «напишите нам» и контакты школы", async () => {
-    render(
-      <DeviceLimitScreen
-        t={t}
-        limit={limit({ school: { telegram: "https://t.me/x", instagram: null, whatsapp: null } })}
-        onRequest={async () => "send_failed"}
-        onConfirm={async () => true}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: t.transferButton }));
-    await screen.findByText(t.transferSendFailed);
+  it("на таджикском текст, кнопка и ссылка ведут на таджикскую страницу", () => {
+    const tg = dict("tg");
+    render(<DeviceLimitScreen t={tg} limit={limit({ phone: null })} />);
+    expect(screen.getByText(/телефони асосии шумо/)).toBeTruthy();
+    const buy = screen.getByRole("link", { name: tg.deviceLimitBuy }) as HTMLAnchorElement;
+    expect(buy.getAttribute("href")).toBe("https://shirinsweets.online/tg/online-kurs#kupit");
+  });
+
+  it("контакты школы показываются, если известны", () => {
+    render(<DeviceLimitScreen t={t} limit={limit({ school: { telegram: "https://t.me/x", instagram: null, whatsapp: null } })} />);
     expect(screen.getByRole("link", { name: t.telegramGroup })).toBeTruthy();
-  });
-
-  it("на таджикском сообщение и подписи устройств тоже переведены", () => {
-    render(<DeviceLimitScreen t={dict("tg")} limit={limit()} {...noop} />);
-    expect(screen.getByText("Компютер")).toBeTruthy();
-    expect(screen.getByText(dict("tg").transferButton)).toBeTruthy();
   });
 });
 

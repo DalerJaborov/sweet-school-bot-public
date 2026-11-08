@@ -1,3 +1,4 @@
+import { recoveryCodeForToken } from "./linkCode.js";
 import { Router, type Request, type Response } from "express";
 import { claimPlayback } from "./playbackLock.js";
 import { z } from "zod";
@@ -124,6 +125,10 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
     return;
   }
   const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint);
+  // Публичный код для готового сообщения в WhatsApp (linkCode.ts): производный,
+  // сам код ссылки из него не восстановить. Отдаём и при отказе — он нужен как
+  // раз на экране ошибки.
+  const recoveryCode = recoveryCodeForToken(parsed.data.token);
   if (!result.ok) {
     // При упоре в лимит отдаём модель занятого телефона: экран пишет
     // «курс открыт на телефоне X, для другого купите курс».
@@ -132,12 +137,13 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
       const byCode = claims?.jti && !claims.contactId ? await prisma.contact.findUnique({ where: { accessTokenId: claims.jti } }) : null;
       const contactId = claims?.contactId ?? byCode?.id ?? null;
       const devices = contactId ? await listDevicesFor(contactId) : [];
-      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, phone: contactId ? await occupiedPhoneLabel(contactId) : null });
+      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, phone: contactId ? await occupiedPhoneLabel(contactId) : null, recoveryCode });
       return;
     }
-    return deny(res, result);
+    res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, recoveryCode });
+    return;
   }
-  res.json({ ok: true, contactId: result.contact.id });
+  res.json({ ok: true, contactId: result.contact.id, recoveryCode });
 });
 
 /** Установленное приложение обменивает pair-токен на сессию (см. access.ts). */

@@ -1,4 +1,4 @@
-import { approveTransferByOwner } from "./course/phoneTransfer.js";
+import { approveTransferByOwner } from "./course/phoneChange.js";
 import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { answerCallback, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds } from "./telegram.js";
 import { buildReport, offsetMs, truncate } from "./dailyReport.js";

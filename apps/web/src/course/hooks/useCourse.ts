@@ -12,9 +12,6 @@ import {
   saveProgress,
   saveProgressBeacon,
   startPreview,
-  requestTransfer,
-  confirmTransfer,
-  type TransferStatus,
   type CourseInfo,
   type CourseView,
   type DeviceLimitData,
@@ -64,17 +61,11 @@ import { useOnline } from "./useOnline";
 /** После скольких секунд просмотра урок считается «нужным» и сохраняется. */
 const AUTOSAVE_AFTER_SEC = 30;
 
-/** Код ссылки из адреса: /l/<код> или старое ?token=. */
-function currentLinkToken(): string | null {
-  const short = /^\/l\/([A-Za-z0-9]{6,32})$/.exec(window.location.pathname);
-  return short?.[1] ?? new URLSearchParams(window.location.search).get("token");
-}
-
 export type Source = "network" | "cache";
 export type CourseErrorState = { message: string; reason: string };
 export type ProgressVia = "fetch" | "beacon";
 /** Экран лимита устройств: что занято, сколько замен, куда писать. */
-export type DeviceLimitState = DeviceLimitData & { school: SchoolContacts | null; busy: boolean };
+export type DeviceLimitState = DeviceLimitData & { school: SchoolContacts | null };
 
 export function useCourse() {
   const online = useOnline();
@@ -110,12 +101,12 @@ export function useCourse() {
    *    адрес в Safari/Chrome. Вход там занял бы место в лимите телефоном,
    *    с которого потом всё равно смотреть нельзя (нет офлайна и установки).
    *  - Лимит устройств (429 с списком): экран выбора «заменить самое старое»;
-   *    токен остаётся в адресе, чтобы повторить /open с replaceOldest.
+   *    токен остаётся в адресе.
    *  - Успешный вход — перезагрузка без токена (см. install/reload.ts).
    *  - `?pair=` — обмен на куки того же устройства, токен сохраняем в
    *    телефоне для тихого восстановления сессии (api.ts), адрес чистим.
    */
-  const bootstrap = useCallback(async (silent = false, replaceOldest = false) => {
+  const bootstrap = useCallback(async (silent = false) => {
     // Предпросмотр владельца: билет → кука, дальше только чтение. Ни входа по
     // ссылке, ни сохранённой копии /me в телефоне — данные ученицы на этом же
     // устройстве не должны смешаться с предпросмотром (см. preview.ts).
@@ -153,12 +144,12 @@ export function useCourse() {
           return;
         }
         try {
-          await openWithToken(token, replaceOldest);
+          await openWithToken(token);
         } catch (err) {
           const limit = err instanceof CourseError ? err.deviceLimit() : null;
           if (limit) {
             const cached = await loadMe().catch(() => undefined);
-            setDeviceLimit({ ...limit, school: cached?.view.school ?? null, busy: false });
+            setDeviceLimit({ ...limit, school: cached?.view.school ?? null });
             setError(null);
             return;
           }
@@ -206,34 +197,6 @@ export function useCourse() {
       }
     }
   }, []);
-
-  /** «Перенести»: код подтверждения уходит в чат покупательницы. */
-  const requestTransferCode = useCallback(async (): Promise<TransferStatus | "error"> => {
-    const token = currentLinkToken();
-    if (!token) return "error";
-    try {
-      return (await requestTransfer(token)).status;
-    } catch {
-      return "error";
-    }
-  }, []);
-
-  /** Код введён: сервер аннулирует старый телефон, этот открывается. */
-  const confirmTransferCode = useCallback(
-    async (code: string): Promise<boolean> => {
-      const token = currentLinkToken();
-      if (!token) return false;
-      try {
-        await confirmTransfer(token, code);
-      } catch {
-        return false;
-      }
-      setDeviceLimit(null);
-      await bootstrap(false, false);
-      return true;
-    },
-    [bootstrap],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -377,8 +340,6 @@ export function useCourse() {
     error,
     inAppTrap,
     deviceLimit,
-    requestTransferCode,
-    confirmTransferCode,
     source,
     online,
     lang,

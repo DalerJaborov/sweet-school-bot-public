@@ -1,158 +1,295 @@
-import crypto from "node:crypto";
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
-import { canTransferNow, describeDevice } from "./access.js";
+import { canTransferNow, describeDevice, issueMagicLink, transferToNewPhone } from "./access.js";
+import { parseRecoveryCode, recoveryCodeFor } from "./linkCode.js";
 import type { Contact } from "@prisma/client";
 
 /**
- * ПЕРЕНОС НА НОВЫЙ ТЕЛЕФОН ПО КОДУ (владелец 08.11.2026).
+ * СМЕНА ТЕЛЕФОНА — только через бота (владелец 08.11.2026).
  *
- * Покупательница нажимает «Перенести» на втором телефоне; код подтверждения
- * уходит в ЕЁ чат с ботом (тот, где она купила курс: WhatsApp, Instagram), а не
- * на тот телефон, где она сидит. Ввела код — старый телефон аннулируется, новый
- * открывается. Это и есть доказательство, что у неё есть доступ к чату покупки.
+ * Курс открывается на одном телефоне. На втором телефоне экран курса не даёт
+ * никакой кнопки «перенести»: там написано, что для другого телефона нужно
+ * купить курс. Настоящая смена телефона («купила новый») идёт в чате, где
+ * куплен курс, и бот делает её сам ТОЛЬКО при доказательстве по данным в базе:
+ *  - код из её ссылки (вид 7F3A-91C2, linkCode.ts), либо
+ *  - чек картинкой: тот же файл, что уже подтверждён по её контакту, либо
+ *  - имя и номер телефона, совпавшие с тем, что известно по её покупке.
+ * Совпало и в этом месяце переноса ещё не было: старые устройства удаляются,
+ * старая ссылка перестаёт открываться, уходит новая. Не совпало или перенос в
+ * месяце уже был: «передала Ширин» и владельцу карточка с кнопкой
+ * «Разрешить перенос».
  *
- * Код живёт в памяти процесса: 6 цифр, хранится только хэш, 10 минут, 5 попыток,
- * новый код не чаще раза в минуту и не больше 5 в час. Перезапуск сервера
- * просто сбрасывает неподтверждённые коды — человек запросит новый.
+ * Чек здесь только доказательство личности: в оплату он не засчитывается, доступ
+ * по нему повторно не выдаётся, разбор чеков (receiptVerdict) не меняется.
  */
 
-const CODE_TTL_MS = 10 * 60_000;
-const RESEND_MS = 60_000;
-const MAX_ATTEMPTS = 5;
-const MAX_SENDS_PER_HOUR = 5;
+export type ProofKind = "link_code" | "receipt" | "name_phone";
+export type PhoneChangeOutcome = "changed" | "no_proof" | "limit" | "send_failed" | "no_link";
 
-type Pending = { hash: string; exp: number; attempts: number; sentAt: number; sends: number[] };
-const pending = new Map<string, Pending>();
+type Lang = "ru" | "tg" | "en";
 
-function hashCode(contactId: string, code: string): string {
-  return crypto.createHash("sha256").update(`${contactId}:${code}`).digest("hex");
-}
-
-export type RequestResult = "sent" | "cooldown" | "owner_asked" | "send_failed";
-
-const TEXT = {
-  ru: (code: string) =>
-    `Код для переноса курса на новый телефон: ${code}. Никому его не сообщайте. Он действует 10 минут. ` +
-    "Если это не вы, просто проигнорируйте сообщение.",
-  tg: (code: string) =>
-    `Рамз барои гузаронидани курс ба телефони нав: ${code}. Онро ба ҳеҷ кас нагӯед. Он 10 дақиқа амал мекунад. ` +
-    "Агар ин шумо набошед, паёмро нодида гиред.",
+const TEXT: Record<Lang, { changed: string; noProof: string; limit: string; approved: string; failed: string }> = {
+  ru: {
+    changed:
+      "Перенесла доступ на новый телефон. Вот новая ссылка, откройте её на нём. " +
+      "Прежняя ссылка и старый телефон больше не открывают уроки:\n",
+    noProof:
+      "Чтобы я перенесла доступ на новый телефон сама, пришлите чек об оплате картинкой или код из вашей ссылки (вид 7F3A-91C2). " +
+      "Пока передала Ширин: она посмотрит и ответит вам.",
+    limit:
+      "Перенос на другой телефон можно сделать один раз в 30 дней, и в этом месяце он уже был. " +
+      "Передала Ширин: она посмотрит и ответит вам.",
+    approved:
+      "Ширин разрешила перенос на новый телефон. Вот новая ссылка, откройте её на нём. " +
+      "Прежняя ссылка и старый телефон больше не открывают уроки:\n",
+    failed: "Передала Ширин: она посмотрит и ответит вам.",
+  },
+  tg: {
+    changed:
+      "Дастрасиро ба телефони нав гузарондам. Мана линки нав, онро дар телефони нав кушоед. " +
+      "Линки пешина ва телефони кӯҳна дигар дарсҳоро намекушоянд:\n",
+    noProof:
+      "Барои он ки ман дастрасиро ба телефони нав худам гузаронам, чеки пардохтро ҳамчун акс ё рамзи линкатонро (намуди 7F3A-91C2) фиристед. " +
+      "Ҳоло ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
+    limit:
+      "Гузаронидан ба телефони дигар як бор дар 30 рӯз мумкин аст ва дар ин моҳ он аллакай шуда буд. " +
+      "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
+    approved:
+      "Ширин гузаронидан ба телефони навро иҷозат дод. Мана линки нав, онро дар телефони нав кушоед. " +
+      "Линки пешина ва телефони кӯҳна дигар дарсҳоро намекушоянд:\n",
+    failed: "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
+  },
+  en: {
+    changed: "I moved your access to the new phone. Here is the new link, open it there. The old link and the old phone no longer open the lessons:\n",
+    noProof: "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I passed this to Shirin.",
+    limit: "Access can be moved once every 30 days and it was already moved this month. I passed this to Shirin.",
+    approved: "Shirin approved the move. Here is the new link, open it on the new phone. The old link and phone no longer work:\n",
+    failed: "I passed this to Shirin, she will look and reply.",
+  },
 };
-const APPROVED = {
-  ru: "Перенос на новый телефон разрешён. Нажмите «Перенести» в курсе ещё раз, и вам придёт код.",
-  tg: "Гузариш ба телефони нав иҷозат дода шуд. Дар курс боз «Гузаронидан»-ро пахш кунед, рамз меояд.",
-};
 
-function lang(contact: Contact): "ru" | "tg" {
+function lang(contact: Contact): Lang {
   return contact.preferredLanguage === "tg" ? "tg" : "ru";
 }
 
-export async function requestTransferCode(contact: Contact): Promise<RequestResult> {
-  // Перенос в этом месяце уже был: код не шлём, спрашиваем владельца.
-  if (!canTransferNow(contact)) {
-    await askOwnerToAllow(contact);
-    return "owner_asked";
-  }
-  const now = Date.now();
-  const cur = pending.get(contact.id);
-  const sends = (cur?.sends ?? []).filter((t) => now - t < 3_600_000);
-  if (cur && now - cur.sentAt < RESEND_MS) return "cooldown";
-  if (sends.length >= MAX_SENDS_PER_HOUR) return "cooldown";
+/** Последние 9 цифр: «+992 900 12-34-56» и «900123456» — один и тот же номер. */
+function phoneKey(raw: string): string {
+  return raw.replace(/\D/g, "").slice(-9);
+}
 
-  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
-  const text = TEXT[lang(contact)](code);
-  let ok = false;
+/** Номера из текста сообщения (не короче 9 цифр). */
+function phonesInText(text: string): string[] {
+  const found = text.match(/\+?\d[\d\s().-]{7,}\d/g) ?? [];
+  return found.map(phoneKey).filter((p) => p.length === 9);
+}
+
+function nameMatches(known: string | null | undefined, text: string): boolean {
+  const words = (known ?? "")
+    .toLowerCase()
+    .split(/[^\p{L}]+/u)
+    .filter((w) => w.length >= 3);
+  const lower = text.toLowerCase();
+  return words.length > 0 && words.some((w) => lower.includes(w));
+}
+
+/**
+ * Доказательство, что пишет та самая покупательница. Только по данным в базе;
+ * слова «я платила» не считаются. Возвращает вид доказательства или null.
+ * Чек: ТОЛЬКО чтение, запись о чеке не создаётся и не меняется.
+ */
+export async function phoneChangeProof(
+  contact: Contact,
+  text: string,
+  imageHashes: string[] = []
+): Promise<ProofKind | null> {
+  // 1. Код из её ссылки (производный от кода ссылки, секрет сервера).
+  const code = parseRecoveryCode(text);
+  if (code && contact.accessTokenId && code === recoveryCodeFor(contact.accessTokenId)) return "link_code";
+
+  // 2. Чек картинкой: тот же файл, что уже принят по ЭТОМУ контакту.
+  if (imageHashes.length > 0) {
+    const mine = await prisma.receiptCheck.count({
+      where: {
+        contactId: contact.id,
+        imageHash: { in: imageHashes },
+        OR: [{ ownerDecision: "APPROVED" }, { linkSent: true }],
+      },
+    });
+    if (mine > 0) return "receipt";
+  }
+
+  // 3. Имя и телефон покупки: оба должны совпасть с тем, что у нас записано.
+  const phones = phonesInText(text);
+  if (phones.length > 0) {
+    const signups = await prisma.offlineSignup.findMany({ where: { contactId: contact.id } }).catch(() => []);
+    const knownPhones = new Set<string>(signups.map((s) => phoneKey(s.phone)));
+    if (contact.channel === "WHATSAPP") knownPhones.add(phoneKey(contact.igUserId));
+    const knownNames = [contact.name, ...signups.map((s) => s.name)];
+    if (phones.some((p) => knownPhones.has(p)) && knownNames.some((n) => nameMatches(n, text))) return "name_phone";
+  }
+  return null;
+}
+
+/**
+ * Само перенос: новая ссылка записывается, уходит человеку, и только после
+ * доставки удаляются устройства. Не доставилась — прежняя ссылка возвращается,
+ * чтобы покупательница не осталась ни с чем. Лимит и доказательство проверяет
+ * вызывающий (бот) либо владелец (кнопка).
+ */
+export async function performPhoneChange(
+  contact: Contact,
+  kind: "bot" | "owner"
+): Promise<"changed" | "send_failed" | "no_link"> {
+  const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
+  if (!fresh || fresh.accessRevokedAt || fresh.spamBlockedAt) return "no_link";
+  const { url, jti } = issueMagicLink(fresh.id);
+  if (!url.startsWith("http")) return "no_link";
+  const claimed = await prisma.contact.updateMany({
+    where: {
+      id: fresh.id,
+      accessTokenId: fresh.accessTokenId ?? null,
+      accessIssuedAt: fresh.accessIssuedAt ?? null,
+      accessRevokedAt: null,
+      spamBlockedAt: null,
+    },
+    data: { accessTokenId: jti, accessIssuedAt: new Date() },
+  });
+  if (claimed.count !== 1) return "send_failed";
+
+  const text = (kind === "owner" ? TEXT[lang(fresh)].approved : TEXT[lang(fresh)].changed) + url;
+  let delivered = false;
   try {
-    const mid = await sendToContact(contact, text);
+    const mid = await sendToContact(fresh, text);
     if (mid) {
-      await recordOutgoingMessage(contact.id, "[код переноса отправлен]", mid);
-      ok = true;
+      await recordOutgoingMessage(fresh.id, text, mid);
+      delivered = true;
     }
   } catch (err) {
-    logError("phoneTransfer:send", err);
+    logError("phoneChange:send", err);
   }
-  if (!ok) {
-    await tellOwner(contact, "не получилось отправить код переноса в её чат", false);
+  if (!delivered) {
+    // Возвращаем прежнюю ссылку, только если её никто не успел заменить.
+    await prisma.contact
+      .updateMany({
+        where: { id: fresh.id, accessTokenId: jti },
+        data: { accessTokenId: fresh.accessTokenId ?? null, accessIssuedAt: fresh.accessIssuedAt ?? null },
+      })
+      .catch((err) => logError("phoneChange:restoreLink", err));
     return "send_failed";
   }
-  pending.set(contact.id, {
-    hash: hashCode(contact.id, code),
-    exp: now + CODE_TTL_MS,
-    attempts: 0,
-    sentAt: now,
-    sends: [...sends, now],
+  const result = await transferToNewPhone(fresh).catch((err) => {
+    logError("phoneChange:transfer", err);
+    return "nothing" as const;
   });
-  return "sent";
+  logInfo("course:phoneChange", `контакт ${fresh.id}: смена телефона (${kind}), устройства: ${result}`);
+  return "changed";
 }
 
-/** true — код верный (и сгорает); иначе false. */
-export function verifyTransferCode(contactId: string, code: string): boolean {
-  const cur = pending.get(contactId);
-  if (!cur || Date.now() > cur.exp || cur.attempts >= MAX_ATTEMPTS) return false;
-  cur.attempts += 1;
-  const want = Buffer.from(cur.hash);
-  const have = Buffer.from(hashCode(contactId, code.trim()));
-  const ok = want.length === have.length && crypto.timingSafeEqual(want, have);
-  if (ok) pending.delete(contactId);
-  return ok;
+async function replyTo(contact: Contact, text: string): Promise<void> {
+  try {
+    const mid = await sendToContact(contact, text);
+    if (mid) await recordOutgoingMessage(contact.id, text, mid);
+  } catch (err) {
+    logError("phoneChange:reply", err);
+  }
 }
 
-/** Только для тестов. */
-export function resetTransferCodes(): void {
-  pending.clear();
+/**
+ * Просьба сменить телефон из чата. Решает по доказательству и месячному лимиту.
+ * Что деньги видны в базе, проверяет вызывающий (recovery.ts).
+ */
+export async function handlePhoneChange(
+  contact: Contact,
+  text: string,
+  language: Lang,
+  imageHashes: string[] = []
+): Promise<PhoneChangeOutcome> {
+  const proof = await phoneChangeProof(contact, text, imageHashes);
+  if (!proof) {
+    await replyTo(contact, TEXT[language].noProof);
+    await askOwner(contact, "просит сменить телефон, доказательств нет (ни кода ссылки, ни её чека, ни имени с номером)");
+    return "no_proof";
+  }
+  if (!canTransferNow(contact)) {
+    await replyTo(contact, TEXT[language].limit);
+    await askOwner(contact, `просит сменить телефон ещё раз в этом месяце (доказательство: ${PROOF_NAME[proof]})`);
+    return "limit";
+  }
+  const done = await performPhoneChange(contact, "bot");
+  if (done === "changed") {
+    await notifyOwner(contact, `бот перенёс доступ на новый телефон (доказательство: ${PROOF_NAME[proof]})`);
+    return "changed";
+  }
+  await replyTo(contact, TEXT[language].failed);
+  await askOwner(contact, "доказательство есть, но ссылку на новый телефон отправить не удалось");
+  return done;
 }
 
-async function askOwnerToAllow(contact: Contact): Promise<void> {
-  const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "дата неизвестна";
-  const devices = await prisma.device.findMany({ where: { contactId: contact.id } }).catch(() => []);
-  const now = devices
-    .map(
-      (d) =>
-        `${describeDevice(d.userAgent)}${d.lastCity ? `, ${d.lastCity}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}`,
-    )
-    .join("; ");
-  await tellOwner(
-    contact,
-    `просит перенос на новый телефон ещё раз в этом месяце (прошлый перенос ${last}). Сейчас занято: ${now || "нет данных"}. ` +
-      "Если это она, нажмите «Разрешить перенос»",
-    true,
+const PROOF_NAME: Record<ProofKind, string> = {
+  link_code: "код из ссылки",
+  receipt: "её чек картинкой",
+  name_phone: "имя и телефон покупки",
+};
+
+async function ownerChat(): Promise<{ botToken: string; chatId: string } | null> {
+  const botToken = (await getSetting("telegramBotToken"))?.trim();
+  const chatId = (await techChatIds())[0];
+  return botToken && chatId ? { botToken, chatId } : null;
+}
+
+function who(contact: Contact): string {
+  return [contact.name, contact.username ? `@${contact.username}` : null, `${contact.channel} ${contact.igUserId}`]
+    .filter(Boolean)
+    .join(", ");
+}
+
+async function devicesNow(contactId: string): Promise<string> {
+  const devices = await prisma.device.findMany({ where: { contactId } }).catch(() => []);
+  return (
+    devices
+      .map(
+        (d) =>
+          `${describeDevice(d.userAgent)}${d.lastCity ? `, ${d.lastCity}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}`
+      )
+      .join("; ") || "нет данных"
   );
 }
 
-async function tellOwner(contact: Contact, what: string, withButton: boolean): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  if (!botToken || !chatId) return;
-  if (!(await shouldSendAlert(`transfer:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
-  const who = [contact.name, contact.username ? `@${contact.username}` : null, `${contact.channel} ${contact.igUserId}`]
-    .filter(Boolean)
-    .join(", ");
+/** Карточка владельцу с кнопкой «Разрешить перенос». */
+async function askOwner(contact: Contact, what: string): Promise<void> {
+  const chat = await ownerChat();
+  if (!chat) return;
+  if (!(await shouldSendAlert(`phone-change:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
+  const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "переносов не было";
   await sendTelegramMessage(
-    botToken,
-    chatId,
-    `${who}: ${what}`,
+    chat.botToken,
+    chat.chatId,
+    `${who(contact)}: ${what}. Прошлый перенос: ${last}. Сейчас занято: ${await devicesNow(contact.id)}. ` +
+      "Если это она, нажмите «Разрешить перенос»: старый телефон и старая ссылка перестанут работать, новая уйдёт ей в чат.",
     undefined,
-    withButton
-      ? { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] }
-      : undefined,
-  ).catch((err) => logError("phoneTransfer:tellOwner", err));
+    { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] }
+  ).catch((err) => logError("phoneChange:askOwner", err));
 }
 
-/** Владелец нажал «Разрешить перенос»: снимаем месячный лимит и пишем покупательнице. */
+async function notifyOwner(contact: Contact, what: string): Promise<void> {
+  const chat = await ownerChat();
+  if (!chat) return;
+  await sendTelegramMessage(chat.botToken, chat.chatId, `${who(contact)}: ${what}`).catch((err) =>
+    logError("phoneChange:notifyOwner", err)
+  );
+}
+
+/**
+ * Владелец нажал «Разрешить перенос»: месячный лимит снимается и перенос
+ * делается сразу (новая ссылка в чат, старые устройства и ссылка аннулируются).
+ */
 export async function approveTransferByOwner(contactId: string): Promise<boolean> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return false;
   await prisma.contact.update({ where: { id: contactId }, data: { deviceSwaps: 0, deviceSwapAt: null } });
-  logInfo("course:deviceSwap", `контакт ${contactId}: владелец разрешил перенос`);
-  try {
-    const text = APPROVED[lang(contact)];
-    const mid = await sendToContact(contact, text);
-    if (mid) await recordOutgoingMessage(contact.id, text, mid);
-  } catch (err) {
-    logError("phoneTransfer:approvedNotice", err);
-  }
-  return true;
+  const done = await performPhoneChange({ ...contact, deviceSwaps: 0, deviceSwapAt: null }, "owner");
+  logInfo("course:phoneChange", `контакт ${contactId}: владелец разрешил перенос, итог ${done}`);
+  return done === "changed";
 }

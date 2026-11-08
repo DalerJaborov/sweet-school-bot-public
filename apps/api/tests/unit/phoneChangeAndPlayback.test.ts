@@ -17,14 +17,13 @@ vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
-import {
-  requestTransferCode,
-  verifyTransferCode,
-  resetTransferCodes,
-  approveTransferByOwner,
-} from "../../src/course/phoneTransfer.js";
+import { handlePhoneChange, phoneChangeProof, approveTransferByOwner } from "../../src/course/phoneChange.js";
+import { recoveryCodeFor } from "../../src/course/linkCode.js";
 import { claimPlayback, resetPlaybackLocks } from "../../src/course/playbackLock.js";
 import type { Contact } from "@prisma/client";
+
+const TOKEN = "Ab3kQ9xZpm";
+const CODE = recoveryCodeFor(TOKEN);
 
 const contact = fakeContact({
   id: "c-1",
@@ -32,94 +31,141 @@ const contact = fakeContact({
   igUserId: "992900000000",
   username: null,
   name: "Гулнора",
+  accessTokenId: TOKEN,
+  accessIssuedAt: new Date("2026-10-20"),
   deviceSwaps: 0,
   deviceSwapAt: null,
   preferredLanguage: "ru",
 }) as unknown as Contact;
 
-describe("перенос на новый телефон по коду", () => {
+describe("смена телефона через бота", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
-    resetTransferCodes();
     sendText.mockClear();
     sendTelegramMessage.mockClear();
     db.model("contact").findUnique.mockResolvedValue(contact);
     db.model("contact").updateMany.mockResolvedValue({ count: 1 });
-    db.model("device").findMany.mockResolvedValue([]);
+    db.model("device").findMany.mockResolvedValue([
+      { id: "old-1", userAgent: "Android", lastCity: null, lastSeenAt: new Date("2026-11-07") },
+      { id: "old-2", userAgent: "Android", lastCity: null, lastSeenAt: new Date("2026-11-06") },
+    ]);
+    db.model("receiptCheck").count.mockResolvedValue(0);
+    db.model("offlineSignup").findMany.mockResolvedValue([]);
     db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-      where.key === "telegramBotToken" ? { value: "token" } : null,
+      where.key === "telegramBotToken" ? { value: "token" } : null
     );
   });
   afterEach(restorePrisma);
 
-  function sentCode(): string {
-    return /(\d{6})/.exec(String(sendText.mock.calls.at(-1)?.[1]))![1];
-  }
+  it("ГЛАВНОЕ: код из её ссылки — новая ссылка, старая аннулирована, устройства удалены, месяц потрачен", async () => {
+    const outcome = await handlePhoneChange(contact, `сменила телефон, мой код ${CODE}`, "ru");
 
-  it("код уходит в ЧАТ покупательницы, подходит один раз и только верный", async () => {
-    expect(await requestTransferCode(contact)).toBe("sent");
-    const code = sentCode();
-    expect(verifyTransferCode(contact.id, code === "000000" ? "111111" : "000000")).toBe(false);
-    expect(verifyTransferCode(contact.id, code)).toBe(true);
-    expect(verifyTransferCode(contact.id, code)).toBe(false); // сгорел
+    expect(outcome).toBe("changed");
+    // Новая ссылка записана с проверкой «прежняя ещё та же» (гонки не затирают друг друга).
+    const claim = db.model("contact").updateMany.mock.calls[0][0] as { where: Record<string, unknown>; data: { accessTokenId: string } };
+    expect(claim.where.accessTokenId).toBe(TOKEN);
+    expect(claim.data.accessTokenId).not.toBe(TOKEN);
+    expect(String(sendText.mock.calls[0][1])).toContain(`/l/${claim.data.accessTokenId}`);
+    expect(String(sendText.mock.calls[0][1])).toContain("Прежняя ссылка и старый телефон больше не открывают");
+    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["old-1", "old-2"] } } });
+    const upd = db.model("contact").update.mock.calls[0][0] as { data: { deviceSwaps: number } };
+    expect(upd.data.deviceSwaps).toBe(1);
+    // Владельцу — сводка без кнопки.
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("код из ссылки");
+    expect(sendTelegramMessage.mock.calls[0][4]).toBeUndefined();
   });
 
-  it("5 неверных попыток — код мёртв, даже верный", async () => {
-    await requestTransferCode(contact);
-    const code = sentCode();
-    const wrong = code === "123456" ? "654321" : "123456";
-    for (let i = 0; i < 5; i++) expect(verifyTransferCode(contact.id, wrong)).toBe(false);
-    expect(verifyTransferCode(contact.id, code)).toBe(false);
+  it("чужой код не считается доказательством", async () => {
+    expect(await phoneChangeProof(contact, `сменила телефон ${recoveryCodeFor("Zz9yX8wVu7")}`)).toBeNull();
   });
 
-  it("код другой покупательницы не подходит", async () => {
-    await requestTransferCode(contact);
-    expect(verifyTransferCode("c-2", sentCode())).toBe(false);
+  it("доказательств нет — ничего не меняется, ей «пришлите чек или код», владельцу карточка с кнопкой", async () => {
+    const outcome = await handlePhoneChange(contact, "сменила телефон, дайте ссылку", "ru");
+
+    expect(outcome).toBe("no_proof");
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(String(sendText.mock.calls[0][1])).toContain("чек об оплате картинкой или код из вашей ссылки");
+    expect(String(sendText.mock.calls[0][1])).toContain("передала Ширин");
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("доказательств нет");
+    expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("mn:tr:c-1");
   });
 
-  it("повторный запрос в первую минуту — пауза, второй код не уходит", async () => {
-    await requestTransferCode(contact);
-    expect(await requestTransferCode(contact)).toBe("cooldown");
-    expect(sendText).toHaveBeenCalledTimes(1);
+  it("доказательство есть, но перенос в этом месяце уже был — не делаем, «передала Ширин», карточка с кнопкой", async () => {
+    const used = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 5 * 86_400_000) } as unknown as Contact;
+    db.model("device").findMany.mockResolvedValue([{ userAgent: "Mozilla/5.0 (iPhone)", lastCity: "TJ", lastSeenAt: new Date("2026-11-07") }]);
+
+    expect(await handlePhoneChange(used, `сменила телефон ${CODE}`, "ru")).toBe("limit");
+
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(String(sendText.mock.calls[0][1])).toContain("один раз в 30 дней");
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("iPhone");
+    expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("mn:tr:c-1");
   });
 
-  it("не удалось отправить в чат — владельцу сообщение, кода нет", async () => {
-    sendText.mockRejectedValueOnce(new Error("окно WhatsApp закрыто"));
-    expect(await requestTransferCode(contact)).toBe("send_failed");
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("не получилось отправить код");
-    expect(verifyTransferCode(contact.id, "123456")).toBe(false);
+  it("чек картинкой: тот же файл, уже принятый по ЕЁ контакту — доказательство; сам чек не пишется и в оплату не идёт", async () => {
+    db.model("receiptCheck").count.mockResolvedValue(1);
+
+    const outcome = await handlePhoneChange(contact, "сменила телефон", "ru", ["hash-1"]);
+
+    expect(outcome).toBe("changed");
+    expect(db.model("receiptCheck").count).toHaveBeenCalledWith({
+      where: { contactId: "c-1", imageHash: { in: ["hash-1"] }, OR: [{ ownerDecision: "APPROVED" }, { linkSent: true }] },
+    });
+    expect(db.model("receiptCheck").create).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").update).not.toHaveBeenCalled();
+    expect(db.model("purchase").create).not.toHaveBeenCalled();
   });
 
-  it("перенос в этом месяце уже был — код НЕ шлём, владельцу карточка с кнопкой «Разрешить перенос»", async () => {
-    const used = {
-      ...contact,
-      deviceSwaps: 1,
-      deviceSwapAt: new Date(Date.now() - 5 * 86_400_000),
-    } as unknown as Contact;
-    db.model("device").findMany.mockResolvedValue([
-      { userAgent: "Mozilla/5.0 (iPhone)", lastCity: "TJ", lastSeenAt: new Date("2026-11-07") },
-    ]);
-
-    expect(await requestTransferCode(used)).toBe("owner_asked");
-
-    expect(sendText).not.toHaveBeenCalled();
-    const call = sendTelegramMessage.mock.calls[0];
-    expect(String(call[2])).toContain("ещё раз в этом месяце");
-    expect(String(call[2])).toContain("iPhone");
-    expect(JSON.stringify(call[4])).toContain("mn:tr:c-1");
+  it("чужой чек (не принятый по этому контакту) доказательством не считается", async () => {
+    expect(await phoneChangeProof(contact, "сменила телефон", ["hash-foreign"])).toBeNull();
   });
 
-  it("владелец разрешил: месячный лимит сброшен, покупательнице написали", async () => {
+  it("имя и телефон: оба совпали — доказательство; только телефон или только имя — нет", async () => {
+    expect(await phoneChangeProof(contact, "Меня зовут Гулнора, номер +992 900 000 000")).toBe("name_phone");
+    expect(await phoneChangeProof(contact, "Меня зовут Мадина, номер 900000000")).toBeNull();
+    expect(await phoneChangeProof(contact, "Гулнора")).toBeNull();
+    expect(await phoneChangeProof(contact, "Гулнора, номер 911111111")).toBeNull();
+  });
+
+  it("у Instagram-контакта номера в базе нет: имя с любым номером не проходит", async () => {
+    const ig = { ...contact, channel: "INSTAGRAM", igUserId: "17841400000" } as unknown as Contact;
+    expect(await phoneChangeProof(ig, "Гулнора, номер 900000000")).toBeNull();
+  });
+
+  it("ссылка не доставилась — прежняя ссылка возвращается, устройства целы, владельцу карточка", async () => {
+    sendText.mockRejectedValueOnce(new Error("окно 24 часа закрыто"));
+
+    expect(await handlePhoneChange(contact, `сменила телефон ${CODE}`, "ru")).toBe("send_failed");
+
+    const restore = db.model("contact").updateMany.mock.calls[1][0] as { data: { accessTokenId: string } };
+    expect(restore.data.accessTokenId).toBe(TOKEN);
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendTelegramMessage.mock.calls.at(-1)?.[4])).toContain("mn:tr:c-1");
+  });
+
+  it("доступ отозван — ссылку не выдаём вообще", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ ...contact, accessRevokedAt: new Date() });
+    expect(await handlePhoneChange(contact, `сменила телефон ${CODE}`, "ru")).toBe("no_link");
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("владелец разрешил: лимит сброшен, перенос сделан сразу, новая ссылка ушла в чат", async () => {
     expect(await approveTransferByOwner("c-1")).toBe(true);
-    const upd = db.model("contact").update.mock.calls[0][0] as { data: { deviceSwaps: number; deviceSwapAt: null } };
-    expect(upd.data).toEqual({ deviceSwaps: 0, deviceSwapAt: null });
-    expect(String(sendText.mock.calls[0][1])).toContain("Перенос на новый телефон разрешён");
+    const reset = db.model("contact").update.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(reset.data).toEqual({ deviceSwaps: 0, deviceSwapAt: null });
+    expect(String(sendText.mock.calls[0][1])).toContain("Ширин разрешила перенос");
+    expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
+    expect(db.model("device").deleteMany).toHaveBeenCalled();
   });
 
-  it("по-таджикски код приходит на таджикском", async () => {
-    await requestTransferCode({ ...contact, preferredLanguage: "tg" } as unknown as Contact);
-    expect(String(sendText.mock.calls[0][1])).toContain("Рамз барои гузаронидани");
+  it("по-таджикски сообщения приходят на таджикском", async () => {
+    await handlePhoneChange({ ...contact, preferredLanguage: "tg" } as unknown as Contact, "телефонамро иваз кардам", "tg");
+    expect(String(sendText.mock.calls[0][1])).toContain("Барои он ки ман дастрасиро");
   });
 });
 
