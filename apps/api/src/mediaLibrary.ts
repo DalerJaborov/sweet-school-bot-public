@@ -2,7 +2,7 @@ import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { prisma } from "./db.js";
+import { prisma, getSetting } from "./db.js";
 import { env } from "./env.js";
 import { autoCatch } from "./asyncRoute.js";
 import { upload, MEDIA_DIR } from "./upload.js";
@@ -50,7 +50,13 @@ const synthSchema = z.object({
 export const mediaLibraryRouter = autoCatch(Router());
 
 mediaLibraryRouter.get("/admin/media-library/status", async (_req, res) => {
-  res.json({ voiceConfigured: voiceConfigured(), voiceEnabled: await voiceEnabled(), maxVoiceText: MAX_VOICE_TEXT });
+  res.json({
+    voiceConfigured: voiceConfigured(),
+    voiceEnabled: await voiceEnabled(),
+    voiceSwitch: (await getSetting("voiceCloneEnabled")) === "true",
+    voiceReplySwitch: (await getSetting("voiceReplyEnabled")) === "true",
+    maxVoiceText: MAX_VOICE_TEXT,
+  });
 });
 
 mediaLibraryRouter.post("/admin/media-library", upload.single("file"), async (req, res) => {

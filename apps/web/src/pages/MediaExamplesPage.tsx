@@ -53,11 +53,12 @@ function LibraryAdd({ onAdded }: { onAdded: () => void }) {
   const [approved, setApproved] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [voice, setVoice] = useState<{ voiceConfigured: boolean; voiceEnabled: boolean; maxVoiceText: number } | null>(null);
+  type VoiceStatus = { voiceConfigured: boolean; voiceEnabled: boolean; voiceSwitch: boolean; voiceReplySwitch: boolean; maxVoiceText: number };
+  const [voice, setVoice] = useState<VoiceStatus | null>(null);
   const [speech, setSpeech] = useState("");
 
   useEffect(() => {
-    api<{ voiceConfigured: boolean; voiceEnabled: boolean; maxVoiceText: number }>("/admin/media-library/status")
+    api<VoiceStatus>("/admin/media-library/status")
       .then(setVoice)
       .catch(() => setVoice(null));
   }, []);
@@ -77,6 +78,16 @@ function LibraryAdd({ onAdded }: { onAdded: () => void }) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : "Не удалось загрузить" });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function flipSwitch(key: "voiceCloneEnabled" | "voiceReplyEnabled", next: boolean) {
+    try {
+      await api("/admin/settings", { method: "PUT", body: { [key]: String(next) } });
+      const fresh = await api<VoiceStatus>("/admin/media-library/status");
+      setVoice(fresh);
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Не удалось переключить" });
     }
   }
 
@@ -119,6 +130,12 @@ function LibraryAdd({ onAdded }: { onAdded: () => void }) {
             потом решаете, можно ли боту её отправлять.
             {!voice.voiceEnabled && " Сейчас озвучка выключена в настройках."}
           </p>
+          <label style={{ display: "block", marginBottom: 6 }}>
+            <input type="checkbox" checked={voice.voiceSwitch} onChange={(e) => void flipSwitch("voiceCloneEnabled", e.target.checked)} /> Озвучка голосом Ширин включена
+          </label>
+          <label style={{ display: "block", marginBottom: 8 }}>
+            <input type="checkbox" checked={voice.voiceReplySwitch} onChange={(e) => void flipSwitch("voiceReplyEnabled", e.target.checked)} /> Бот сам отвечает голосом на короткие тёплые сообщения
+          </label>
           <textarea className="input" rows={3} value={speech} maxLength={voice.maxVoiceText} onChange={(e) => setSpeech(e.target.value)} placeholder="Что должна сказать Ширин" />
           <button className="btn wide" style={{ marginTop: 8 }} disabled={!speech.trim() || busy || !voice.voiceEnabled} onClick={speak}>
             Озвучить

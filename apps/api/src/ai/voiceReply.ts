@@ -31,7 +31,7 @@ const HAS_MONEY_WORDS =
 
 export function chooseVoiceOrText(
   text: string,
-  ctx: { channel: string; clientSentVoice: boolean; lastReplyWasVoice: boolean }
+  ctx: { channel: string; clientSentVoice: boolean; lastReplyWasVoice: boolean },
 ): "voice" | "text" {
   if (ctx.channel !== "WHATSAPP" || ctx.lastReplyWasVoice) return "text";
   const t = text.trim();
@@ -45,12 +45,15 @@ export function chooseVoiceOrText(
 export async function trySendVoiceReply(
   contact: { id: string; igUserId: string; channel: string },
   text: string,
-  clientSentVoice: boolean
+  clientSentVoice: boolean,
 ): Promise<boolean> {
   let url: string;
   try {
     if ((await getSetting("voiceReplyEnabled")) !== "true" || !(await voiceEnabled())) return false;
-    const last = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "OUT" }, orderBy: { createdAt: "desc" } });
+    const last = await prisma.message.findFirst({
+      where: { contactId: contact.id, direction: "OUT" },
+      orderBy: { createdAt: "desc" },
+    });
     const choice = chooseVoiceOrText(text, {
       channel: contact.channel,
       clientSentVoice,
