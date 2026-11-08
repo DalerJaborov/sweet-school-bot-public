@@ -17,11 +17,25 @@ vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
-import { requestTransferCode, verifyTransferCode, resetTransferCodes, approveTransferByOwner } from "../../src/course/phoneTransfer.js";
+import {
+  requestTransferCode,
+  verifyTransferCode,
+  resetTransferCodes,
+  approveTransferByOwner,
+} from "../../src/course/phoneTransfer.js";
 import { claimPlayback, resetPlaybackLocks } from "../../src/course/playbackLock.js";
 import type { Contact } from "@prisma/client";
 
-const contact = fakeContact({ id: "c-1", channel: "WHATSAPP", igUserId: "992900000000", username: null, name: "Гулнора", deviceSwaps: 0, deviceSwapAt: null, preferredLanguage: "ru" }) as unknown as Contact;
+const contact = fakeContact({
+  id: "c-1",
+  channel: "WHATSAPP",
+  igUserId: "992900000000",
+  username: null,
+  name: "Гулнора",
+  deviceSwaps: 0,
+  deviceSwapAt: null,
+  preferredLanguage: "ru",
+}) as unknown as Contact;
 
 describe("перенос на новый телефон по коду", () => {
   let db: PrismaMock;
@@ -34,7 +48,7 @@ describe("перенос на новый телефон по коду", () => {
     db.model("contact").updateMany.mockResolvedValue({ count: 1 });
     db.model("device").findMany.mockResolvedValue([]);
     db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-      where.key === "telegramBotToken" ? { value: "token" } : null
+      where.key === "telegramBotToken" ? { value: "token" } : null,
     );
   });
   afterEach(restorePrisma);
@@ -78,7 +92,11 @@ describe("перенос на новый телефон по коду", () => {
   });
 
   it("перенос в этом месяце уже был — код НЕ шлём, владельцу карточка с кнопкой «Разрешить перенос»", async () => {
-    const used = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 5 * 86_400_000) } as unknown as Contact;
+    const used = {
+      ...contact,
+      deviceSwaps: 1,
+      deviceSwapAt: new Date(Date.now() - 5 * 86_400_000),
+    } as unknown as Contact;
     db.model("device").findMany.mockResolvedValue([
       { userAgent: "Mozilla/5.0 (iPhone)", lastCity: "TJ", lastSeenAt: new Date("2026-11-07") },
     ]);

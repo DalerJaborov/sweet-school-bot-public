@@ -1,7 +1,5 @@
 import { Router, type Request, type Response } from "express";
 import { claimPlayback } from "./playbackLock.js";
-import { requestTransferCode, verifyTransferCode } from "./phoneTransfer.js";
-import { transferToNewPhone } from "./access.js";
 import { z } from "zod";
 import { env } from "../env.js";
 import { prisma, logError } from "../db.js";
@@ -15,7 +13,7 @@ import {
   listDevicesFor,
   pairDevice,
   issuePairToken,
-  MAX_DEVICE_SWAPS_PER_MONTH,
+  occupiedPhoneLabel,
   type AccessResult,
 } from "./access.js";
 import { masterManifest, variantManifest, offlineSegmentList } from "./manifest.js";
@@ -119,78 +117,26 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
     .object({
       token: z.string().min(10),
       fingerprint: z.string().max(200).optional(),
-      /** «Это мой новый телефон» — заменить самое старое устройство. */
-      replaceOldest: z.boolean().optional(),
     })
     .safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Нужен token" });
     return;
   }
-  const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint, parsed.data.replaceOldest ?? false);
+  const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint);
   if (!result.ok) {
-    // При упоре в лимит показываем, какие устройства заняли места, — экран
-    // «заменить самое старое?» строится из этого.
+    // При упоре в лимит отдаём модель занятого телефона: экран пишет
+    // «курс открыт на телефоне X, для другого купите курс».
     if (result.reason === "device_limit") {
       const claims = verifyMagicLink(parsed.data.token);
       const byCode = claims?.jti && !claims.contactId ? await prisma.contact.findUnique({ where: { accessTokenId: claims.jti } }) : null;
       const contactId = claims?.contactId ?? byCode?.id ?? null;
       const devices = contactId ? await listDevicesFor(contactId) : [];
-      const contact = contactId ? await prisma.contact.findUnique({ where: { id: contactId } }) : null;
-      const swapsLeft = contact
-        ? Math.max(
-            0,
-            MAX_DEVICE_SWAPS_PER_MONTH -
-              (contact.deviceSwapAt && contact.deviceSwapAt.getTime() > Date.now() - 30 * 86_400_000 ? contact.deviceSwaps : 0)
-          )
-        : 0;
-      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, swapsLeft });
+      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, phone: contactId ? await occupiedPhoneLabel(contactId) : null });
       return;
     }
     return deny(res, result);
   }
-  res.json({ ok: true, contactId: result.contact.id });
-});
-
-/** Контакт по коду из ссылки — для переноса на новый телефон. */
-async function contactForLinkToken(token: string) {
-  const claims = verifyMagicLink(token);
-  if (!claims?.jti || claims.contactId || claims.purchaseId) return null;
-  return prisma.contact.findUnique({ where: { accessTokenId: claims.jti } });
-}
-
-/** «Перенести на этот телефон»: код подтверждения уходит в чат покупательницы. */
-courseRouter.post(`${API_BASE}/transfer/request`, async (req: Request, res: Response) => {
-  const parsed = z.object({ token: z.string().min(10) }).safeParse(req.body);
-  const contact = parsed.success ? await contactForLinkToken(parsed.data.token) : null;
-  if (!contact) {
-    res.status(404).json({ error: "Ссылка недействительна или устарела", reason: "not_found" });
-    return;
-  }
-  const status = await requestTransferCode(contact);
-  res.json({ status });
-});
-
-/** Ввод кода: старый телефон аннулируется, этот открывается. */
-courseRouter.post(`${API_BASE}/transfer/confirm`, async (req: Request, res: Response) => {
-  const parsed = z
-    .object({ token: z.string().min(10), code: z.string().regex(/^\d{6}$/), fingerprint: z.string().max(200).optional() })
-    .safeParse(req.body);
-  const contact = parsed.success ? await contactForLinkToken(parsed.data.token) : null;
-  if (!parsed.success || !contact) {
-    res.status(400).json({ error: "Нужен код из 6 цифр", reason: "bad_code" });
-    return;
-  }
-  if (!verifyTransferCode(contact.id, parsed.data.code)) {
-    res.status(400).json({ error: "Код не подошёл или устарел", reason: "bad_code" });
-    return;
-  }
-  if ((await transferToNewPhone(contact)) === "limit") {
-    res.status(429).json({ error: "Перенос в этом месяце уже был", reason: "device_limit" });
-    return;
-  }
-  const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint, false);
-  if (!result.ok) return deny(res, result);
   res.json({ ok: true, contactId: result.contact.id });
 });
 

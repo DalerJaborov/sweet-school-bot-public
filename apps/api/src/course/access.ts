@@ -235,8 +235,7 @@ export async function openByLink(
   req: Request,
   res: Response,
   token: string,
-  clientHint?: string,
-  replaceOldest = false
+  clientHint?: string
 ): Promise<AccessResult> {
   const claims = verifyMagicLink(token);
   if (!claims) {
@@ -255,7 +254,7 @@ export async function openByLink(
     return { ok: false, reason: "revoked", message: "Доступ к курсу закрыт. Напишите нам, если это ошибка" };
   }
 
-  const result = await registerDevice(req, contact, purchases, clientHint, replaceOldest);
+  const result = await registerDevice(req, contact, purchases, clientHint);
   if (!result.ok) return result;
 
   // Метка есть у всех устройств, созданных этим кодом. Старые записи (до
@@ -397,6 +396,33 @@ export function describeDevice(ua: string | null): string {
   return "Устройство";
 }
 
+/**
+ * Как назвать занятый телефон человеку: модель Android из User-Agent, «iPhone»
+ * или null, если модель неизвестна (тогда в тексте «ваш основной телефон»).
+ */
+export function phoneLabel(ua: string | null | undefined): string | null {
+  if (!ua) return null;
+  if (/iphone|ipod/i.test(ua)) return "iPhone";
+  if (/ipad/i.test(ua)) return "iPad";
+  if (/android/i.test(ua)) {
+    const m = /Android[^;)]*;\s*([^;)]+?)\s*(?:Build\/|[;)])/i.exec(ua);
+    const model = m?.[1]?.trim();
+    return model && model.length >= 3 && !/^(k|mobile|wv|linux)$/i.test(model) ? model : null;
+  }
+  return null;
+}
+
+/** Метка телефона, на котором курс открыт сейчас (последний заходивший). */
+export async function occupiedPhoneLabel(contactId: string): Promise<string | null> {
+  const rows = await prisma.device.findMany({ where: { contactId }, orderBy: { lastSeenAt: "desc" }, take: 1 });
+  return phoneLabel(rows[0]?.userAgent);
+}
+
+/** Сообщение «курс открыт на другом телефоне» (русский запасной текст сервера). */
+export function devicePhoneMessage(label: string | null): string {
+  return `Этот курс открывается на ${label ? `телефоне ${label}` : "вашем основном телефоне"}. Чтобы смотреть на другом телефоне, купите курс для него`;
+}
+
 export async function deviceLimitFor(_contactId: string): Promise<number> {
   // Политика «один телефон» одна на всех. Столбец Course.deviceLimit больше не
   // читается: прежний «запас 2–3» как раз и позволял пользоваться вдвоём.
@@ -413,8 +439,7 @@ export async function registerDevice(
   req: Request,
   contact: Contact,
   purchases: Purchase[],
-  clientHint?: string,
-  replaceOldest = false
+  clientHint?: string
 ): Promise<AccessResult> {
   const purchase = purchases[0];
   const fingerprint = deviceFingerprint(req, clientHint);
@@ -482,7 +507,7 @@ export async function registerDevice(
   const limit = await deviceLimitFor(contact.id);
   // Заблокированные СЧИТАЮТСЯ занятыми: иначе блокировка сама освобождала бы
   // место, и обойти лимит можно было бы, просто нарвавшись на блокировку.
-  let used = await deviceCountFor(contact.id);
+  const used = await deviceCountFor(contact.id);
 
   // Место занято. Прежде чем отказать, выясняем, не тот ли это телефон в другом
   // браузере (см. samePhoneVerdict). Сомнительное НЕ блокируем — пускаем на
@@ -503,18 +528,13 @@ export async function registerDevice(
     }
   }
 
-  // Ученица нажала «это мой новый телефон» — переносим доступ (старый
-  // аннулируется), если в этом месяце ещё не переносила.
-  if (used >= limit && replaceOldest && (await transferToNewPhone(contact)) === "transferred") {
-    used = await deviceCountFor(contact.id);
-  }
   if (used >= limit) {
+    // Второй телефон не пускаем и сами не переносим: смена телефона идёт только
+    // через бота с доказательством (recovery.ts), а второй телефон — это
+    // отдельная покупка (владелец 08.11.2026).
     logInfo("course:deviceLimit", `контакт ${contact.id}: попытка входа с другого телефона`);
-    return {
-      ok: false,
-      reason: "device_limit",
-      message: "Курс открыт на другом телефоне. Чтобы перенести на этот телефон, нажмите «Перенести», вам придёт код в WhatsApp",
-    };
+    const label = await occupiedPhoneLabel(contact.id);
+    return { ok: false, reason: "device_limit", message: devicePhoneMessage(label) };
   }
 
   const device = await prisma.device.create({

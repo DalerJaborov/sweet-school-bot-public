@@ -78,7 +78,13 @@ export async function requestTransferCode(contact: Contact): Promise<RequestResu
     await tellOwner(contact, "не получилось отправить код переноса в её чат", false);
     return "send_failed";
   }
-  pending.set(contact.id, { hash: hashCode(contact.id, code), exp: now + CODE_TTL_MS, attempts: 0, sentAt: now, sends: [...sends, now] });
+  pending.set(contact.id, {
+    hash: hashCode(contact.id, code),
+    exp: now + CODE_TTL_MS,
+    attempts: 0,
+    sentAt: now,
+    sends: [...sends, now],
+  });
   return "sent";
 }
 
@@ -103,13 +109,16 @@ async function askOwnerToAllow(contact: Contact): Promise<void> {
   const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "дата неизвестна";
   const devices = await prisma.device.findMany({ where: { contactId: contact.id } }).catch(() => []);
   const now = devices
-    .map((d) => `${describeDevice(d.userAgent)}${d.lastCity ? `, ${d.lastCity}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}`)
+    .map(
+      (d) =>
+        `${describeDevice(d.userAgent)}${d.lastCity ? `, ${d.lastCity}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}`,
+    )
     .join("; ");
   await tellOwner(
     contact,
     `просит перенос на новый телефон ещё раз в этом месяце (прошлый перенос ${last}). Сейчас занято: ${now || "нет данных"}. ` +
       "Если это она, нажмите «Разрешить перенос»",
-    true
+    true,
   );
 }
 
@@ -126,7 +135,9 @@ async function tellOwner(contact: Contact, what: string, withButton: boolean): P
     chatId,
     `${who}: ${what}`,
     undefined,
-    withButton ? { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] } : undefined
+    withButton
+      ? { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] }
+      : undefined,
   ).catch((err) => logError("phoneTransfer:tellOwner", err));
 }
 
