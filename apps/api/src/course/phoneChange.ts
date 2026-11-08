@@ -52,7 +52,7 @@ export type PhoneChangeOutcome = "changed" | "no_proof" | "limit" | "send_failed
 
 type Lang = "ru" | "tg" | "en";
 
-const TEXT: Record<Lang, { changed: string; noProof: string; limit: string; approved: string; failed: string }> = {
+export const PHONE_CHANGE_TEXT: Record<Lang, { changed: string; noProof: string; limit: string; approved: string; failed: string }> = {
   ru: {
     changed:
       "Перенесла доступ на новый телефон. Вот новая ссылка, откройте её на нём. " +
@@ -69,17 +69,17 @@ const TEXT: Record<Lang, { changed: string; noProof: string; limit: string; appr
   },
   tg: {
     changed:
-      "Дастрасиро ба телефони нав гузарондам. Мана линки нав, онро дар телефони нав кушоед. " +
-      "Линки пешина ва телефони кӯҳна дигар дарсҳоро намекушоянд:\n",
+      "Дастрасиро ба телефони нав гузарондам. Ана ссылкаи нав, дар телефони нав кушоен. " +
+      "Ссылкаи пешина ва телефони куханатон дигар дарсхоя намекушояд:\n",
     noProof:
-      "Барои он ки ман дастрасиро ба телефони нав худам гузаронам, чеки пардохтро ҳамчун акс ё рамзи линкатонро (намуди 7F3A-91C2) фиристед. " +
-      "Ҳоло ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
+      "Барои ки худам ба телефони нав гузаронам, сурати чеки пардохт ё коди ссылкаатона (мисли 7F3A-91C2) фиристен. " +
+      "Хозир ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
     limit:
-      "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
+      "Ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
     approved:
-      "Ширин гузаронидан ба телефони навро иҷозат дод. Мана линки нав, онро дар телефони нав кушоед. " +
-      "Линки пешина ва телефони кӯҳна дигар дарсҳоро намекушоянд:\n",
-    failed: "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
+      "Ширин ичозат дод, ба телефони нав гузарондам. Ана ссылкаи нав, дар телефони нав кушоен. " +
+      "Ссылкаи пешина ва телефони куханатон дигар дарсхоя намекушояд:\n",
+    failed: "Ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
   },
   en: {
     changed:
@@ -210,7 +210,7 @@ export async function performPhoneChange(
     return "send_failed";
   }
 
-  const text = (kind === "owner" ? TEXT[lang(fresh)].approved : TEXT[lang(fresh)].changed) + url;
+  const text = (kind === "owner" ? PHONE_CHANGE_TEXT[lang(fresh)].approved : PHONE_CHANGE_TEXT[lang(fresh)].changed) + url;
   let delivered = false;
   try {
     // Нажатие владельца — его решение: пауза бота и «ответила Ширин сама» не мешают.
@@ -259,7 +259,7 @@ export async function handlePhoneChange(
   // Покупательница с сайта (чат WEB): правило PR 62 — бот сам ссылку не переносит,
   // решает владелец одним нажатием.
   if (contact.channel === "WEB") {
-    await replyTo(contact, TEXT[language].failed);
+    await replyTo(contact, PHONE_CHANGE_TEXT[language].failed);
     await askOwner(contact, "покупательница с сайта просит сменить телефон", "web");
     return "no_link";
   }
@@ -268,7 +268,7 @@ export async function handlePhoneChange(
   // туда. Код, чек и имя с номером — дополнительные, пишутся в журнал.
   const proof: ProofKind = (await phoneChangeProof(contact, text, imageHashes)) ?? "own_chat";
   if (!canTransferNow(contact)) {
-    await replyTo(contact, TEXT[language].limit);
+    await replyTo(contact, PHONE_CHANGE_TEXT[language].limit);
     await askOwner(contact, `просит сменить телефон ещё раз в этом месяце (доказательство: ${PROOF_NAME[proof]})`);
     return "limit";
   }
@@ -278,7 +278,7 @@ export async function handlePhoneChange(
     await notifyOwner(contact, `бот перенёс доступ на новый телефон (доказательство: ${PROOF_NAME[proof]})`);
     return "changed";
   }
-  await replyTo(contact, TEXT[language].failed);
+  await replyTo(contact, PHONE_CHANGE_TEXT[language].failed);
   await askOwner(
     contact,
     done === "blocked"

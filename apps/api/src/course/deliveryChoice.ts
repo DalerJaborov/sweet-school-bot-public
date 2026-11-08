@@ -2,7 +2,7 @@ import type { Contact } from "@prisma/client";
 import { deliveryMode } from "./delivery.js";
 import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
-import { detectClientLanguage } from "../ai/clientLanguage.js";
+import { contactLanguage } from "../ai/contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked, currentReceiptEvidence } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
@@ -15,8 +15,8 @@ export function isDeliveryChoice(value: unknown): value is CourseDeliveryChoice 
 }
 
 export const DELIVERY_QUESTION = {
-  ru: "Оплата принята. У вас есть Telegram? Ответьте «да» — пришлю приглашение в группу с уроками, или «нет» — открою уроки на сайте.",
-  tg: "Пардохт қабул шуд. Шумо Telegram доред? «Ҳа» гӯед — ссылкаи гурӯҳи дарсҳоро мефиристам, ё «не» — дарсҳоро дар сайт мекушоям.",
+  ru: "Оплата принята. У вас есть Telegram? Напишите «да», пришлю ссылку в группу с уроками. Напишите «нет», открою уроки на сайте",
+  tg: "Пардохт кабул шуд. Telegram доред? «Ха» нависен, ссылкаи группаро мефиристам. «Не» нависен, дарсхоя дар сайт мекушоям",
 };
 
 /** Only short explicit answers. An unrelated 'yes' is handled below only when
@@ -168,7 +168,7 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
   if (claim.count !== 1) return false;
   const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN" }, orderBy: { createdAt: "desc" } });
   const lang = contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
-    ? contact.preferredLanguage : detectClientLanguage(lastIn?.text ?? "") === "ru" ? "ru" : "tg";
+    ? contact.preferredLanguage : (await contactLanguage(contact.id, lastIn?.text ?? "")) === "ru" ? "ru" : "tg";
   const text = DELIVERY_QUESTION[lang];
   let sent = false;
   try {

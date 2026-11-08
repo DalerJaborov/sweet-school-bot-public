@@ -1,7 +1,8 @@
 import { awaitingDeliveryChoice } from "./course/deliveryChoice.js";
 import { withVerifiedReceiptDelivery } from "./messaging/automation.js";
 import { prisma, logError, recordOutgoingMessage } from "./db.js";
-import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { sendToContact } from "./messaging/send.js";
 import { markExamplesAsSuccessful } from "./ai/styleLearning.js";
 import { coursesForAmount, planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
@@ -27,13 +28,13 @@ export type CourseChoice = Course | "BOTH";
  * нормальный чек. Рядом всё уже двуязычно (receiptVerdict.ts, offlineCourse.ts)
  * — здесь тот же приём: язык по последнему входящему.
  */
-const REJECT_TEXT: Record<ClientLanguage, string> = {
+export const REJECT_TEXT: Record<ClientLanguage, string> = {
   tg:
-    "Пардо, пардохт ҳоло тасдиқ нашуд. Лутфан як бори дигар тафтиш кунед ва чеки дурустро " +
-    "равон кунед (метавонед аз таърихи бонк гиред). Ё занг занед: 905 355 355",
+    "Бубахшед, пардохт хозир тасдик нашуд. Боз як бор тафтиш кунен ва чеки дурустро фиристен, " +
+    "аз истории банк хам мешавад. Ё занг занен: 905 355 355",
   ru:
-    "Извините, оплату пока не удалось подтвердить. Проверьте, пожалуйста, ещё раз и пришлите " +
-    "правильный чек (можно взять из истории банка). Или позвоните: 905 355 355",
+    "Извините, оплату пока не удалось подтвердить. Проверьте ещё раз и пришлите правильный чек, " +
+    "можно из истории банка. Или позвоните: 905 355 355",
   en:
     "Sorry, we couldn't confirm the payment yet. Please double-check and send the correct receipt " +
     "(you can take it from your bank history). Or call: 905 355 355",
@@ -41,7 +42,7 @@ const REJECT_TEXT: Record<ClientLanguage, string> = {
 
 /** Признаки того, что клиентку уже просили прислать чек/другой скриншот. */
 const ASKED_FOR_RECEIPT =
-  /Пришлите, пожалуйста, ещё один|Лутфан сурати дигар фиристед|could you send another one|оплату пока не удалось подтвердить|пардохт ҳоло тасдиқ нашуд|confirm the payment yet/iu;
+  /Пришлите, пожалуйста, ещё один|Лутфан сурати дигар фиристед|could you send another one|оплату пока не удалось подтвердить|пардохт ҳоло тасдиқ нашуд|confirm the payment yet|Пришлите ещё один скрин|Боз як скриншот фиристен|send another screenshot|пардохт хозир тасдик нашуд/iu;
 
 export type ReceiptDecisionResult =
   | { ok: true; status: "rejected"; message: string }
@@ -137,7 +138,7 @@ async function decideReceiptInner(
       }
       return { ok: true, status: "rejected", message: "Отклонено. Клиентке не писали: чек уже просили недавно" };
     }
-    const rejectText = REJECT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    const rejectText = REJECT_TEXT[await contactLanguage(receipt.contactId, lastIn?.text ?? "")];
     // Запись в историю — даже если отправка не удалась (как и раньше): владелец
     // должен видеть в переписке, что отказ был. Для сайта sendToContact сам
     // кладёт строку и отдаёт mid с префиксом — recordOutgoingMessage не дублирует.

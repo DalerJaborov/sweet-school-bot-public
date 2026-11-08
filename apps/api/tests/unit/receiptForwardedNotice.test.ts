@@ -98,7 +98,7 @@ describe("Чек ушёл владельцу — клиентка не в тиш
     await handleReceiptVerdict(fresh, suspicious());
     expect(sendReceiptForReview).not.toHaveBeenCalled();
     expect(sendToContact).toHaveBeenCalledTimes(1);
-    expect(String(sendToContact.mock.calls[0][1])).toContain("не совсем понятно читается");
+    expect(String(sendToContact.mock.calls[0][1])).toContain("Чек плохо читается");
   });
 
   it("notifyCustomerReceiptForwarded из очереди перепроверки — та же атомарная отметка", async () => {

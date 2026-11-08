@@ -12,7 +12,8 @@ import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } f
 import { debounceMessage } from "./debounce.js";
 import { looksPersonal } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
-import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { rememberOwnerReply, type OwnerMedia } from "./ai/styleLearning.js";
 import { voiceToText } from "./ai/voiceToText.js";
 import { findOwnMedia, viewableUrl } from "./ownMedia.js";
@@ -350,9 +351,9 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 /** Фото пришло, но скачать не вышло даже с повтором — просим прислать ещё раз,
  *  вместо того чтобы отвечать так, будто ничего не было (см. лог выше). */
 const COULD_NOT_LOAD_PHOTO: Record<ClientLanguage, string> = {
-  ru: "Вижу, что вы что-то прислали, но фото не загрузилось 🙏 Пришлите, пожалуйста, ещё раз.",
-  tg: "Мебинам, ки чизе фиристодед, аммо расм бор нашуд 🙏 Лутфан бори дигар фиристед.",
-  en: "I can see you sent something, but the photo didn't load 🙏 Could you send it again?",
+  ru: "Вижу, что вы что-то прислали, но фото не загрузилось. Пришлите ещё раз",
+  tg: "Мебинам ки чизе фиристодед, аммо сурат кушода нашуд. Боз як бор фиристен",
+  en: "I can see you sent something, but the photo didn't load. Could you send it again?",
 };
 
 const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> = {
@@ -579,7 +580,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
-    const language = detectClientLanguage(lastIn?.text ?? "");
+    const language = await contactLanguage(contact.id, lastIn?.text ?? "");
     const text = COULD_NOT_LOAD_PHOTO[language];
     const mid = await sendToContact(contact, text);
     if (mid) await recordOutgoingMessage(contact.id, text, mid);

@@ -1,6 +1,6 @@
 import { deferGrantForChoice } from "../course/deliveryChoice.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
-import { detectClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { createOneTimeInviteLink } from "../telegram.js";
 import { rememberInviteLink } from "../groupAccess.js";
@@ -200,7 +200,7 @@ export async function grantCourses(
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
-    const language = detectClientLanguage(lastIn?.text ?? "");
+    const language = await contactLanguage(contact.id, lastIn?.text ?? "");
     const titles = pendingWeb.map((p) => COURSE_TITLE[p.course]).join(", ");
     const text =
       accessMessage({

@@ -3,6 +3,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
 import { rememberInviteLink } from "./groupAccess.js";
 import { chatIdFor, COURSE_TITLE, type Course } from "./courses.js";
@@ -32,18 +33,18 @@ const META_WINDOW_HOURS = 24;
 /** Ссылка перевыпущена и уже в тексте — просим просто нажать. Если перевыпустить
  *  не удалось (нет токена/chatId), запасной вариант без ссылки — как раньше. */
 const TEXT_TG_WITH_LINK =
-  "Дидам ки ҳанӯз ба гурӯҳ надаромадед. Мана линки нав, пахш кунед ва «Присоединиться»:\n";
+  "Дидам ки хануз ба группа надаромадед. Ана ссылкаи нав, пахш кунен ва «Присоединиться»:\n";
 const TEXT_RU_WITH_LINK =
   "Вижу, что вы ещё не зашли в группу. Вот новая ссылка, нажмите и «Присоединиться»:\n";
 const TEXT_TG_NO_LINK =
-  "Дидам ки ҳанӯз ба гурӯҳ надаромадед. Линкро пахш кунед ва «Присоединиться» — " +
-  "агар кор накунад, нависед, ман линки навро мефиристам";
+  "Дидам ки хануз ба группа надаромадед. Ссылкаро пахш кунен ва «Присоединиться». " +
+  "Агар кушода нашавад, нависен, ссылкаи нав мефиристам";
 const TEXT_RU_NO_LINK =
-  "Вижу, что вы ещё не зашли в группу. Нажмите на ссылку и «Присоединиться» — " +
-  "если не открывается, напишите, пришлю новую";
+  "Вижу, что вы ещё не зашли в группу. Нажмите на ссылку и «Присоединиться». " +
+  "Если не открывается, напишите, пришлю новую";
 /** Веб-режим: группы нет вовсе, человек просто не открыл свои уроки. */
 const TEXT_TG_WEB =
-  "Дидам ки ҳанӯз дарсҳоятонро накушодед. Мана линк, аз телефон пахш кунед:\n";
+  "Дидам ки хануз дарсхоятона накушодед. Ана ссылка, аз телефон кушоен:\n";
 const TEXT_RU_WEB = "Вижу, что вы ещё не открыли свои уроки. Вот ссылка, откройте с телефона:\n";
 
 /** Перевыпускает ссылку на каждый неотозванный купленный курс, куда человек ещё
@@ -157,7 +158,7 @@ async function sweep(): Promise<void> {
     if (windowOpen) {
       // Язык берём по последнему сообщению человека — писать по-русски той, кто
       // писала на таджикском, значит сразу выдать в себе робота.
-      const tajik = /[ҳҷқғӯӣ]|шумо|апа|курс(и|ро)/i.test(lastIn?.text ?? "");
+      const tajik = (await contactLanguage(contact.id, lastIn?.text ?? "")) === "tg";
       // В веб-режиме зовём открыть уроки, а не «войти в группу»: группы у
       // такой ученицы нет, и просьба присоединиться к ней сбивала бы с толку.
       const webOnly = contactMode === "web";

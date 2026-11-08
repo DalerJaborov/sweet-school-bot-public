@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
+import { humanizeForContact } from "./messaging/humanize.js";
+import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
 import {
   isBotFrozen,
   assertAutomationAllowed,
@@ -26,7 +28,8 @@ import { maybeSendVideos } from "./ai/videoLibrary.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
-import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { detectReplyLanguage, languageSignal, type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
 import { BUDGET_FALLBACK } from "./ai/prompts.js";
 import { buildSystemPrompt, getSalesTexts, getOfflineFacts } from "./services/salesTextsService.js";
@@ -259,7 +262,12 @@ export async function aiReply(
   }
   const primaryKey = apiKeys[0];
 
-  const language = detectClientLanguage(text);
+  // Голосовое WhatsApp приходит с пустым текстом, а «Салом» пишут на любом языке:
+  // язык — по единой цепочке (ai/contactLanguage.ts): сообщение → прошлые сообщения
+  // клиента → язык с сайта → русский. Проверка языка ответа включается только при
+  // явном сигнале в самом сообщении (ownLanguage).
+  const ownLanguage = languageSignal(text ?? "");
+  const language = ownLanguage ?? (await contactLanguage(contact.id));
 
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
@@ -364,7 +372,7 @@ export async function aiReply(
   // раздела «Тексты и цены» (services/salesTextsService.ts).
   const prompt =
     (await buildSystemPrompt()) +
-    (await buildStyleBlock(text)) +
+    (await buildStyleBlock(text, language)) +
     (await buildInsightsBlock()) +
     (await buildObjectionsBlock()) +
     (await buildSocialProofBlock()) +
@@ -487,7 +495,7 @@ export async function aiReply(
     // Отправка обёрнута нарочно: отказ Meta (закрылось окно 24 ч, 429) не должен
     // уносить с собой разбор чека, который ждёт ниже — он дороже ответа.
     let replyText = result.text
-      ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate)
+      ? await enforceReplyLanguage(contact, ownLanguage ? text : "", language, result.text, prompt, generate)
       : null;
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
@@ -513,7 +521,10 @@ export async function aiReply(
           replyText = null;
         }
       }
-      if (replyText) replyText = cleanAutomatedReply(replyText);
+      // Обращение «апачон» и дежурный хвост — до голоса и до текста: озвучке они
+      // так же чужие. Особые буквы и тире правит уже дверь отправки (humanizeForContact):
+      // голосу нужны буквы, тексту — по стилю собеседника.
+      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanAutomatedReply(replyText)));
       // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
       if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
         replyText = maybeWarmEmoji(replyText);
@@ -539,11 +550,14 @@ export async function aiReply(
           contact,
           replyText,
           attachments.some((a) => a.kind === "audio"),
+          text,
         );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         for (const part of toSend) {
+          // В историю sendToContact сам пишет ровно то, что увидел клиент (после фильтра);
+          // запись ниже с тем же mid ничего не меняет. Пусто после фильтра — не шлёт и не пишет.
           const mid = await sendToContact(contact, part);
-          await recordOutgoingMessage(contact.id, part, mid);
+          if (mid) await recordOutgoingMessage(contact.id, part, mid);
         }
         // Реалтайм-версия «где бот застрял» — см. stuckAlert.ts. Fire-and-forget,
         // как markStartedLearningIfReplied выше: сбой здесь не должен трогать
@@ -636,14 +650,14 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     return;
   }
 
-  const language = detectClientLanguage(text);
+  const language = await contactLanguage(contact.id, text);
   const verdict = guardOffTopic(text);
   if (verdict) {
     // «Пустите бесплатно» и назойливое дёрганье под роликом — молчим совсем.
     if (isSilentKind(verdict.kind)) return;
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
-    const guardedText = guardReply(verdict.kind, language);
+    const guardedText = await humanizeForContact(contact.id, guardReply(verdict.kind, language), [text]);
     await withContactMessaging(contact.id, "reply", () =>
       sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
     ).catch((err) => {
@@ -708,7 +722,8 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
     throw new ReplyPolicyError(issues);
   }
-  const clean = cleanAutomatedReply(result.text);
+  const clean = await humanizeForContact(contact.id, cleanAutomatedReply(result.text), [text]);
+  if (!clean) return;
   const mid = await withContactMessaging(contact.id, "reply", () =>
     sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
   );
