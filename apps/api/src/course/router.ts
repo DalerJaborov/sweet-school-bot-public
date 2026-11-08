@@ -15,7 +15,6 @@ import {
   pairDevice,
   issuePairToken,
   occupiedPhoneLabel,
-  ownerOfExpiredLink,
   type AccessResult,
 } from "./access.js";
 import { relinkBySiteToken } from "./recovery.js";

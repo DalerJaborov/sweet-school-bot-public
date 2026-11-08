@@ -1,5 +1,6 @@
 import { prisma, getSetting, logError, logInfo, logWarn } from "../db.js";
 import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "../courses.js";
+import { alertOwnerProblem, removeFromGroupChat } from "../groupExit.js";
 
 /**
  * ПРИГЛАШЕНИЯ В TELEGRAM-ГРУППЫ ИЗ ПАНЕЛИ (раздел «Ссылки», 08.11.2026).
@@ -53,6 +54,7 @@ export type InviteFailure =
   | "unavailable"
   | "not_found"
   | "save_failed"
+  | "protected"
   | "unknown";
 
 const RIGHTS_HINT =
@@ -69,6 +71,7 @@ export const FAILURE_TEXT: Record<InviteFailure, string> = {
   unavailable: "Telegram сейчас не отвечает. Попробуйте через минуту.",
   not_found: "Такой ссылки нет — обновите страницу.",
   save_failed: "Ссылку не удалось сохранить, поэтому она сразу отменена. Попробуйте ещё раз.",
+  protected: "Это администратор группы: бот администраторов не удаляет. Уберите человека вручную в самой группе.",
   unknown: "Telegram не дал сделать ссылку. Попробуйте ещё раз через минуту; если повторится — напишите разработчику.",
 };
 
@@ -270,19 +273,36 @@ export async function removeInviteJoiner(inviteId: string, joinId: string): Prom
   if (join.removedAt) return;
   const token = (await getSetting("telegramBotToken"))?.trim();
   if (!token) throw new InviteError("no_bot");
-  const userId = Number(join.telegramUserId);
-  const r = await botCall(token, "banChatMember", { chat_id: invite.chatId, user_id: userId });
-  if (!r.ok) {
-    const reason = classifyFailure(r);
-    reportFailure("links:telegramKick", reason, `${invite.groupKey}: ${r.description}`);
+  // Бан и разбан — единственной дверью groupExit.ts (проверка админа, повтор, тревога).
+  const exit = await removeFromGroupChat(token, invite.chatId, join.telegramUserId);
+  if (exit.state === "protected") throw new InviteError("protected");
+  if (exit.state === "ban_failed") {
+    const reason = classifyFailure({ description: exit.detail ?? "" });
+    reportFailure("links:telegramKick", reason, `${invite.groupKey}: ${exit.detail ?? ""}`);
     throw new InviteError(reason);
   }
-  await botCall(token, "unbanChatMember", { chat_id: invite.chatId, user_id: userId, only_if_banned: true });
+  if (exit.state === "unban_failed") {
+    await alertOwnerProblem(
+      `join:${joinId}`,
+      `Из группы удалён человек (Telegram ${join.telegramUserId}), но снять бан не вышло: вернуться он не сможет. Разбаньте его в группе вручную.`,
+    );
+  }
   await prisma.telegramInviteJoin.updateMany({
     where: { id: joinId, removedAt: null },
     data: { removedAt: new Date() },
   });
   logInfo("links:telegram", `удалён из группы вошедший по приглашению ${inviteId}`);
+}
+
+/** Человека удалили из группы чем-то кроме кнопки в «Ссылках» (переход на сайт, отзыв): отмечаем его входы по ссылкам этого чата. */
+export async function markJoinsRemoved(chatId: string, telegramUserId: string): Promise<void> {
+  const invites = await prisma.telegramInvite.findMany({ where: { chatId }, select: { id: true } });
+  const ids = (invites ?? []).map((i) => i.id);
+  if (ids.length === 0) return;
+  await prisma.telegramInviteJoin.updateMany({
+    where: { telegramUserId, removedAt: null, inviteId: { in: ids } },
+    data: { removedAt: new Date() },
+  });
 }
 
 export type InviteStatus = "active" | "used" | "expired" | "revoked";

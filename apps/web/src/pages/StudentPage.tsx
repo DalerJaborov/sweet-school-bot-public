@@ -61,7 +61,9 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
     if (!s) return;
     const ok = await confirmDialog({
       title: `Выдать новую ссылку ${s.contact.handle}?`,
-      message: "Прошлая ссылка с этой минуты перестанет работать — если она у кого-то чужого, это и нужно.",
+      message:
+        "Прошлая ссылка с этой минуты перестанет работать — если она у кого-то чужого, это и нужно. " +
+        "Если ученица учится через Telegram, её уберут из группы, а приглашение закроется: останется один способ входа — сайт.",
       confirmLabel: "Выдать",
     });
     if (!ok) return;

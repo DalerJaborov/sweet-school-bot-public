@@ -49,6 +49,30 @@ const TG_LINK = "https://t.me/+OLDINVITE";
 type Row = Record<string, unknown>;
 let contactRow: Row;
 let purchaseRows: Row[];
+/** Действующие покупки ДРУГИХ контактов с тем же Telegram (запрос removeContactFromGroups). */
+let otherPurchaseRows: Row[];
+
+type TgReply = unknown | ((body: Record<string, unknown>) => unknown);
+/** Подмена Telegram Bot API: по умолчанию человек — обычный участник, всё проходит. */
+function stubTelegram(over: Record<string, TgReply> = {}) {
+  const fetchMock = vi.fn(async (url: unknown, init?: { body?: string }) => {
+    const method = String(url).split("/").pop() ?? "";
+    const body = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
+    const given = over[method];
+    const reply =
+      given === undefined
+        ? method === "getChatMember"
+          ? { ok: true, result: { status: "member" } }
+          : { ok: true, result: true }
+        : typeof given === "function"
+          ? (given as (b: Record<string, unknown>) => unknown)(body)
+          : given;
+    return { json: async () => reply };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const calls = (method: string) => fetchMock.mock.calls.filter((c) => String(c[0]).endsWith(`/${method}`));
+  return { fetchMock, calls };
+}
 
 function baseContact(over: Row = {}): Row {
   return fakeContact({
@@ -106,9 +130,10 @@ function wireDb(db: PrismaMock) {
     Object.assign(contactRow, data);
     return { ...contactRow };
   });
-  db.model("purchase").findMany.mockImplementation(async ({ where }: { where: Row }) =>
-    purchaseRows.filter((p) => (where.revokedAt === null ? p.revokedAt === null : true)),
-  );
+  db.model("purchase").findMany.mockImplementation(async ({ where }: { where: Row }) => {
+    if (where.contact) return otherPurchaseRows;
+    return purchaseRows.filter((p) => (where.revokedAt === null ? p.revokedAt === null : true));
+  });
   db.model("purchase").updateMany.mockImplementation(async ({ data }: { data: Row }) => {
     for (const p of purchaseRows) if (!p.revokedAt) Object.assign(p, data);
     return { count: 1 };
@@ -117,6 +142,7 @@ function wireDb(db: PrismaMock) {
     Object.assign(purchaseRows.find((p) => p.id === where.id) ?? {}, data);
     return {};
   });
+  db.model("telegramInvite").findMany.mockResolvedValue([]);
   db.model("device").deleteMany.mockResolvedValue({ count: 2 });
   db.model("device").findMany.mockResolvedValue([{ id: "d-1", contactId: "c-1", userAgent: "Android" }, { id: "d-2", contactId: "c-1", userAgent: "Android" }]);
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
@@ -181,6 +207,7 @@ describe("одна действующая ссылка на человека", (
     revokeInviteLink.mockReset().mockResolvedValue(true);
     contactRow = baseContact();
     purchaseRows = [purchase()];
+    otherPurchaseRows = [];
     wireDb(db);
   });
   afterEach(() => {
@@ -337,37 +364,236 @@ describe("одна действующая ссылка на человека", (
     expect(contactRow.deviceSwaps).toBe(0);
   });
 
-  it("человек уже в группе и просит сайт: бот сам не выгоняет, владельцу карточка «убрать из группы»", async () => {
-    contactRow = baseContact({
+  const inGroupContact = (over: Row = {}) =>
+    baseContact({
       courseDeliveryChoice: "telegram",
       inviteLink: TG_LINK,
       joinedGroupAt: new Date(),
       telegramUserId: "777",
       accessTokenId: null,
       accessIssuedAt: null,
+      ...over,
     });
-    purchaseRows = [purchase({ inviteLink: TG_LINK, joinedAt: new Date() })];
-    const fetchMock = vi.fn(async (..._a: unknown[]) => ({ json: async () => ({ ok: true }) }));
-    vi.stubGlobal("fetch", fetchMock);
+  const inGroupPurchase = (over: Row = {}) => purchase({ inviteLink: TG_LINK, joinedAt: new Date(), ...over });
+  const banBody = (calls: (m: string) => unknown[][]) =>
+    JSON.parse(String((calls("banChatMember")[0][1] as { body: string }).body)) as Record<string, unknown>;
 
-    expect(await handleSwitchRequest(asContact(), "web", "ru")).toBe("in_group");
+  it("человек в группе просит сайт: бот СРАЗУ отзывает приглашение, удаляет из группы и выдаёт сайт; карточки владельцу нет", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram();
+
+    expect(await handleSwitchRequest(asContact(), "web", "ru")).toBe("switched");
+
+    expect(calls("getChatMember")).toHaveLength(1);
+    expect(calls("banChatMember")).toHaveLength(1);
+    expect(banBody(calls)).toEqual({ chat_id: "-100500", user_id: 777 });
+    expect(calls("unbanChatMember")).toHaveLength(1);
+    expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100500", TG_LINK);
+    expect(contactRow.courseDeliveryChoice).toBe("web");
+    expect(contactRow.joinedGroupAt).toBeNull();
+    expect(purchaseRows[0].joinedAt).toBeNull();
+    expect(String(sendText.mock.calls[0][1])).toContain("/l/");
+    // Журнал: кто, где, когда.
+    expect(db.model("accessEvent").create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ contactId: "c-1", action: "removed", actor: "bot" }),
+    });
+    const detail = String(db.model("accessEvent").create.mock.calls[0][0].data.detail);
+    expect(detail).toContain("777");
+    expect(detail).toContain("-100500");
+    // Всё прошло — хозяйке ничего не пишем.
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("кнопка владельца для человека в группе: то же самое, текст спокойный", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram();
+
+    expect(await approveSwitchByOwner("c-1", "web")).toBe(true);
+
+    expect(calls("banChatMember")).toHaveLength(1);
+    expect(String(sendText.mock.calls[0][1])).toContain("Теперь ваши уроки на сайте");
+    expect(String(sendText.mock.calls[0][1])).not.toContain("Ширин");
+  });
+
+  it("бан не прошёл (у бота нет прав): сайт выдан, человек в группе, хозяйка получает тревогу, отметки не сброшены", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram({ banChatMember: { ok: false, description: "Bad Request: not enough rights" } });
+
+    expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
+
+    expect(calls("banChatMember")).toHaveLength(2); // повтор
+    expect(calls("unbanChatMember")).toHaveLength(0);
+    expect(contactRow.joinedGroupAt).not.toBeNull();
+    expect(purchaseRows[0].joinedAt).not.toBeNull();
+    expect(db.model("accessEvent").create).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("убрать не удалось");
+  });
+
+  it("разбан не прошёл: повторяем три раза и зовём хозяйку (человек остался в чёрном списке)", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram({ unbanChatMember: { ok: false, description: "Bad Request: timeout" } });
+
+    await switchCourseChannel(asContact(), "web", "bot");
+
+    expect(calls("unbanChatMember")).toHaveLength(3);
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("снять бан не вышло");
+  });
+
+  it("Telegram-идентификатор пуст: из группы не удалено, хозяйка предупреждена честно, сайт всё равно выдан", async () => {
+    contactRow = inGroupContact({ telegramUserId: null });
+    purchaseRows = [inGroupPurchase()];
+    const { fetchMock } = stubTelegram();
+
+    expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
 
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Telegram-идентификатор неизвестен");
+    expect(contactRow.joinedGroupAt).not.toBeNull();
+  });
+
+  it("не в группе и идентификатора нет — тихо, без тревоги", async () => {
+    contactRow = baseContact({
+      courseDeliveryChoice: "telegram",
+      inviteLink: TG_LINK,
+      accessTokenId: null,
+      accessIssuedAt: null,
+    });
+    purchaseRows = [purchase({ inviteLink: TG_LINK })];
+    stubTelegram();
+
+    expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("администратор или создатель группы не удаляется: бан не вызывается, хозяйка видит причину", async () => {
+    for (const status of ["administrator", "creator"]) {
+      sendTelegramMessage.mockClear();
+      contactRow = inGroupContact();
+      purchaseRows = [inGroupPurchase()];
+      const { calls } = stubTelegram({ getChatMember: { ok: true, result: { status } } });
+
+      expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
+
+      expect(calls("banChatMember"), status).toHaveLength(0);
+      expect(String(sendTelegramMessage.mock.calls[0][2]), status).toContain("администратор группы");
+      expect(contactRow.joinedGroupAt, status).not.toBeNull();
+    }
+  });
+
+  it("не удалось узнать, кто это (getChatMember упал): вслепую не баним", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram({ getChatMember: { ok: false, description: "Too Many Requests" } });
+
+    await switchCourseChannel(asContact(), "web", "bot");
+
+    expect(calls("banChatMember")).toHaveLength(0);
+    expect(sendTelegramMessage).toHaveBeenCalled();
+  });
+
+  it("человек уже вышел сам (left): не баним, отметки сбрасываем", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram({ getChatMember: { ok: true, result: { status: "left" } } });
+
+    await switchCourseChannel(asContact(), "web", "bot");
+
+    expect(calls("banChatMember")).toHaveLength(0);
+    expect(contactRow.joinedGroupAt).toBeNull();
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("два контакта одного человека: у второго есть действующая покупка на тот же курс — из этой группы не удаляем", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    otherPurchaseRows = [{ course: "COURSE50" }];
+    const { calls } = stubTelegram();
+
+    expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
+
+    expect(calls("banChatMember")).toHaveLength(0);
+    expect(revokeInviteLink).toHaveBeenCalled(); // приглашение этого контакта всё равно отозвано
+  });
+
+  it("банит только в группе купленного курса, не во всех; приглашение отзывается только там", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase({ course: "COURSE70" })];
+    const courses = await import("../../src/courses.js");
+    vi.mocked(courses.chatIdFor).mockImplementation(async (c: unknown) => (c === "COURSE70" ? "-100700" : "-100500"));
+    const { calls } = stubTelegram();
+
+    await switchCourseChannel(asContact(), "web", "bot");
+
+    expect(calls("banChatMember")).toHaveLength(1);
+    expect(banBody(calls).chat_id).toBe("-100700");
+    expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100700", TG_LINK);
+    expect(revokeInviteLink).not.toHaveBeenCalledWith("token", "-100500", TG_LINK);
+    vi.mocked(courses.chatIdFor).mockImplementation(async () => "-100500");
+  });
+
+  it("/ссылка владельца для человека в группе: приглашение отозвано, из группы удалён, выбор «сайт»", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { calls } = stubTelegram();
+
+    const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
+    expect(await closeTelegramDoor("c-1")).toBe(true);
+
+    expect(calls("banChatMember")).toHaveLength(1);
+    expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100500", TG_LINK);
+    expect(contactRow.courseDeliveryChoice).toBe("web");
+    expect(contactRow.inviteLink).toBeNull();
+    expect(db.model("accessEvent").create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: "removed", actor: "owner" }),
+    });
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("у человека на сайте и без группы closeTelegramDoor ничего не делает", async () => {
+    stubTelegram();
+    const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
+    expect(await closeTelegramDoor("c-1")).toBe(false);
     expect(revokeInviteLink).not.toHaveBeenCalled();
-    expect(contactRow.courseDeliveryChoice).toBe("telegram");
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("уже в группе");
+  });
+
+  it("подтверждение «перевести?» не обещает «пришлю сразу», когда просьба уйдёт Ширин (лимит), и без цифр", async () => {
+    contactRow = inGroupContact({ deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * DAY) });
+    purchaseRows = [inGroupPurchase()];
+    db.model("receiptCheck").count.mockResolvedValue(1);
+
+    await maybeRestoreAccess(asContact(), "у меня нет телеграма, хочу на сайте");
+
+    const text = String(sendText.mock.calls[0][1]);
+    expect(text).toContain("разрешения Ширин");
+    expect(text).not.toContain("сразу");
+    expect(text).not.toMatch(/\d/);
+  });
+
+  it("подтверждение для прямого перевода говорит, что место в группе закроется", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase({ firstOpenedAt: null })];
+    db.model("receiptCheck").count.mockResolvedValue(1);
+
+    await maybeRestoreAccess(asContact(), "у меня нет телеграма, хочу на сайте");
+
+    const text = String(sendText.mock.calls[0][1]);
+    expect(text).toContain("место в группе закроется");
+    expect(text).toContain("пришлю сразу");
+  });
+
+  it("лимит: владельцу карточка, подпись кнопки по joinedGroupAt", async () => {
+    contactRow = inGroupContact({ deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * DAY) });
+    purchaseRows = [inGroupPurchase()];
+    stubTelegram();
+
+    expect(await handleSwitchRequest(asContact(), "web", "ru")).toBe("limit");
+
     expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("Перевести на сайт и убрать из группы");
     expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("mn:sw:c-1:w");
-
-    // Кнопка владельца: приглашение отозвано, человек убран из группы (бан и снятие бана), сайт выдан.
-    sendText.mockClear();
-    expect(await approveSwitchByOwner("c-1", "web")).toBe(true);
-    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-    expect(urls.some((u) => u.endsWith("/banChatMember"))).toBe(true);
-    expect(urls.some((u) => u.endsWith("/unbanChatMember"))).toBe(true);
-    expect(revokeInviteLink).toHaveBeenCalled();
-    expect(contactRow.courseDeliveryChoice).toBe("web");
-    expect(String(sendText.mock.calls[0][1])).toContain("Ширин разрешила перевод на сайт");
   });
 
   it("кнопка владельца снимает месячный лимит, но не оживляет отозванную покупку", async () => {
