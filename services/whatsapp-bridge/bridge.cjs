@@ -7,7 +7,18 @@ const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_EVENT_BYTES = 64 * 1024 * 1024;
 const MAX_PENDING = 100;
 const REPLY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const idOf = value => typeof value === 'string' ? value : value?._serialized;
+const idOf = value => {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return undefined;
+  if (typeof value._serialized === 'string' && value._serialized) return value._serialized;
+  // WhatsApp Web 2.3000.x minifier renamed `_serialized` to `$1` (wwebjs PR #201910, not released upstream).
+  if (typeof value.$1 === 'string' && value.$1) return value.$1;
+  // whatsapp-web.js >= 1.34 may deliver a bare MessageId {fromMe, remote, id} without _serialized.
+  const remote = idOf(value.remote);
+  if (typeof value.id === 'string' && remote) return `${value.fromMe ? 'true' : 'false'}_${remote}_${value.id}`;
+  if (typeof value.user === 'string' && typeof value.server === 'string') return `${value.user}@${value.server}`;
+  return undefined;
+};
 const directId = id => typeof id === 'string' && /^\d{7,20}@(c\.us|lid)$/.test(id);
 const failure = (message, status = 409) => Object.assign(new Error(message), { status });
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -99,6 +110,22 @@ class Bridge {
 
   report(error) {
     this.lastError = String(error?.message || error).slice(0, 180);
+    console.error('[wa-error]', String(error?.stack || error?.message || error).slice(0, 600));
+  }
+
+  /** Та же ошибка (по ключу) пишется в лог один раз за жизнь процесса и не трогает lastError: косметика, не сбой отправки. */
+  reportOnce(key, error) {
+    (this.reportedOnce ||= new Set());
+    if (this.reportedOnce.has(key)) return;
+    this.reportedOnce.add(key);
+    console.error('[wa-error]', key, String(error?.stack || error?.message || error).slice(0, 600));
+  }
+
+  /** «Печатает…» / «записывает голосовое…» / стоп — напрямую по строковому chatId (см. pace). */
+  chatState(chatId, state) {
+    const page = this.client?.pupPage;
+    if (!page) return Promise.resolve(false);
+    return page.evaluate((chatId, state) => { window.WWebJS.sendChatstate(state, chatId); return true; }, chatId, state);
   }
 
   /**
@@ -278,15 +305,63 @@ class Bridge {
     } catch { /* диагностика не должна ломать приём */ }
   }
 
+  /** whatsapp-web.js reads `this.id._serialized` inside downloadMedia/reload; restore it when WhatsApp Web only gave `$1`. */
+  normalizeId(message) {
+    const id = message?.id;
+    if (id && typeof id === 'object' && !id._serialized) {
+      const serialized = idOf(id);
+      if (serialized) try { id._serialized = serialized; } catch { /* frozen */ }
+    }
+  }
+
+  /**
+   * Копия Message.downloadMedia() из whatsapp-web.js 1.34.7 с одной правкой: WhatsApp Web 2.3000.105x
+   * требует `mimetype` в downloadAndMaybeDecrypt, иначе бросает минифицированное `t: t` (wwebjs issue #201908,
+   * PR #201914 не выпущен). Убрать, когда библиотека выйдет с этим исправлением.
+   */
+  async downloadMediaCompat(message) {
+    if (!message.hasMedia) return undefined;
+    const msgId = idOf(message.id);
+    if (!msgId) throw failure('Message has no id for media download');
+    const result = await this.client.pupPage.evaluate(async (msgId) => {
+      const collections = window.require('WAWebCollections');
+      const msg = collections.Msg.get(msgId) || (await collections.Msg.getMessagesById([msgId]))?.messages?.[0];
+      if (!msg || !msg.mediaData || msg.mediaData.mediaStage === 'REUPLOADING') return null;
+      if (msg.mediaData.mediaStage != 'RESOLVED') await msg.downloadMedia({ downloadEvenIfExpensive: true, rmrReason: 1 });
+      if (msg.mediaData.mediaStage.includes('ERROR') || msg.mediaData.mediaStage === 'FETCHING') return undefined;
+      try {
+        const mockQpl = { addAnnotations() { return this; }, addPoint() { return this; } };
+        const decryptedMedia = await window.require('WAWebDownloadManager').downloadManager.downloadAndMaybeDecrypt({
+          directPath: msg.directPath, encFilehash: msg.encFilehash, filehash: msg.filehash,
+          mediaKey: msg.mediaKey, mediaKeyTimestamp: msg.mediaKeyTimestamp, type: msg.type,
+          mimetype: msg.mimetype,
+          signal: new AbortController().signal, downloadQpl: mockQpl,
+        });
+        const data = await window.WWebJS.arrayBufferToBase64Async(decryptedMedia);
+        return { data, mimetype: msg.mimetype, filename: msg.filename, filesize: msg.size };
+      } catch (e) {
+        if (e && e.status === 404) return undefined;
+        throw new Error('downloadAndMaybeDecrypt failed: ' + String(e && (e.message || e.name || e)) + ' stage=' + msg.mediaData.mediaStage + ' mime=' + msg.mimetype);
+      }
+    }, msgId);
+    return result || undefined;
+  }
+
   async onMessage(message) {
+    this.normalizeId(message);
     const accountId = this.accountId;
     const messageId = idOf(message.id);
     const chatId = message.fromMe ? message.to : message.from;
+    if (message.fromMe && messageId) {
+      // Own send whose library promise returned no model: adopt its echo as the message id.
+      const waiter = (this.echoWaiters ||= new Map()).get(chatId);
+      if (waiter && waiter.matches(message)) waiter.resolve(messageId);
+    }
     const timestamp = Number(message.timestamp) * 1000;
     if (!messageId || !directId(chatId) || !Number.isFinite(timestamp)
       || timestamp < Math.floor(this.liveSince / 1000) * 1000 || timestamp > this.now() + 60_000
       || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) {
-      this.trace(`drop:early noId=${!messageId} badChat=${!directId(chatId)} badTs=${!Number.isFinite(timestamp)} old=${timestamp < Math.floor(this.liveSince / 1000) * 1000} future=${timestamp > this.now() + 60_000} contacts=${!this.contactsReady} noAccount=${!this.accountId} chatLen=${String(chatId).replace(/@.*$/, '').length} chatSuffix=${String(chatId).replace(/^[^@]*/, '')}`, message);
+      this.trace(`drop:early idShape=${message.id && typeof message.id === 'object' ? Object.keys(message.id).join(',') : typeof message.id} noId=${!messageId} badChat=${!directId(chatId)} badTs=${!Number.isFinite(timestamp)} old=${timestamp < Math.floor(this.liveSince / 1000) * 1000} future=${timestamp > this.now() + 60_000} contacts=${!this.contactsReady} noAccount=${!this.accountId} chatLen=${String(chatId).replace(/@.*$/, '').length} chatSuffix=${String(chatId).replace(/^[^@]*/, '')}`, message);
       return;
     }
     if (message.fromMe) {
@@ -322,15 +397,15 @@ class Bridge {
         event.mediaUnavailable = 'size_unverified_or_too_large';
       } else if (['image', 'audio', 'ptt'].includes(message.type)) {
         try {
-          const media = await message.downloadMedia();
+          const media = await this.downloadMediaCompat(message);
           const bytes = media?.data ? Buffer.byteLength(media.data, 'base64') : 0;
-          if (bytes > 0 && bytes <= MAX_MEDIA_BYTES && /^(image\/(jpeg|png|webp)|audio\/[a-z0-9.+-]+)$/i.test(media.mimetype)) {
-            event.media = { data: media.data, mimeType: media.mimetype, filename: media.filename || undefined };
+          if (bytes > 0 && bytes <= MAX_MEDIA_BYTES && /^(image\/(jpeg|png|webp)|audio\/[a-z0-9.+-]+)$/i.test(String(media.mimetype || "").split(";")[0].trim())) { // voice notes: audio/ogg; codecs=opus
+            event.media = { data: media.data, mimeType: String(media.mimetype).split(';')[0].trim().toLowerCase(), filename: media.filename || undefined };
             if (Buffer.byteLength(JSON.stringify(Object.values(account.events).filter(item => !item.ackedAt))) > MAX_EVENT_BYTES) {
               delete event.media; event.mediaUnavailable = 'queue_media_capacity';
             }
-          } else event.mediaUnavailable = 'unsupported_or_too_large';
-        } catch { event.mediaUnavailable = 'download_failed'; }
+          } else { event.mediaUnavailable = 'unsupported_or_too_large'; this.report(new Error('media rejected: bytes=' + bytes + ' mime=' + (media && media.mimetype))); }
+        } catch (error) { event.mediaUnavailable = 'download_failed'; this.report(error); }
       } else event.mediaUnavailable = 'unsupported';
     }
     if (this.accountId !== accountId) return;
@@ -409,12 +484,27 @@ class Bridge {
       let settle;
       const ownSend = new Promise(resolve => { settle = resolve; });
       this.sending.set(chatId, ownSend);
+      const echo = (() => {
+        let resolve, timer; const promise = new Promise((res, rej) => { resolve = res; timer = setTimeout(() => rej(failure('No echo for own send')), 25_000); });
+        const matches = m => mediaUrl ? Boolean(m.hasMedia) : (typeof m.body === 'string' && m.body === content);
+        const waiter = { matches, resolve: id => { clearTimeout(timer); resolve(id); } };
+        (this.echoWaiters ||= new Map()).set(chatId, waiter);
+        promise.finally(() => { if (this.echoWaiters.get(chatId) === waiter) this.echoWaiters.delete(chatId); }).catch(() => {});
+        return { promise };
+      })();
       try {
         // Audio goes out as a real voice note (ptt, waveform bubble), never as a file; voice notes carry no caption.
         const isVoice = Boolean(mediaUrl) && mediaType === 'audio';
-        const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text && !isVoice ? { caption: text } : {}), ...(isVoice ? { sendAudioAsVoice: true } : {}), sendSeen: false });
-        const messageId = idOf(sent?.id);
-        if (!messageId) throw failure('Transport returned no message ID');
+        // WA Web 2.3000.x: the library may return undefined OR throw a store error ("Data passed to getter must include an id property")
+        // after the message has already left. In both cases the own-message echo is the proof of delivery.
+        let sent, sendError;
+        try {
+          sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text && !isVoice ? { caption: text } : {}), ...(isVoice ? { sendAudioAsVoice: true } : {}), sendSeen: false });
+        } catch (error) { sendError = error; }
+        let messageId = idOf(sent?.id);
+        if (!messageId) messageId = await echo.promise.catch(() => undefined);
+        if (!messageId && sendError) throw sendError;
+        if (!messageId) throw failure(`Transport returned no message ID (sent=${sent ? typeof sent : 'undefined'} id=${sent?.id && typeof sent.id === 'object' ? JSON.stringify(sent.id).slice(0, 200) : typeof sent?.id})`);
         op.status = 'sent'; op.messageId = messageId;
         if (this.pacing) { (account.sendLog ||= []).push({ t: this.now(), chatId }); }
         this.save();
@@ -483,14 +573,14 @@ class Bridge {
       const typingMs = voice
         ? p.recordMinMs + this.random() * (p.recordMaxMs - p.recordMinMs)
         : Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
-      try {
-        const chat = await this.client.getChatById?.(chatId);
-        // Прочитала → набирает (или записывает голосовое): так делает человек (owner 08.11.2026). Только когда мы отвечаем.
-        if (seen) { try { await chat?.sendSeen?.(); } catch { /* отметка прочтения не должна ломать «печатает» */ } }
-        await (voice ? chat?.sendStateRecording?.() : chat?.sendStateTyping?.());
-        await this.sleep(typingMs);
-        await chat?.clearState?.();
-      } catch { /* typing is cosmetic; never block or fail a send because of it */ }
+      // Прочитала → набирает (или записывает голосовое): так делает человек (owner 08.11.2026). Только когда мы отвечаем.
+      // WA Web 2.3000.105x: Chat.sendSeen()/sendStateTyping() читают chat.id._serialized, которого больше нет ($1) —
+      // поэтому зовём низкоуровневые функции по строковому chatId и не прячем ошибки: каждая — один раз в лог.
+      // Пауза «печатает» идёт ВСЕГДА, даже если индикатор не удалось показать: иначе бот отвечает мгновенно.
+      if (seen) { try { await this.client.sendSeen(chatId); } catch (error) { this.reportOnce('pace:seen', error); } }
+      try { await this.chatState(chatId, voice ? 'recording' : 'typing'); } catch (error) { this.reportOnce('pace:typing', error); }
+      await this.sleep(typingMs);
+      try { await this.chatState(chatId, 'stop'); } catch { /* cosmetic */ }
       this.lastSendAt = this.now();
     });
     this.paceChain = run;
