@@ -1,0 +1,44 @@
+# Media library and Shirin's voice (08.11.2026)
+
+- Panel -> "Медиа на повтор": upload photo / mp4 / PDF / voice (<= 8 MB, the WhatsApp bridge cap), caption and match keywords.
+  Stored as `StyleExample` with `source = LIBRARY`; the bot picks approved items through `ai/mediaReuse.ts`.
+- WhatsApp bridge sends `audio` as a real voice note (`sendAudioAsVoice`), shows "recording audio..." instead of "typing...", no caption on voice.
+- ElevenLabs (`ai/voiceClone.ts`): off by default. Needs `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` (optional `ELEVENLABS_MODEL`)
+  in the server `.env` AND setting `voiceCloneEnabled = true`. Synthesised files land in the library UNAPPROVED: a human listens and approves.
+  The voice owner gave consent on 2026-11-08 (see the consent record below).
+- Not verified yet: mp3 -> ptt conversion in whatsapp-web.js and Tajik quality of `eleven_multilingual_v2`; test on the owner's number only.
+
+## Update 2026-11-08 (after architect review)
+- Voice is re-encoded to ogg/opus via ffmpeg (`ai/audioConvert.ts`) for uploads and ElevenLabs output; no ffmpeg -> original file kept.
+- TTS cache on disk by hash(normalised text + voice + model + settings): the same text is never paid for twice.
+- Monthly cap (`voiceMonthlyCapUsd`, default $20) and price (`voicePricePer1kUsd`, default 0.08 - the owner's figure, NOT verified on ElevenLabs' site). Owner-only alert at 80% and at the cap.
+- Settings keys `voiceCloneEnabled`, `voiceMonthlyCapUsd`, `voicePricePer1kUsd` are now in SETTING_KEYS.
+- LIBRARY rows are excluded from style-learning examples. Bridge rejects audio + text in one send.
+- Voice-vs-text rule: see the section below (implemented, OFF by default).
+- Open: model/language measurement (Tajik, accent) needs an API key available locally; the key lives on the server only. Clone consent: consent was relayed through the project owner; ask the voice owner to confirm from her own account.
+
+## Voice-or-text rule (ai/voiceReply.ts), switch `voiceReplyEnabled` OFF by default
+Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 after the client's own voice note). Always text: links, any numbers/prices/money words, card/requisites, multi-line, long. Never two voice replies in a row (previous OUT message starts with the microphone mark). Any synthesis error (cap, network) falls back to text. Needs ElevenLabs key + `voiceCloneEnabled=true` too.
+
+## Voice consent record
+- Date: 2026-11-08. Person: the voice owner (identity is kept by the project owner, not in this repo).
+- Wording (name omitted here on purpose): "I give my consent for my voice to be used for my bot."
+- How received: written in the project owner's chat, not from her own Telegram account. Ask her to repeat it from her own account when convenient.
+- Scope: only her speech is used as samples; samples and generated audio are never published; no audio stored in git.
+
+## Revoking the voice (any time, on her request)
+1. Set `voiceReplyEnabled` and `voiceCloneEnabled` to `false` in the panel settings (the bot stops using the voice at once).
+2. In ElevenLabs delete the cloned voice (Voices -> the voice -> Delete) and remove `ELEVENLABS_VOICE_ID` from the server `.env`.
+3. Delete cached synthesis on the server: files `tts-*.ogg` / `tts-*.mp3` in `/data/uploads`, and library rows with `audio` that came from synthesis (panel "Медиа на повтор" -> delete).
+4. Delete her original sample files wherever they were kept (not in git).
+
+Revocation also: purge the /media cache at the CDN (files are served `immutable` for a year) and delete approved library audio rows (the reuse path does not check `voiceCloneEnabled`).
+
+## Chunked, humanised voice (08.11.2026)
+- A voice reply is split on sentence boundaries into chunks of <= 150 chars (~9 s each), max 4 chunks (more -> text; in practice 2-3 because the voice rule caps text at 160/240 chars). Chunks are synthesised in parallel, each cached by its own hash, then sent one by one; the bridge keeps its 4-9 s anti-ban gap and shows "recording audio".
+- Post-processing (ffmpeg, `HUMANIZE_FILTER`): high/low-pass like a phone mic, light compression, very quiet pink-noise room tone. Bump `VOICE_POST` in `voiceClone.ts` when changing it (invalidates cache).
+- Default model `eleven_v4_turbo` (set `ELEVENLABS_MODEL` to change). v4 vs v4 Turbo emotional range: NO DATA in docs - judge by ear.
+- Not done: real laugh/breath clips from Shirin's recordings spliced between chunks; v3 audio tags ([laughs]) for emotion.
+
+## Final voice settings (owner-approved by ear, 2026-11-08)
+`eleven_v3`, stability 0.5, similarity 0.95, style 0.4, speed 1.2 (+ tempo 1.0833 in ffmpeg = 1.30), fixed seed 4242, exactly one emotion tag at the start of the first chunk ([happy] or [curious]); no noise, no EQ, only loudness normalisation and re-encode to ogg/opus. Several tags / a tag mid-sentence / long dry informational text / strong denoise made it sound robotic or like another voice. Voice clone in use: instant clone made from the owner-supplied voice notes (voice id is set in the server .env, not in git).

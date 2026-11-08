@@ -195,9 +195,9 @@ courseRouter.get(`${API_BASE}/app.webmanifest`, async (req: Request, res: Respon
       theme_color: "#C9376B",
       background_color: "#FFFFFF",
       icons: [
-        { src: "/icons/icon-192.png?v=20261108-brand", sizes: "192x192", type: "image/png" },
-        { src: "/icons/icon-512.png?v=20261108-brand", sizes: "512x512", type: "image/png" },
-        { src: "/icons/icon-512-maskable.png?v=20261108-brand", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        { src: "/icons/icon-192.png?v=20261109-logo", sizes: "192x192", type: "image/png" },
+        { src: "/icons/icon-512.png?v=20261109-logo", sizes: "512x512", type: "image/png" },
+        { src: "/icons/icon-512-maskable.png?v=20261109-logo", sizes: "512x512", type: "image/png", purpose: "maskable" },
       ],
     });
 });

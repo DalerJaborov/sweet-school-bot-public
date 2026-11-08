@@ -23,6 +23,9 @@ services:
       IG_PROXY_BASE: ${IG_PROXY_BASE:-}
       IG_PROXY_KEY: ${IG_PROXY_KEY:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
+      ELEVENLABS_MODEL: ${ELEVENLABS_MODEL:-eleven_v3}
       SCHOOL_WHATSAPP_URL: ${SCHOOL_WHATSAPP_URL:-}
       SCHOOL_WHATSAPP_TOKEN: ${SCHOOL_WHATSAPP_TOKEN:-}
       # Временные файлы перекодировки — на том же томе, что и данные. /tmp
@@ -47,6 +50,8 @@ services:
     environment:
       SCHOOL_WHATSAPP_TOKEN: ${SCHOOL_WHATSAPP_TOKEN:-}
       SCHOOL_WHATSAPP_MEDIA_HOSTS: ${SCHOOL_WHATSAPP_MEDIA_HOSTS:-shirinsweets.online}
+      # Номера владельца для проверки бота: бот отвечает им, даже если они сохранены в телефоне Ширин (через запятую, цифры).
+      SCHOOL_WHATSAPP_TEST_NUMBERS: ${SCHOOL_WHATSAPP_TEST_NUMBERS:-}
     volumes:
       - whatsapp-data:/data
     expose:

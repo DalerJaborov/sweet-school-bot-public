@@ -72,6 +72,6 @@ export async function sendReusedMedia(contact: Contact, example: StyleExample): 
     const mid = await sendToContact(contact, caption);
     await recordOutgoingMessage(contact.id, caption, mid);
   }
-  const type = example.mediaType === "video" ? "video" : example.mediaType === "audio" ? "audio" : "image";
+  const type = example.mediaType === "video" ? "video" : example.mediaType === "audio" ? "audio" : example.mediaType === "file" ? "file" : "image";
   await sendAttachmentToContact(contact, example.mediaUrl as string, type);
 }

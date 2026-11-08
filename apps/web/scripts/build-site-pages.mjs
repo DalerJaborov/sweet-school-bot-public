@@ -220,7 +220,7 @@ function mediaImg(entry, alt, opts = {}) {
 /** Абсолютный URL картинки превью ссылки: своя на страницу+язык, иначе общая. */
 function ogImage(site, page, lang, media) {
   const own = media?.ogPages?.[page.slug]?.[lang];
-  return { url: site.origin + (own ?? site.ogImage) + "?v=20261108-brand", custom: Boolean(own) };
+  return { url: site.origin + (own ?? site.ogImage) + "?v=20261109-logo", custom: Boolean(own) };
 }
 
 // ---------- шапка / подвал ----------
@@ -248,8 +248,7 @@ function renderHeader(site, page, lang, ctx) {
 <header class="site-header">
   <div class="wrap">
     <a class="logo" href="${home}" aria-label="${esc(site.brand)} — ${esc(ui.home)}">
-      <span class="logo-mark" aria-hidden="true">S</span>
-      <span>${esc(site.brand)}<small>${esc(ui.tagline)}</small></span>
+      <span class="logo-word" aria-hidden="true"></span>
     </a>
     <nav class="site-nav" aria-label="${esc(ui.menu)}">${navLinks()}</nav>
     <div class="header-tools">
@@ -282,6 +281,7 @@ function renderFooter(site, lang, ctx) {
 <footer class="site-footer">
   <div class="wrap">
     <div>
+      <img class="footer-logo" src="/img/brand/shirin-logo.svg?v=20261109-logo" width="112" height="112" alt="Shirin — сладкий мир" loading="lazy" decoding="async" />
       <p><strong>${esc(site.brand)}</strong> · ${esc(ui.tagline)}</p>
       <p style="margin-top:8px;max-width:60ch">${esc(ui.footerAbout)}</p>
       <p class="footer-phone"><a href="tel:${esc(site.contacts.phone)}">${esc(site.contacts.phoneDisplay)}</a></p>
@@ -345,12 +345,12 @@ function moreLink(s, lang) {
 // зашиты здесь же, рядом с остальной вёрсткой шаблона, тем же способом, что
 // и другие мелкие UI-подписи (см. notFound* выше). Первый бейдж берёт число
 // из site.stats («выпускниц»), чтобы не дублировать цифру руками.
-function trustRow(site, lang) {
+function trustRow(site, lang, { phone = true } = {}) {
   const grads = site.stats.find((s) => /выпускниц|хатм/i.test(s.ru + s.tg));
   const items = [
     grads ? { icon: "⭐", text: { ru: `${grads.n} ${L(grads, "ru")}`, tg: `${grads.n} ${L(grads, "tg")}` } } : null,
     { icon: "🏅", text: { ru: "сертификат", tg: "сертификат" } },
-    { icon: "📱", text: { ru: "с телефона", tg: "аз телефон" } },
+    phone ? { icon: "📱", text: { ru: "с телефона", tg: "аз телефон" } } : null,
   ].filter(Boolean);
   return `<ul class="trust-row">${items
     .map((it) => `<li><span aria-hidden="true">${contentIcon(it.icon)}</span>${esc(L(it.text, lang))}</li>`)
@@ -369,6 +369,12 @@ function heroMedia(media, page) {
   return (media?.desserts && Object.values(media.desserts)[0]) || null;
 }
 
+
+/** Фото для быстрой смены в герое (после основного LCP-кадра): только реальные десерты школы, крупные. */
+const HERO_SLIDE_NAMES = ["Клубника в шоколаде", "Пирожное «Рафаэлло»", "Шоколадный торт", "Пирожное «Шу»"];
+function heroExtraSlides(media, first) {
+  return HERO_SLIDE_NAMES.map((n) => media?.desserts?.[n]).filter((e) => e?.src && e.src !== first?.src);
+}
 
 // Shared outline vocabulary for decorative content; source copy remains intact.
 function contentIcon(symbol) {
@@ -392,22 +398,34 @@ const SECTIONS = {
     // первая запись media.desserts. Без media.json просто нет .hero-photo —
     // раскладка герой-карточки (grid) одинаково работает и с фото, и без него.
     const heroEntry = s.compact ? null : heroMedia(media, page);
+    // Слайдшоу: первый кадр — LCP (eager, прелоад); остальные lazy и кроссфейдятся чистым CSS
+    // (без JS, без сдвига раскладки: слот имеет фиксированное соотношение сторон).
+    const extras = heroEntry && !s.video ? heroExtraSlides(media, heroEntry) : [];
+    // Фоновое видео-петля (s.video): поверх постера в том же слоте 4:5. Без JS и до
+    // первого кадра видео прозрачно — виден постер; JS (main.tsx) включает видео
+    // классом is-playing и убирает его при «меньше анимации» и экономии трафика.
+    const video = heroEntry && s.video
+      ? `<video class="hero-video" src="${esc(s.video)}" autoplay muted loop playsinline preload="metadata" disablepictureinpicture aria-hidden="true" tabindex="-1" data-hero-video></video>`
+      : "";
     const photo = heroEntry
-      ? `<div class="hero-photo">${mediaImg(
+      ? `<div class="hero-photo${extras.length ? " hero-slides" : ""}${video ? " has-video" : ""}" ${extras.length ? `data-slides="${extras.length + 1}" style="--slides:${extras.length + 1}"` : ""}>${video}${mediaImg(
           heroEntry,
           L(heroEntry.alt, lang) || L(page.h1, lang),
           {
             eager: true,
             sizes: HERO_SIZES,
+            cls: extras.length ? "hero-slide" : "",
           },
-        )}</div>`
+        )}${extras
+          .map((e, i) => `<span class="hero-slide-wrap" style="--i:${i + 1}" aria-hidden="true">${mediaImg(e, "", { sizes: HERO_SIZES, cls: "hero-slide" })}</span>`)
+          .join("")}</div>`
       : "";
     return `<section class="hero${s.compact ? " hero-compact" : ""}"><div class="wrap"><div class="hero-grid${photo ? " has-photo" : ""}"><div class="hero-card">
 
       <h1 class="h1">${esc(L(page.h1, lang))}</h1>
       <p class="lead">${esc(L(s.lead, lang))}</p>
       <div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>
-      ${trustRow(site, lang)}
+      ${trustRow(site, lang, { phone: page.slug !== "kursy-konditera-dushanbe" })}
     </div>${photo}</div>${s.stats ? statsList(site, lang) : ""}</div></section>${!page.slug || page.slug === "online-kurs" ? '<div class="wrap" id="free-lesson-island"></div>' : ""}`;
   },
 
@@ -493,7 +511,21 @@ const SECTIONS = {
     // mode:"list" (страница онлайн-курса) — вся карусель видна сразу, без
     // сворачивания: там это единственный список программы на странице.
     if (s.mode !== "accordion") {
-      const body = `<div class="dessert-scroll">${desserts.map(card).join("")}</div>`;
+      // Все десерты сеткой сразу (без горизонтальной прокрутки, где на телефоне видно 2 из 21).
+      // Названия десертов не переводим: и в таджикской версии — русские, как в самом курсе.
+      // Реальное фото берём из media.desserts, затем из фото уроков (lessonSamples); нет фото —
+      // плитка с названием, пустых серых квадратов нет.
+      const lessonPhoto = (ru) => (media?.lessonSamples ?? []).find((x) => x.title?.ru === ru)?.image;
+      const tile = (d) => {
+        const ru = d.ru ?? L(d, "ru");
+        const entry = photos?.[ru] ?? media?.artLessons?.[ru] ?? lessonPhoto(ru);
+        const img = entry ? mediaImg(entry, ru, { sizes: "(min-width: 720px) 180px, 31vw" }) : "";
+        return img
+          ? `<figure class="dessert-photo">${img}<figcaption>${esc(ru)}</figcaption></figure>`
+          : `<figure class="dessert-photo dessert-name"><span class="ico"><span aria-hidden="true">${contentIcon(d.icon)}</span><b>${esc(ru)}</b></span></figure>`;
+      };
+      // s.ctas — кнопка покупки сразу под сеткой: человек только что увидел десерты, самый тёплый момент.
+      const body = `<div class="dessert-all${desserts.length <= 12 ? " is-big" : ""}">${desserts.map(tile).join("")}</div>${s.ctas ? `<div class="btn-row section-cta">${ctaButtons(s.ctas, lang, ctx)}</div>` : ""}`;
       return wrap(s, `${sectionHead(s, lang)}${body}`, ctx);
     }
     // mode:"accordion" (главная) — карусель всегда видна (первые
@@ -679,7 +711,9 @@ const SECTIONS = {
         L(s.text, lang),
         lang,
         ctx,
-      )}</p><div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div></div>`,
+      )}</p><div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>${
+        ["online-kurs", "art-desserty"].includes(ctx.page.slug) ? trustRow(ctx.site, lang) : ""
+      }</div>`,
       ctx,
     );
   },
@@ -868,10 +902,10 @@ function renderHead(site, page, lang, ctx) {
     <meta name="twitter:title" content="${esc(title)}" />
     <meta name="twitter:description" content="${esc(desc)}" />
     <meta name="twitter:image:alt" content="${esc(L(page.h1, lang))}" />
-    <link rel="icon" href="/favicon.ico?v=20261108-brand" sizes="16x16 32x32 48x48" />
-    <link rel="icon" href="/favicon.svg?v=20261108-brand" type="image/svg+xml" sizes="any" />
-    <link rel="icon" href="/icons/favicon-32.png?v=20261108-brand" type="image/png" sizes="32x32" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png?v=20261108-brand" />
+    <link rel="icon" href="/favicon.ico?v=20261109-logo" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.svg?v=20261109-logo" type="image/svg+xml" sizes="any" />
+    <link rel="icon" href="/icons/favicon-32.png?v=20261109-logo" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png?v=20261109-logo" />
     <!-- Inter не блокирует отрисовку: подключаем как print, после загрузки
          переключаем на all. Системный шрифт виден сразу (display=swap). -->
     <script>try{if(localStorage.getItem('ssb_theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
@@ -889,7 +923,8 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
   const ui = site.ui[lang];
   const ctx = { site, page, ui, now, media, offlineProgramme, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
   let pageSections = page.sections;
-  if (["online-kurs", "art-desserty"].includes(page.slug) && media?.lessonSamples?.length) {
+  // На «Арт-десертах» программа курса уже сеткой из 10 фото уроков — отдельный блок образцов дублировал бы её.
+  if (page.slug === "online-kurs" && media?.lessonSamples?.length) {
     const at = Math.max(1, pageSections.findIndex((section) => section.type === "menu") + 1);
     pageSections = [...pageSections.slice(0, at), {type: "lessonSamples", id: "iz-urokov"}, ...pageSections.slice(at)];
   }
