@@ -6,6 +6,7 @@ import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
 import { attentionError, classifyAttention } from "./attention.js";
 import { rememberOwnerReply } from "../ai/styleLearning.js";
+import { recordAdReferral } from "../metaConversions.js";
 
 let ingesting = false;
 const processing = new Set<string>();
@@ -37,6 +38,10 @@ export async function ingestWhatsAppEvents(): Promise<void> {
       });
       if (e.type === "human" && e.text.trim() && !contact.personal && !contact.whatsappSavedContact && !contact.spamBlockedAt) {
         await learnFromOwner(contact.id, whatsappMessageId(e.accountId, e.messageId), e.text);
+      }
+      if (e.type === "incoming" && e.ad) {
+        await recordAdReferral(contact.id, { adId: e.ad.sourceId, ctwaClid: e.ad.ctwaClid, source: e.ad.sourceType ?? "whatsapp_ad" })
+          .catch((err) => logError("whatsapp:adReferral", err));
       }
       await bridgeRequest(`/events/${encodeURIComponent(e.id)}/ack`, {});
     }

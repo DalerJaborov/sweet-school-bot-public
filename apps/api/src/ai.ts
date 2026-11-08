@@ -24,6 +24,7 @@ import {
   detectMenuQuestion,
 } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
+import { maybeSendVideos } from "./ai/videoLibrary.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
@@ -324,6 +325,14 @@ export async function aiReply(
     // сюда не доходит вовсе — то же рассуждение, что у guardOffTopic выше.
     if (detectMenuQuestion(text)) {
       await sendMenuImages(contact, text);
+      notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+      return;
+    }
+
+    // Библиотека видео (ai/videoLibrary.ts): ролик названного десерта, подборка или «как смотреть
+    // онлайн-урок». Рубильник videoLibraryEnabled; не больше одного показа каждого вида за разговор.
+    // Явная просьба показать — ролик вместо ответа модели; просто упомянули десерт — ролик вдобавок.
+    if ((await maybeSendVideos(contact, text, { hasAttachments: attachments.length > 0 })) === "replace") {
       notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       return;
     }

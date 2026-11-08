@@ -98,6 +98,19 @@ export async function sendAttachmentToContact(
   });
 }
 
+/** Видео с подписью ОДНИМ сообщением: WhatsApp-мост принимает caption вместе с файлом (одна отправка вместо двух
+ *  — у моста лимит 8 за 10 минут на чат). В остальных каналах подписи у вложения нет — тогда текст, затем файл. */
+export async function sendVideoWithCaption(contact: Recipient, url: string, caption: string): Promise<string | null> {
+  if (channelOf(contact) === "WHATSAPP") {
+    return withContactMessaging(contact.id, "reply", async () => {
+      await assertMessagingAllowed();
+      return sendWhatsAppAttachment(contact, url, "video", "reply", caption);
+    });
+  }
+  await sendToContact(contact, caption);
+  return sendAttachmentToContact(contact, url, "video");
+}
+
 export function sendImageToContact(contact: Recipient, url: string): Promise<string | null> {
   return sendAttachmentToContact(contact, url, "image");
 }

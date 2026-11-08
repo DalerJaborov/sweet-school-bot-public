@@ -46,6 +46,7 @@ import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
 import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
 import { startWhatsAppWorker } from "./whatsapp/worker.js";
+import { runMetaConversions } from "./metaConversions.js";
 
 // index.ts — единственная точка, где db.ts и telegram.ts (через systemAlerts.ts)
 // встречаются без цикла импортов (см. комментарий у onNewSystemError в db.ts).
@@ -314,3 +315,10 @@ const ownerReminderTick = () =>
   void singleFlight("ownerReminder", () => runOwnerReminders()).catch((err) => logError("ownerReminder", err));
 setTimeout(ownerReminderTick, 3 * 60_000);
 setInterval(ownerReminderTick, 10 * 60_000);
+
+// ПОКУПКИ — В РЕКЛАМУ META (metaConversions.ts): очередь событий «Покупка».
+// Рубильник metaCapiEnabled по умолчанию выключен — тогда задача ничего не делает.
+const metaConversionsTick = () =>
+  void singleFlight("metaConversions", () => runMetaConversions()).catch((err) => logError("metaConversions", err));
+setTimeout(metaConversionsTick, 2 * 60_000);
+setInterval(metaConversionsTick, 5 * 60_000);

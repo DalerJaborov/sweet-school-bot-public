@@ -15,6 +15,7 @@ import {
 import type { Contact } from "@prisma/client";
 import { metaFailureKind } from "../messaging/metaErrors.js";
 import { isBotFrozen, currentReceiptEvidence, assertContactMessagingAllowed } from "../messaging/automation.js";
+import { enqueuePurchaseConversion } from "../metaConversions.js";
 
 /**
  * Выдача доступа к курсам после подтверждения оплаты.
@@ -63,6 +64,10 @@ export async function grantCourses(
   const webOnly = wantWeb && !wantTelegram;
   const pendingWeb: { purchaseId: string; course: Course }[] = [];
   const createdIds: string[] = [];
+  // Оплата — в рекламу Meta (metaConversions.ts): в finally, чтобы любой выход
+  // из выдачи — успех, сбой отправки ссылки, исключение — не потерял оплату.
+  // Откаченные при заморозке покупки enqueue отсеет сам (их уже нет в базе).
+  try {
   const deliveryFailed = async (error: unknown, ids: string[]) => {
     if (!opts.byHuman && (await isBotFrozen())) {
       await prisma.purchase.deleteMany({ where: { id: { in: ids.filter((id) => createdIds.includes(id)) } } });
@@ -224,4 +229,7 @@ export async function grantCourses(
       });
   }
   return done;
+  } finally {
+    if (createdIds.length > 0) await enqueuePurchaseConversion(contact.id, createdIds);
+  }
 }
