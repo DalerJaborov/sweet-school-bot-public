@@ -59,7 +59,7 @@ beforeEach(() => {
   db = mockPrisma();
   settings = { telegramBotToken: "t" };
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    settings[where.key] !== undefined ? { key: where.key, value: settings[where.key] } : null
+    settings[where.key] !== undefined ? { key: where.key, value: settings[where.key] } : null,
   );
   db.model("blockedReceipt").findUnique.mockResolvedValue(null);
   db.model("receiptCheck").findUnique.mockResolvedValue(null);
@@ -113,7 +113,11 @@ describe("допуск по сумме", () => {
 describe("честный чек проходит сам", () => {
   it.each([
     ["Душанбе Сити, 71.45, дата не разобрана", { amount: 71.45, receiptAt: null }, ["COURSE70"]],
-    ["Алиф, 72.74, дата не разобрана", { amount: 72.74, receiptAt: null, reason: "Алиф Банк, +992 905 355355" }, ["COURSE70"]],
+    [
+      "Алиф, 72.74, дата не разобрана",
+      { amount: 72.74, receiptAt: null, reason: "Алиф Банк, +992 905 355355" },
+      ["COURSE70"],
+    ],
     ["ровно 70", { amount: 70 }, ["COURSE70"]],
     ["ровно 50", { amount: 50 }, ["COURSE50"]],
     ["вчерашняя дата, сутки назад", { amount: 70, receiptAt: new Date(Date.now() - 24 * 3600_000) }, ["COURSE70"]],
@@ -145,7 +149,7 @@ describe("настоящие сомнения идут владельцу, бе�
   it("получатель не наш (ИИ уверен): тревога сразу", async () => {
     await handleReceiptVerdict(
       contact,
-      verdict({ kind: "suspicious", recipientMatches: false, confidence: 90, reason: "номер получателя другой" })
+      verdict({ kind: "suspicious", recipientMatches: false, confidence: 90, reason: "номер получателя другой" }),
     );
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
@@ -174,7 +178,10 @@ describe("настоящие сомнения идут владельцу, бе�
   });
 
   it("реально нечитаемый чек: ОДИН раз просим другой скриншот, владельца пока не зовём", async () => {
-    await handleReceiptVerdict(contact, verdict({ amount: null, confidence: 30, recipientMatches: false, kind: "suspicious" }));
+    await handleReceiptVerdict(
+      contact,
+      verdict({ amount: null, confidence: 30, recipientMatches: false, kind: "suspicious" }),
+    );
     expect(sendReceiptForReview).not.toHaveBeenCalled();
     expect(sendToContact).toHaveBeenCalledTimes(1);
     expect(String(sendToContact.mock.calls[0][1])).toMatch(/ещё один/);
@@ -182,7 +189,10 @@ describe("настоящие сомнения идут владельцу, бе�
 
   it("нечитаемый чек во второй раз: больше не просим, зовём владельца", async () => {
     const again = fakeContact({ askedAltScreenshotAt: new Date() }) as Parameters<typeof handleReceiptVerdict>[0];
-    await handleReceiptVerdict(again, verdict({ amount: null, confidence: 30, recipientMatches: false, kind: "suspicious", imageHash: "h2" }));
+    await handleReceiptVerdict(
+      again,
+      verdict({ amount: null, confidence: 30, recipientMatches: false, kind: "suspicious", imageHash: "h2" }),
+    );
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
     expect(sendToContact.mock.calls.map((c) => String(c[1])).join(" ")).not.toMatch(/ещё один/);
   });
@@ -192,7 +202,7 @@ describe("два скриншота одного перевода", () => {
   it("второй скриншот после принятого: без выдачи, без тревоги, «уже приняли»", async () => {
     // первый скриншот (650 RUB ≈ 73) уже открыл доступ минуту назад
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.createdAt && where.OR ? { amount: 73, linkSent: true, ownerDecision: null } : null
+      where.createdAt && where.OR ? { amount: 73, linkSent: true, ownerDecision: null } : null,
     );
     await handleReceiptVerdict(contact, verdict({ imageHash: "hash-second" }));
     expect(grantCourses).not.toHaveBeenCalled();
@@ -204,7 +214,7 @@ describe("два скриншота одного перевода", () => {
 
   it("второй скриншот, пока первый у владельца: молчим, второй карточки нет", async () => {
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.createdAt && where.OR ? { amount: 71, linkSent: false, ownerDecision: "PENDING" } : null
+      where.createdAt && where.OR ? { amount: 71, linkSent: false, ownerDecision: "PENDING" } : null,
     );
     await handleReceiptVerdict(contact, verdict({ imageHash: "hash-second" }));
     expect(grantCourses).not.toHaveBeenCalled();
@@ -223,7 +233,12 @@ describe("два скриншота одного перевода", () => {
 
   it("тот же скриншот прислан второй раз тем же человеком: строка не затирается, тревоги нет", async () => {
     db.model("receiptCheck").findUnique.mockResolvedValue({
-      id: "old", contactId: contact.id, kind: "valid", linkSent: true, ownerDecision: null, awaitingDeliveryChoice: false,
+      id: "old",
+      contactId: contact.id,
+      kind: "valid",
+      linkSent: true,
+      ownerDecision: null,
+      awaitingDeliveryChoice: false,
     });
     await handleReceiptVerdict(contact, verdict());
     expect(db.model("receiptCheck").create).not.toHaveBeenCalled();
@@ -234,7 +249,13 @@ describe("два скриншота одного перевода", () => {
 
   it("тот же скриншот, пока чек у владельца: молчим", async () => {
     db.model("receiptCheck").findUnique.mockResolvedValue({
-      id: "old", contactId: contact.id, kind: "suspicious", linkSent: false, ownerDecision: "PENDING", awaitingDeliveryChoice: false,
+      id: "old",
+      contactId: contact.id,
+      kind: "suspicious",
+      linkSent: false,
+      ownerDecision: "PENDING",
+      ownerAlerts: "[{}]",
+      awaitingDeliveryChoice: false,
     });
     await handleReceiptVerdict(contact, verdict());
     expect(db.model("receiptCheck").create).not.toHaveBeenCalled();
@@ -244,7 +265,7 @@ describe("два скриншота одного перевода", () => {
 
   it("чужой скриншот, уже открывавший доступ другому человеку, по-прежнему стоп", async () => {
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.linkSent === true && where.imageHash === "hash-ds" ? { createdAt: new Date() } : null
+      where.OR && where.imageHash === "hash-ds" ? { createdAt: new Date() } : null,
     );
     await handleReceiptVerdict(contact, verdict());
     expect(grantCourses).not.toHaveBeenCalled();
@@ -255,9 +276,7 @@ describe("два скриншота одного перевода", () => {
 describe("допуск в разделе «Цены и даты»", () => {
   it("допуск по умолчанию в форме, меняется и попадает в журнал изменений", () => {
     const next = { ...OFFER_DEFAULTS, payment: { toleranceDown: 6, toleranceUp: 12 } };
-    expect(diffOffer(OFFER_DEFAULTS, next)).toEqual([
-      { field: "payment.toleranceUp", before: "30", after: "12" },
-    ]);
+    expect(diffOffer(OFFER_DEFAULTS, next)).toEqual([{ field: "payment.toleranceUp", before: "30", after: "12" }]);
   });
 
   it("слишком большой допуск вниз - это уже недоплата, сервер отказывает", () => {
@@ -268,5 +287,48 @@ describe("допуск в разделе «Цены и даты»", () => {
   it("старый экран без допуска сохраняется, как раньше", () => {
     const { payment: _omit, ...legacy } = OFFER_DEFAULTS;
     expect("offer" in parseOffer(legacy)).toBe(true);
+  });
+});
+
+describe("после просьбы «пришлите другой скриншот»", () => {
+  it("тот же скриншот, карточка владельцу ещё НЕ уходила: разбор идёт дальше, чек не глотается", async () => {
+    db.model("receiptCheck").findUnique.mockResolvedValue({
+      id: "old", contactId: contact.id, kind: "suspicious", linkSent: false, ownerDecision: "PENDING", ownerAlerts: null, awaitingDeliveryChoice: false,
+    });
+    db.model("receiptCheck").update.mockResolvedValue({ id: "old" });
+    const asked = fakeContact({ askedAltScreenshotAt: new Date() }) as Parameters<typeof handleReceiptVerdict>[0];
+    await handleReceiptVerdict(asked, verdict({ recipientMatches: false, kind: "suspicious", confidence: 90 }));
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("другой скриншот сразу после просьбы, первый без карточки: не «повтор», выдаётся", async () => {
+    db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
+      const pendingNeedsCard = JSON.stringify(where.OR ?? []).includes('"ownerAlerts":{"not":null}');
+      // ожидающий чек без карточки в «тот же перевод» не засчитывается
+      return where.createdAt && where.OR && !pendingNeedsCard ? { amount: 71, linkSent: false, ownerDecision: "PENDING" } : null;
+    });
+    await handleReceiptVerdict(contact, verdict({ imageHash: "second" }));
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("номер операции и рубли", () => {
+  it("тот же номер операции у другого человека: стоп", async () => {
+    db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.transactionId ? { contactId: "someone-else", createdAt: new Date() } : null
+    );
+    await handleReceiptVerdict(contact, verdict({ transactionId: "TX123456789" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("номер операции сохраняется в строке чека", async () => {
+    await handleReceiptVerdict(contact, verdict({ transactionId: "TX123456789" }));
+    expect((createdData() as unknown as { transactionId: string }).transactionId).toBe("TX123456789");
+  });
+
+  it("только рубли: 650 RUB пересчитываются по курсу и проходят", async () => {
+    await handleReceiptVerdict(contact, verdict({ amount: 650, currency: "RUB", imageHash: "rub" }));
+    expect(grantCourses).toHaveBeenCalledTimes(1);
   });
 });

@@ -28,7 +28,12 @@ vi.mock("../../src/courses.js", async (importOriginal) => ({
 
 import { handleTelegramUpdate } from "../../src/telegramWebhook.js";
 import { decideReceipt } from "../../src/receiptDecision.js";
-import { closeReceiptAlerts, closeSettledReceiptAlerts, parseAlerts, resetSweepClock } from "../../src/receiptAlerts.js";
+import {
+  closeReceiptAlerts,
+  closeSettledReceiptAlerts,
+  parseAlerts,
+  resetSweepClock,
+} from "../../src/receiptAlerts.js";
 import { grantCourses } from "../../src/ai.js";
 
 let db: PrismaMock;
@@ -55,14 +60,14 @@ function row(overrides: Record<string, unknown> = {}) {
 function press(data: string) {
   return handleTelegramUpdate(
     { callback_query: { id: "cb1", data, from: { id: 1 }, message: { message_id: 55, chat: { id: 1 } } } },
-    undefined
+    undefined,
   );
 }
 
 beforeEach(() => {
   db = mockPrisma();
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null
+    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null,
   );
   db.model("purchase").findMany.mockResolvedValue([]);
   db.model("purchase").count.mockResolvedValue(0);
@@ -106,12 +111,12 @@ describe("decideReceipt", () => {
     db.model("receiptCheck").findUnique.mockResolvedValue(row());
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
     db.model("receiptCheck").update.mockResolvedValue({});
-    db.model("purchase").count.mockResolvedValue(1); // отозванная покупка
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70", revokedAt: new Date() }]); // отозванная покупка
     const result = await decideReceipt("r1", "approve");
     expect(result).toMatchObject({ ok: true, status: "approved_no_link" });
     expect(grantCourses).not.toHaveBeenCalled();
     expect(db.model("receiptCheck").update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "APPROVED" }) })
+      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "APPROVED" }) }),
     );
   });
 
@@ -129,7 +134,7 @@ describe("автозакрытие тревоги", () => {
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
     expect(await closeReceiptAlerts(contact.id, "Ширин уже отправила ссылку сама")).toBe(1);
     expect(db.model("receiptCheck").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "r1", ownerDecision: "PENDING" } })
+      expect.objectContaining({ where: { id: "r1", ownerDecision: "PENDING" } }),
     );
     expect(editCaption).toHaveBeenCalledWith("tok", "1", 55, expect.stringContaining("уже обработано"));
   });
@@ -137,23 +142,36 @@ describe("автозакрытие тревоги", () => {
   it("уборка: покупка заведена после чека — тревога закрывается", async () => {
     db.model("receiptCheck").findMany.mockResolvedValue([row()]);
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
-    db.model("purchase").findFirst.mockResolvedValue({ id: "p1" });
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1" }]);
     expect(await closeSettledReceiptAlerts()).toBe(1);
     expect(editCaption).toHaveBeenCalledTimes(1);
   });
 
-  it("уборка: Ширин написала клиентке ссылку руками — тревога закрывается", async () => {
+  it("уборка: сообщение Ширин со ссылкой статус не меняет (не отличить от обычного ответа)", async () => {
     db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("message").findFirst.mockResolvedValue({ text: "Вот ссылка https://shirinsweets.online/c/abc" });
+    expect(await closeSettledReceiptAlerts()).toBe(0);
+  });
+
+  it("уборка: одна покупка закрывает только один чек, второй (за другой курс) остаётся", async () => {
+    db.model("receiptCheck").findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.id ? [row({ id: where.id })] : [row({ id: "a" }), row({ id: "b" })]
+    );
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
-    db.model("purchase").findFirst.mockResolvedValue(null);
-    db.model("message").findFirst.mockResolvedValue({ text: "Вот ваша ссылка https://shirinsweets.online/c/abc" });
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1" }]);
     expect(await closeSettledReceiptAlerts()).toBe(1);
+  });
+
+  it("уборка: комплект закрывается только когда доставлены оба курса", async () => {
+    db.model("receiptCheck").findMany.mockResolvedValue([row({ amount: 100 })]);
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1" }]);
+    expect(await closeSettledReceiptAlerts()).toBe(0);
   });
 
   it("уборка: у клиентки только старая покупка и обычное сообщение — тревога остаётся", async () => {
     db.model("receiptCheck").findMany.mockResolvedValue([row()]);
-    db.model("purchase").findFirst.mockResolvedValue(null);
-    db.model("message").findFirst.mockResolvedValue({ text: "Добрый день, посмотрим чек" });
+    db.model("purchase").findMany.mockResolvedValue([]);
     expect(await closeSettledReceiptAlerts()).toBe(0);
     expect(editCaption).not.toHaveBeenCalled();
   });

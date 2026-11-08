@@ -140,10 +140,16 @@ export async function decideReceipt(
   // «Подтвердить» упиралось в "не настроена группа" и оставляло карточку с
   // живыми кнопками (08.11.2026). Закрываем чек понятным ответом: вернуть
   // доступ можно осознанно в «Клиентах».
-  const revokedBefore = await prisma.purchase.count({
+  const revokedRows = await prisma.purchase.findMany({
     where: { contactId: receipt.contactId, course: { in: plan.grant }, revokedAt: { not: null } },
+    select: { course: true, revokedAt: true },
   });
-  if (plan.grant.length > 0 && revokedBefore > 0) {
+  const revokedCourses = new Set((revokedRows ?? []).filter((r) => r.revokedAt).map((r) => r.course));
+  if (revokedCourses.size > 0) {
+    // Из комплекта убираем только отозванный курс; оплаченный второй выдаём.
+    plan = { ...plan, grant: plan.grant.filter((c) => !revokedCourses.has(c)) };
+  }
+  if (plan.grant.length === 0 && revokedCourses.size > 0) {
     await prisma.receiptCheck.update({
       where: { id: receiptId },
       data: { ownerDecision: "APPROVED", decidedAt: new Date(), reason: `${receipt.reason} (доступ был отозван ранее)` },

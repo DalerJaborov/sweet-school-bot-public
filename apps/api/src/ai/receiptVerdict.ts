@@ -206,6 +206,7 @@ export async function handleReceiptVerdict(
     recipientMatches?: boolean;
     imageHash: string;
     imageUrl: string | null;
+    transactionId?: string | null;
   },
   existingId?: string
 ): Promise<void> {
@@ -224,7 +225,7 @@ export async function handleReceiptVerdict(
       await tellAlreadyAccepted(contact);
       return;
     }
-    if (previous.ownerDecision === "PENDING" || previous.ownerDecision === "REJECTED") return;
+    if ((previous.ownerDecision === "PENDING" && previous.ownerAlerts) || previous.ownerDecision === "REJECTED") return;
   }
   let kind: string = verdict.kind;
   let reason = verdict.reason;
@@ -261,12 +262,14 @@ export async function handleReceiptVerdict(
   }
 
   // Тот же скриншот уже открывал доступ (другому человеку — свой повтор отсеян выше).
-  const reused = await prisma.receiptCheck.findFirst({ where: { imageHash: verdict.imageHash, linkSent: true } });
+  const reused = await prisma.receiptCheck.findFirst({
+    where: { imageHash: verdict.imageHash, OR: [{ linkSent: true }, { contactId: { not: contact.id } }] },
+  });
   if (reused) {
     kind = "suspicious";
     hard = true;
-    reason = `Этот же скриншот уже открывал доступ раньше (${reused.createdAt.toLocaleString("ru-RU")})`;
-    doubts.push("этот скриншот уже открывал доступ раньше");
+    reason = `Этот же скриншот уже присылали раньше (${reused.createdAt.toLocaleString("ru-RU")})`;
+    doubts.push("этот скриншот уже присылали раньше");
   }
 
   // ВОЗМОЖНОЕ РЕДАКТИРОВАНИЕ СУММЫ/ДАТЫ.
@@ -298,18 +301,39 @@ export async function handleReceiptVerdict(
     }
   }
 
+  // НОМЕР ОПЕРАЦИИ. Дата больше не обязательна, поэтому старый настоящий чек,
+  // пересохранённый или обрезанный (байты другие), ловим по номеру: он один на
+  // перевод. Тот же номер у другого человека — стоп; у того же — это второй
+  // скриншот одного перевода.
+  let sameTxn = false;
+  const txn = verdict.transactionId?.trim();
+  if (txn && txn.length >= 6) {
+    const seen = await prisma.receiptCheck.findFirst({
+      where: { transactionId: txn, imageHash: { not: verdict.imageHash }, OR: [{ linkSent: true }, { ownerDecision: "APPROVED" }] },
+      select: { contactId: true, createdAt: true },
+    });
+    if (seen && seen.contactId !== contact.id) {
+      kind = "suspicious";
+      hard = true;
+      reason = `${reason} (номер операции ${txn} уже открывал доступ другому человеку)`;
+      doubts.push("номер операции уже использован другим человеком");
+    } else if (seen) {
+      sameTxn = true;
+    }
+  }
+
   // ВТОРОЙ СКРИНШОТ ТОГО ЖЕ ПЕРЕВОДА: за последние минуты у человека уже есть
   // принятый (или ждущий владельца) чек почти на ту же сумму. Это не новый
   // платёж и не повод для тревоги.
-  let sameTransfer: "settled" | "pending" | null = null;
-  if (kind === "valid" && amount != null) {
+  let sameTransfer: "settled" | "pending" | null = sameTxn && kind === "valid" ? "settled" : null;
+  if (kind === "valid" && amount != null && !sameTransfer) {
     const recent = await prisma.receiptCheck.findFirst({
       where: {
         contactId: contact.id,
         imageHash: { not: verdict.imageHash },
         kind: { not: "duplicate" },
         createdAt: { gte: new Date(Date.now() - SAME_TRANSFER_WINDOW_MS) },
-        OR: [{ linkSent: true }, { ownerDecision: "PENDING" }, { ownerDecision: "APPROVED" }],
+        OR: [{ linkSent: true }, { ownerDecision: "PENDING", ownerAlerts: { not: null } }, { ownerDecision: "APPROVED" }],
       },
       orderBy: { createdAt: "desc" },
       select: { amount: true, linkSent: true, ownerDecision: true },
@@ -343,7 +367,10 @@ export async function handleReceiptVerdict(
     }
   }
 
-  const plan = amount != null ? await allocate(contact.id, amount) : null;
+  // Из рублей и других валют банк конвертирует по своему курсу (единого нет):
+  // пересчёт по нашему курсу сравниваем с ценами с запасом 5 %.
+  const converted = verdict.amount != null && currency !== "TJS";
+  const plan = amount != null ? await allocate(contact.id, converted ? amount * 1.05 : amount) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
     hard = true;
@@ -412,6 +439,7 @@ export async function handleReceiptVerdict(
     receiptAt: verdict.receiptAt,
     imageUrl: verdict.imageUrl,
     amount: amount != null ? Math.round(amount) : null,
+    transactionId: txn && txn.length >= 6 ? txn : null,
     ownerDecision: needsOwner ? "PENDING" : null,
     awaitingDeliveryChoice: waitingForChoice,
     ...(closedAsDuplicate ? { decidedAt: new Date() } : {}),
@@ -470,7 +498,7 @@ export async function handleReceiptVerdict(
   } else if (saved && duplicatePayment) {
     await tellAlreadyAccepted(contact);
     if (await isBotFrozen()) return;
-    await askOwner(contact, saved.id, verdict, doubts, verdict.reason);
+    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason);
   } else if (saved && needsOwner) {
     if (contact.askedAltScreenshotAt) {
       await prisma.contact.update({ where: { id: contact.id }, data: { askedAltScreenshotAt: null } }).catch((err) => {

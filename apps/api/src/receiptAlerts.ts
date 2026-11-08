@@ -1,5 +1,6 @@
 import { prisma, getSetting, logError } from "./db.js";
 import { editCaption } from "./telegram.js";
+import { getPaymentTolerance, getPrices } from "./services/priceService.js";
 
 /**
  * КАРТОЧКИ ЧЕКОВ В TELEGRAM: ЗАПОМНИТЬ И ЗАКРЫТЬ (08.11.2026).
@@ -30,7 +31,7 @@ export function parseAlerts(raw: string | null | undefined): OwnerAlert[] {
         typeof a === "object" &&
         a !== null &&
         typeof (a as OwnerAlert).chatId === "string" &&
-        typeof (a as OwnerAlert).messageId === "number"
+        typeof (a as OwnerAlert).messageId === "number",
     );
   } catch {
     return [];
@@ -69,8 +70,16 @@ function whoOf(contact: { username: string | null; igUserId: string }): string {
  * автозакрытие одновременно не выдадут решение дважды.
  */
 export async function closeReceiptAlerts(contactId: string, how: string): Promise<number> {
+  return closeRows({ contactId, ownerDecision: "PENDING" }, how);
+}
+
+export async function closeReceiptById(id: string, how: string): Promise<number> {
+  return closeRows({ id, ownerDecision: "PENDING" }, how);
+}
+
+async function closeRows(where: { id?: string; contactId?: string; ownerDecision: string }, how: string): Promise<number> {
   const rows = await prisma.receiptCheck.findMany({
-    where: { contactId, ownerDecision: "PENDING" },
+    where,
     include: { contact: true },
   });
   let closed = 0;
@@ -82,20 +91,23 @@ export async function closeReceiptAlerts(contactId: string, how: string): Promis
     if (claim.count === 0) continue;
     closed += 1;
     await closeCards(row, `✅ ${whoOf(row.contact)}: уже обработано — ${how}`).catch((err) =>
-      logError("receiptAlerts:closeCards", err)
+      logError("receiptAlerts:closeCards", err),
     );
   }
   return closed;
 }
 
-/** Ссылка в сообщении, которое Ширин написала клиентке сама. */
-const LINK_IN_TEXT = /https?:\/\/|t\.me\/|\bshirinsweets\b/i;
-
 /**
- * Фоновая уборка (раз в минуту): чек ждёт решения, но после его прихода человек
- * получил доступ другим путём — покупка заведена руками (панель «Клиенты») или
- * Ширин сама написала ему сообщение со ссылкой. Закрываем такой чек, не трогая
- * чеки тех, у кого просто есть старая покупка: нужна покупка НОВЕЕ чека.
+ * Фоновая уборка (раз в минуту): чек ждёт решения, но после его прихода человеку
+ * заведена и доставлена покупка другим путём (панель «Клиенты», ручная выдача).
+ * Закрываем КАЖДЫЙ чек отдельно и консервативно:
+ *  • покупка должна быть новее чека и доставлена (ссылка/доступ выданы);
+ *  • покупок должно хватать на то, что оплачено (комплект - две), и одна покупка
+ *    закрывает только один чек - чек за второй курс не «съедается» чужой выдачей;
+ *  • сумма не прочиталась - не трогаем, решает человек.
+ * Сообщение Ширин со ссылкой статус НЕ меняет: подпись «Ширин написала» нельзя
+ * отличить от обычного ответа со ссылкой на сайт. Закрытый здесь чек
+ * подтвердить из интерфейса уже нельзя, поэтому правила узкие.
  */
 let lastSweepAt = 0;
 const SWEEP_EVERY_MS = 60_000;
@@ -104,35 +116,32 @@ export async function closeSettledReceiptAlerts(now = Date.now()): Promise<numbe
   if (now - lastSweepAt < SWEEP_EVERY_MS) return 0;
   lastSweepAt = now;
   const pending = await prisma.receiptCheck.findMany({
-    where: { ownerDecision: "PENDING" },
-    select: { id: true, contactId: true, createdAt: true },
-    take: 50,
+    where: { ownerDecision: "PENDING", amount: { not: null } },
+    select: { id: true, contactId: true, createdAt: true, amount: true },
+    orderBy: { createdAt: "asc" },
+    take: 100,
   });
-  const done = new Set<string>();
+  if (pending.length === 0) return 0;
+  const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
+  const used = new Set<string>();
   let closed = 0;
   for (const r of pending) {
-    if (done.has(r.contactId)) continue;
-    const purchase = await prisma.purchase.findFirst({
+    const need = (r.amount ?? 0) >= prices.bundle - tol.down ? 2 : 1;
+    const bought = await prisma.purchase.findMany({
       where: {
         contactId: r.contactId,
         revokedAt: null,
+        accessDeliveryUncertainAt: null,
         createdAt: { gte: r.createdAt },
         OR: [{ inviteLink: { not: null } }, { accessIssuedAt: { not: null } }],
       },
       select: { id: true },
+      orderBy: { createdAt: "asc" },
     });
-    let how: string | null = purchase ? "доступ уже выдан другим способом" : null;
-    if (!how) {
-      const human = await prisma.message.findFirst({
-        where: { contactId: r.contactId, direction: "OUT", byHuman: true, createdAt: { gte: r.createdAt }, text: { not: null } },
-        orderBy: { createdAt: "desc" },
-        select: { text: true },
-      });
-      if (human?.text && LINK_IN_TEXT.test(human.text)) how = "Ширин уже отправила ссылку сама";
-    }
-    if (!how) continue;
-    done.add(r.contactId);
-    closed += await closeReceiptAlerts(r.contactId, how);
+    const free = (bought ?? []).filter((b) => !used.has(b.id));
+    if (free.length < need) continue;
+    for (const b of free.slice(0, need)) used.add(b.id);
+    closed += await closeReceiptById(r.id, "доступ уже выдан другим способом");
   }
   return closed;
 }
