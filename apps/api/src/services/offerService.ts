@@ -6,6 +6,9 @@ import { offlineCardDefault } from "../ai/offlineCourse.js";
 import { localTodayIso, offlineStartDate, parseIsoDay, toIsoDay } from "../ai/courseDate.js";
 import { getPrices, resetPriceCache } from "./priceService.js";
 import { getOfflineFacts, OFFLINE_FACT_KEYS, resetSalesTextsCache } from "./salesTextsService.js";
+import { OFFER_SETTING_KEYS } from "./settingsService.js";
+import { PAYMENT_TOLERANCE_DOWN } from "../courses.js";
+import { createHash } from "node:crypto";
 
 /**
  * «ЦЕНЫ И ДАТЫ» — ЕДИНСТВЕННАЯ ДВЕРЬ ЗАПИСИ ТОГО, ЧТО БОТ И САЙТ НАЗЫВАЮТ
@@ -44,6 +47,37 @@ export type Offer = {
 
 /** Порог «точно?»: относительная смена цены, после которой нужно подтверждение. */
 export const PRICE_JUMP_CONFIRM = 0.3;
+
+/** Набор дальше этого — скорее опечатка в годе (2027 вместо 2026): предупреждаем. */
+export const FAR_START_DAYS = 180;
+
+function daysBetween(fromIso: string, toIso: string): number {
+  return Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86_400_000);
+}
+
+/**
+ * ВЕРСИЯ «ЦЕН И ДАТ» — отпечаток сохранённых значений. Экран получает её с
+ * GET и возвращает при сохранении; не совпала — кто-то (вторая вкладка,
+ * телефон) уже сохранил своё, и молча перезаписать его правку нельзя.
+ * Считается по строкам Settings, поэтому сверка идёт внутри той же транзакции,
+ * что и запись.
+ */
+function versionOf(rows: { key: string; value: string }[]): string {
+  const byKey = new Map(rows.map((r) => [r.key, r.value]));
+  const flat = OFFER_SETTING_KEYS.map((k) => [k, byKey.get(k) ?? null]);
+  return createHash("sha256").update(JSON.stringify(flat)).digest("hex").slice(0, 16);
+}
+
+type SettingReader = {
+  setting: { findMany(args: { where: { key: { in: string[] } } }): Promise<{ key: string; value: string }[]> };
+};
+
+export async function offerVersion(db: SettingReader = prisma): Promise<string> {
+  const rows = await db.setting.findMany({ where: { key: { in: [...OFFER_SETTING_KEYS] } } });
+  return versionOf(rows ?? []);
+}
+
+export const STALE_OFFER_MESSAGE = "Кто-то уже изменил цены или даты — обновите страницу и проверьте";
 
 const price = (label: string) =>
   z
@@ -208,11 +242,21 @@ export function checkOffer(before: Offer, after: Offer, today: string): OfferChe
   const warnings: string[] = [];
   const confirm: PriceJump[] = [];
 
+  // ДЕНЬГИ: проверка чека (courses.allocate) узнаёт курс по сумме с допуском
+  // −DOWN на комиссию банка. Комплект ловится первым — от «цена комплекта −
+  // DOWN»; если эта граница не выше самого дорогого курса, оплата одного курса
+  // откроет оба. А два курса с почти одной ценой бот не различит по чеку.
   const { course50, course70, bundle } = after.prices;
+  const top = Math.max(course50, course70);
   if (bundle > course50 + course70)
     errors["prices.bundle"] = `Комплект дороже, чем два курса по отдельности (${course50 + course70})`;
-  else if (bundle < Math.max(course50, course70))
-    errors["prices.bundle"] = "Комплект не может стоить меньше самого дорогого курса";
+  else if (bundle - PAYMENT_TOLERANCE_DOWN <= top)
+    errors["prices.bundle"] =
+      `Комплект должен стоить больше ${top + PAYMENT_TOLERANCE_DOWN} сомони: банк удерживает до ${PAYMENT_TOLERANCE_DOWN} сомони, ` +
+      `и оплату дорогого курса бот принял бы за комплект`;
+  if (Math.abs(course50 - course70) <= 2 * PAYMENT_TOLERANCE_DOWN)
+    errors["prices.course70"] =
+      `Цены курсов должны отличаться больше чем на ${2 * PAYMENT_TOLERANCE_DOWN} сомони — иначе по чеку не понять, какой курс оплачен`;
 
   if (after.offline.timeFrom >= after.offline.timeTo)
     errors["offline.timeTo"] = "Конец занятий должен быть позже начала";
@@ -224,6 +268,8 @@ export function checkOffer(before: Offer, after: Offer, today: string): OfferChe
     else warnings.push("Набор в прошлом — клиентам скажем, что дата уточняется");
   }
   if (!start) warnings.push("Дата набора не задана — клиентам скажем, что дата уточняется");
+  if (start && start >= today && daysBetween(today, start) > FAR_START_DAYS)
+    warnings.push(`Набор больше чем через полгода (${start}) — проверьте год`);
 
   const priceFields: [string, number, number][] = [
     ["prices.course50", before.prices.course50, course50],
@@ -304,6 +350,7 @@ export function onOfferSaved(listener: () => void): void {
 export type SaveResult =
   | { status: "invalid"; errors: FieldErrors }
   | { status: "confirm"; confirm: PriceJump[] }
+  | { status: "stale" }
   | { status: "ok"; offer: Offer; changes: OfferChangeRow[]; warnings: string[] };
 
 /** Ключ Settings → значение строкой. Часы — одной записью «13:40–16:30». */
@@ -322,37 +369,43 @@ function settingValues(offer: Offer): Record<string, string> {
   };
 }
 
-export async function saveOffer(body: unknown, opts: { actor: string; confirmed?: boolean }): Promise<SaveResult> {
+export async function saveOffer(
+  body: unknown,
+  opts: { actor: string; confirmed?: boolean; version: string },
+): Promise<SaveResult> {
   const parsed = parseOffer(body);
   if ("errors" in parsed) return { status: "invalid", errors: parsed.errors };
   const next = parsed.offer;
-  const [{ offer: before }, today] = await Promise.all([readOffer(), localTodayIso()]);
+  const [{ offer: before }, today, version] = await Promise.all([readOffer(), localTodayIso(), offerVersion()]);
+  if (version !== opts.version) return { status: "stale" };
 
   const check = checkOffer(before, next, today);
   if (Object.keys(check.errors).length > 0) return { status: "invalid", errors: check.errors };
   if (check.confirm.length > 0 && !opts.confirmed) return { status: "confirm", confirm: check.confirm };
 
   const changes = diffOffer(before, next);
-  if (changes.length > 0) {
-    const values = settingValues(next);
-    const beforeValues = settingValues(before);
-    await prisma.$transaction(async (tx) => {
-      // Пишем все ключи, а не только изменённые: значение по умолчанию из кода
-      // становится явной записью, и будущая смена умолчания в коде не сдвинет
-      // цену, которую владелец видел и сохранял.
-      for (const [key, value] of Object.entries(values)) {
-        await tx.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
-      }
-      // Витрина сайта показывает Course.price — без этой записи сайт разошёлся бы с ботом.
-      if (values.priceCourse50 !== beforeValues.priceCourse50 || values.priceCourse70 !== beforeValues.priceCourse70) {
-        await tx.course.updateMany({ where: { code: COURSE_50 }, data: { price: next.prices.course50 } });
-        await tx.course.updateMany({ where: { code: COURSE_70 }, data: { price: next.prices.course70 } });
-      }
-      for (const change of changes) {
-        await tx.offerChange.create({ data: { ...change, actor: opts.actor.slice(0, 120) } });
-      }
-    });
-  }
+  const values = settingValues(next);
+  const stale = await prisma.$transaction(async (tx) => {
+    // Сверка версии ещё раз — уже внутри записи: две вкладки, нажавшие
+    // «Сохранить» одновременно, не перезапишут друг друга молча.
+    if ((await offerVersion(tx)) !== opts.version) return true;
+    // Пишем все ключи, а не только изменённые: значение по умолчанию из кода
+    // становится явной записью, и будущая смена умолчания в коде не сдвинет
+    // цену, которую владелец видел и сохранял.
+    for (const [key, value] of Object.entries(values)) {
+      await tx.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
+    }
+    // Витрина сайта показывает Course.price. Пишем при КАЖДОМ сохранении: если
+    // строка курса когда-то разошлась с настройкой (ручная правка, backfill),
+    // следующее сохранение её выравнивает.
+    await tx.course.updateMany({ where: { code: COURSE_50 }, data: { price: next.prices.course50 } });
+    await tx.course.updateMany({ where: { code: COURSE_70 }, data: { price: next.prices.course70 } });
+    for (const change of changes) {
+      await tx.offerChange.create({ data: { ...change, actor: opts.actor.slice(0, 120) } });
+    }
+    return false;
+  });
+  if (stale) return { status: "stale" };
 
   resetPriceCache();
   resetSalesTextsCache();

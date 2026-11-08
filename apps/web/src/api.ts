@@ -340,6 +340,8 @@ export type OfferPreview = {
 export type OfferHistoryRow = { field: string; label: string; before: string; after: string; actor: string; at: string };
 export type OfferSnapshot = {
   offer: Offer;
+  /** Отпечаток сохранённого; возвращается при сохранении (защита от двух вкладок). */
+  version: string;
   defaults: Offer;
   today: string;
   preview: OfferPreview;

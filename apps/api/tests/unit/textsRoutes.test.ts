@@ -100,7 +100,7 @@ describe("/admin/texts — только тексты; цены и даты жи�
     const res = await put({
       texts: current.texts,
       prices: { course50: 60, course70: 70, bundle: 100 },
-      offline: { infoRu: "", infoTg: "", price: 700, startDate: "", address: "Душанбе, Водонасос, дом Додо Пицца" },
+      offline: { infoRu: "", infoTg: "", price: 700, startDate: "", address: "Душанбе, ориентир Воданасос, Рудаки 177" },
     });
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toMatch(/Цены и даты.*Арт-десерты/);

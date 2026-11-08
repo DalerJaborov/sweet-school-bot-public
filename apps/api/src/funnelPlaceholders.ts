@@ -1,4 +1,4 @@
-import { courseDateLabel } from "./ai/courseDate.js";
+import { formatCourseDate, upcomingOfflineStartDate } from "./ai/courseDate.js";
 import { hoursValue, parseHours } from "./ai/offlineFacts.js";
 import { getOfflineFacts } from "./services/salesTextsService.js";
 import { detectClientLanguage } from "./ai/clientLanguage.js";
@@ -20,6 +20,8 @@ import { detectClientLanguage } from "./ai/clientLanguage.js";
 const DATE_TOKEN = /\{\s*(дата|date)\s*\}/giu;
 const TIME_TOKEN = /\{\s*(время|time)\s*\}/giu;
 
+export const FUNNEL_DATE_TBD = { ru: "(дата уточняется)", tg: "(сана ҳоло аниқ нест)" } as const;
+
 export async function renderFunnelText(text: string): Promise<string> {
   const needsDate = DATE_TOKEN.test(text);
   DATE_TOKEN.lastIndex = 0;
@@ -30,7 +32,11 @@ export async function renderFunnelText(text: string): Promise<string> {
   let out = text;
   if (needsDate) {
     const language = detectClientLanguage(text);
-    out = out.replace(DATE_TOKEN, await courseDateLabel(language));
+    // Даты нет — вставка в скобках, чтобы фраза шага осталась грамматичной в любом
+    // месте: «Курс начнётся (дата уточняется), записывайтесь».
+    const start = await upcomingOfflineStartDate();
+    const lang = language === "tg" ? "tg" : "ru";
+    out = out.replace(DATE_TOKEN, start ? formatCourseDate(start, lang) : FUNNEL_DATE_TBD[lang]);
   }
   if (needsTime) {
     // Те же часы, что в карточке бота и на сайте (раздел «Цены и даты»),

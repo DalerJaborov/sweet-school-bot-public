@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OFFER_SETTING_KEYS } from "../../src/services/settingsService.js";
-import { DEFAULT_OFFLINE_FACTS, parseHours } from "../../src/ai/offlineFacts.js";
+import { DEFAULT_OFFLINE_ADDRESS_TG, DEFAULT_OFFLINE_FACTS, parseHours } from "../../src/ai/offlineFacts.js";
+import { reminderText } from "../../src/offlineReminder.js";
 
 /**
  * СТОРОЖ «ОДНА ДВЕРЬ ДЛЯ ЦЕН И ДАТ» (08.11.2026).
@@ -113,5 +114,21 @@ describe("цены и даты — один источник", () => {
       hours: DEFAULT_OFFLINE_FACTS.hours,
       desserts: DEFAULT_OFFLINE_FACTS.desserts,
     });
+  });
+
+  it("адрес очного курса: одно поле панели; запасное значение сайта совпадает с ботом", () => {
+    const site = JSON.parse(fs.readFileSync(path.join(ROOT, "apps/web/site-content/site.json"), "utf8")) as {
+      contacts: { address: { ru: string; tg: string }; street?: string; maps?: string };
+    };
+    expect(site.contacts.address).toEqual({ ru: DEFAULT_OFFLINE_FACTS.address, tg: DEFAULT_OFFLINE_ADDRESS_TG });
+    // Второй копии адреса (street/maps) в site.json больше нет — подвал и JSON-LD берут поле панели.
+    expect(site.contacts.street).toBeUndefined();
+    expect(site.contacts.maps).toBeUndefined();
+    expect(reminderText("ru", "", DEFAULT_OFFLINE_FACTS)).toContain(DEFAULT_OFFLINE_FACTS.address);
+    expect(reminderText("tg", "", DEFAULT_OFFLINE_FACTS)).toContain(DEFAULT_OFFLINE_ADDRESS_TG);
+    const addressLiteral = /Воданасос|Водонасос|Рудаки\s*1\d\d|Рӯдакӣ\s*1\d\d|Додо|Dodo/iu;
+    const pages = walk(path.join(ROOT, "apps/web/site-content/pages"), /\.json$/);
+    const buildScripts = [path.join(ROOT, "apps/web/scripts/build-site-pages.mjs")];
+    expect(offenders([...apiSrc, ...webSrc, ...pages, ...buildScripts], addressLiteral, ["apps/api/src/ai/offlineFacts.ts"])).toEqual([]);
   });
 });

@@ -2,12 +2,16 @@ import { Router, type Request } from "express";
 import jwt from "jsonwebtoken";
 import { autoCatch } from "./asyncRoute.js";
 import { localTodayIso } from "./ai/courseDate.js";
+import { adminAccessConfig } from "./adminAccess.js";
+import { adminTokenSecret } from "./adminLogin.js";
 import {
   OFFER_DEFAULTS,
+  STALE_OFFER_MESSAGE,
   checkOffer,
   customOfflineCard,
   offerHistory,
   offerPreview,
+  offerVersion,
   parseOffer,
   readOffer,
   saveOffer,
@@ -24,37 +28,50 @@ import {
 export const offerRouter = autoCatch(Router());
 
 /**
- * Кто сохранил — для журнала. Подпись уже проверена requireAuth (Access или
- * админский токен), здесь только читаем, ЧЬЯ она. Ничего не проверяем заново и
- * ничего не доверяем сверх этого: строка идёт только в журнал.
+ * Кто сохранил — для журнала. Только из ПРОВЕРЕННОГО входа:
+ *  • вход через Cloudflare Access включён — заголовок cf-access-jwt-assertion
+ *    уже проверил createAdminAccessGuard (подпись, срок, отзыв), берём почту;
+ *  • иначе — админский токен, подпись проверяем здесь тем же секретом, что
+ *    requireAuth. Заголовку Access в режиме пароля не верим: его может
+ *    подставить кто угодно с паролем и записать в журнал чужое имя.
+ * Ничего не распознали — «админ панели».
  */
 export function adminActor(req: Request): string {
-  const access = req.get("cf-access-jwt-assertion");
-  if (access) {
-    const claims = jwt.decode(access) as { email?: unknown } | null;
-    if (typeof claims?.email === "string") return claims.email;
-    return "защищённый вход";
+  if (adminAccessConfig()) {
+    const claims = jwt.decode(req.get("cf-access-jwt-assertion") ?? "") as { email?: unknown } | null;
+    return typeof claims?.email === "string" ? claims.email.slice(0, 120) : "админ панели";
   }
   const header = req.get("authorization") ?? "";
-  const claims = header.startsWith("Bearer ")
-    ? (jwt.decode(header.slice(7)) as { via?: unknown; tgId?: unknown } | null)
-    : null;
-  if (claims?.via === "telegram" && (typeof claims.tgId === "number" || typeof claims.tgId === "string"))
-    return `Telegram ${claims.tgId}`;
-  return "пароль панели";
+  if (!header.startsWith("Bearer ")) return "админ панели";
+  try {
+    const claims = jwt.verify(header.slice(7), adminTokenSecret(), { algorithms: ["HS256"] }) as {
+      role?: unknown;
+      via?: unknown;
+      tgId?: unknown;
+    };
+    if (claims.role !== "admin") return "админ панели";
+    if (claims.via === "telegram" && (typeof claims.tgId === "number" || typeof claims.tgId === "string"))
+      return `Telegram ${claims.tgId}`;
+    return "пароль панели";
+  } catch {
+    return "админ панели";
+  }
 }
 
 async function snapshot() {
-  const [{ offer, legacyHours }, today, custom, history] = await Promise.all([
+  const [{ offer, legacyHours }, today, custom, history, version] = await Promise.all([
     readOffer(),
     localTodayIso(),
     customOfflineCard(),
     offerHistory(),
+    offerVersion(),
   ]);
   const check = checkOffer(offer, offer, today);
   if (legacyHours) check.warnings.push(`Время сейчас записано текстом «${legacyHours}» — укажите часы заново`);
   return {
     offer,
+    /** Отпечаток сохранённого — экран возвращает его при сохранении. */
+    version,
     defaults: OFFER_DEFAULTS,
     today,
     preview: offerPreview(offer, today, custom),
@@ -80,7 +97,15 @@ offerRouter.post("/admin/v1/offer/preview", async (req, res) => {
 });
 
 offerRouter.put("/admin/v1/offer", async (req, res) => {
-  const result = await saveOffer(req.body?.offer, { actor: adminActor(req), confirmed: req.body?.confirm === true });
+  const result = await saveOffer(req.body?.offer, {
+    actor: adminActor(req),
+    confirmed: req.body?.confirm === true,
+    version: typeof req.body?.version === "string" ? req.body.version : "",
+  });
+  if (result.status === "stale") {
+    res.status(409).json({ error: STALE_OFFER_MESSAGE, stale: true });
+    return;
+  }
   if (result.status === "invalid") {
     res.status(400).json({ error: "Проверьте поля", fields: result.errors });
     return;

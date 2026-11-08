@@ -105,6 +105,9 @@ export function OfferPage() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Номер последнего запроса предпросмотра: ответ на устаревший черновик (пришёл
+   *  позже свежего) не должен перезаписать экран старыми цифрами. */
+  const previewSeq = useRef(0);
 
   const apply = useCallback((s: OfferSnapshot) => {
     const d = toDraft(s.offer);
@@ -130,16 +133,19 @@ export function OfferPage() {
     if (!draft || !dirty) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
+      const seq = ++previewSeq.current;
       api<{ preview: OfferPreview; check: OfferCheck }>("/admin/v1/offer/preview", {
         method: "POST",
         body: { offer: toOffer(draft) },
       })
         .then((r) => {
+          if (seq !== previewSeq.current) return;
           setPreview(r.preview);
           setCheck(r.check);
           setFieldErrors(r.check.errors);
         })
         .catch((e) => {
+          if (seq !== previewSeq.current) return;
           if (e instanceof ApiError && e.status === 400)
             setFieldErrors((e.data as { fields?: Record<string, string> })?.fields ?? {});
         });
@@ -153,17 +159,20 @@ export function OfferPage() {
     if (!draft || busy) return;
     setBusy(true);
     setErr(null);
+    // Версия — та, с которой экран открыли: если кто-то сохранил раньше нас,
+    // сервер ответит «обновите страницу», а не перезапишет чужую правку.
     const send = (confirm: boolean) =>
       api<OfferSnapshot & { ok: boolean }>("/admin/v1/offer", {
         method: "PUT",
-        body: { offer: toOffer(draft), confirm },
+        body: { offer: toOffer(draft), confirm, version: snap?.version ?? "" },
       });
+    const isStale = (e: unknown) => e instanceof ApiError && e.status === 409 && (e.data as { stale?: boolean })?.stale === true;
     try {
       let result: OfferSnapshot;
       try {
         result = await send(false);
       } catch (e) {
-        if (!(e instanceof ApiError && e.status === 409)) throw e;
+        if (!(e instanceof ApiError && e.status === 409) || isStale(e)) throw e;
         const jumps = ((e.data as { confirm?: PriceJump[] })?.confirm ?? []).map(jumpText);
         const ok = await confirmDialog({
           title: "Точно меняем цену?",
@@ -177,14 +186,17 @@ export function OfferPage() {
       apply(result);
       toast("Сохранено. Бот уже говорит новое, на сайте — в течение минуты");
     } catch (e) {
-      if (e instanceof ApiError && e.status === 400) {
+      previewSeq.current++;
+      if (isStale(e)) {
+        setErr((e as ApiError).message);
+      } else if (e instanceof ApiError && e.status === 400) {
         setFieldErrors((e.data as { fields?: Record<string, string> })?.fields ?? {});
         setErr("Проверьте поля, отмеченные красным");
       } else setErr(e instanceof Error ? e.message : "Не удалось сохранить");
     } finally {
       setBusy(false);
     }
-  }, [draft, busy, apply]);
+  }, [draft, busy, apply, snap]);
 
   useTelegramMainButton({ text: "Сохранить", visible: dirty, disabled: busy, onClick: save });
 

@@ -15,11 +15,9 @@
     "tiktok": "https://tiktok.com/@shirin.sweets.dushanbe",
     "facebook": "https://www.facebook.com/shirin.sweets.dushanbe",
     "address": {
-      "ru": "Душанбе, Водонасос, дом Додо Пицца",
-      "tg": "Душанбе, Водонасос, бинои Додо Пицца"
-    },
-    "street": "Водонасос, дом Додо Пицца",
-    "maps": "https://maps.google.com/?q=%D0%94%D1%83%D1%88%D0%B0%D0%BD%D0%B1%D0%B5%2C%20%D0%92%D0%BE%D0%B4%D0%BE%D0%BD%D0%B0%D1%81%D0%BE%D1%81%2C%20%D0%B4%D0%BE%D0%BC%20%D0%94%D0%BE%D0%B4%D0%BE%20%D0%9F%D0%B8%D1%86%D1%86%D0%B0"
+      "ru": "Душанбе, ориентир Воданасос, Рудаки 177",
+      "tg": "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177"
+    }
   },
   "offline": {
     "price": 700,

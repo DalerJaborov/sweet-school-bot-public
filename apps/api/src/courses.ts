@@ -28,7 +28,9 @@ import { COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./prices.js";
 
 /** Допуск ВНИЗ — на комиссию банка: между Алиф, ДС и Хумо удерживается процент,
  *  и из отправленных 50 доходит 45–48. Человек заплатил полную цену. */
-const DOWN = 6;
+export const PAYMENT_TOLERANCE_DOWN = 6;
+// Экспорт — для проверки цен в «Цены и даты» (offerService.checkOffer).
+const DOWN = PAYMENT_TOLERANCE_DOWN;
 /** Вверх допуск шире: заплатить больше можно (округлил, добавил комиссию сверху). */
 const UP = 30;
 

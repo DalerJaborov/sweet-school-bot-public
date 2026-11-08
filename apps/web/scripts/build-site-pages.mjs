@@ -66,7 +66,7 @@ const ICONS = {
  * его видит статический предпросмотр и показывает Nginx, если API не ответил.
  * Кавычки одинарные — вставка может оказаться внутри атрибута и JSON-LD.
  */
-const OFFER_TOKEN = /\{\{(offline\.(?:price|days|daysRu|desserts|dessertsRu|timeFrom|timeTo|hours))\}\}/g;
+const OFFER_TOKEN = /\{\{(offline\.(?:price|days|daysRu|desserts|dessertsRu|timeFrom|timeTo|hours)|contact\.(?:address|street|mapsQuery))\}\}/g;
 
 /** Запасное «8 дней» / «21 десерт» — та же грамматика, что у API (offlineFacts.pluralRu). */
 function pluralRu(n, one, few, many) {
@@ -78,7 +78,18 @@ function pluralRu(n, one, few, many) {
 }
 const OFFER_INCLUDE = "<!--# include virtual='/_site/offer-fact?key=";
 
-export function offerFallback(site, key) {
+/** Адрес без города — для JSON-LD (город там отдельным полем); как offlineFacts.streetAddress. */
+function streetOf(address) {
+  return String(address).replace(/^\s*Душанбе\s*,\s*/u, "").trim() || address;
+}
+
+export function offerFallback(site, key, lang = "ru") {
+  // Адрес очного курса (08.11.2026): то же поле панели, что у бота; запасное —
+  // site.json → contacts.address. Экранирование — под место вставки.
+  const address = site.contacts.address?.[lang] || site.contacts.address?.ru;
+  if (key === "contact.address") return esc(address);
+  if (key === "contact.street") return JSON.stringify(streetOf(address)).slice(1, -1).replace(/</g, "\\u003c").replace(/'/g, "\\u0027");
+  if (key === "contact.mapsQuery") return encodeURIComponent(site.contacts.address.ru);
   const [from, to] = String(site.offline.hours).split("–");
   const value = {
     "offline.price": site.offline.price,
@@ -94,11 +105,12 @@ export function offerFallback(site, key) {
   return esc(value);
 }
 
-export function applyOfferFacts(html, site) {
+export function applyOfferFacts(html, site, lang = "ru") {
   let n = 0;
   return html.replace(OFFER_TOKEN, (_m, key) => {
     const name = `offer${++n}`;
-    return `<!--# block name='${name}' -->${offerFallback(site, key)}<!--# endblock -->${OFFER_INCLUDE}${key}' stub='${name}' -->`;
+    const query = key.startsWith("contact.") ? `${key}&lang=${lang}` : key;
+    return `<!--# block name='${name}' -->${offerFallback(site, key, lang)}<!--# endblock -->${OFFER_INCLUDE}${query}' stub='${name}' -->`;
   });
 }
 
@@ -273,7 +285,7 @@ function renderFooter(site, lang, ctx) {
       <p><strong>${esc(site.brand)}</strong> · ${esc(ui.tagline)}</p>
       <p style="margin-top:8px;max-width:60ch">${esc(ui.footerAbout)}</p>
       <p class="footer-phone"><a href="tel:${esc(site.contacts.phone)}">${esc(site.contacts.phoneDisplay)}</a></p>
-      ${site.contacts.address ? `<p class="footer-address"><a href="${esc(site.contacts.maps)}" target="_blank" rel="noopener">${esc(site.contacts.address[lang] || site.contacts.address.ru)}</a></p>` : ""}
+      ${site.contacts.address ? `<p class="footer-address"><a href="https://maps.google.com/?q={{contact.mapsQuery}}" target="_blank" rel="noopener">{{contact.address}}</a></p>` : ""}
       <ul class="social-row">
         <li><a class="social" href="${esc(site.contacts.whatsapp)}" rel="noopener" aria-label="WhatsApp">${ICONS.whatsapp}</a></li>
         <li><a class="social" href="${esc(site.contacts.telegram)}" rel="noopener" aria-label="Telegram">${ICONS.telegram}</a></li>
@@ -651,7 +663,7 @@ const SECTIONS = {
       )}<small>${esc(sub)}</small></span></a></li>`;
     const list = `<ul class="contacts">
       ${item(`tel:${c.phone}`, "phone", ui.phone, c.phoneDisplay, false)}
-      ${c.address ? item(c.maps, "map", lang === "tg" ? "Суроға" : "Адрес", c.address[lang] || c.address.ru) : ""}
+      ${c.address ? item("https://maps.google.com/?q={{contact.mapsQuery}}", "map", lang === "tg" ? "Суроға" : "Адрес", "{{contact.address}}") : ""}
       ${item(ctx.wa, "whatsapp", ui.whatsapp, c.phoneDisplay)}
       ${item(c.telegram, "telegram", ui.telegram, c.telegramHandle)}
       ${item(c.instagram, "instagram", ui.instagram, c.instagramHandle)}
@@ -690,7 +702,7 @@ function ldOrganization(site, lang) {
     telephone: site.contacts.phone,
     address: {
       "@type": "PostalAddress",
-      streetAddress: site.contacts.street,
+      streetAddress: "{{contact.street}}",
       addressLocality: "Душанбе",
       addressCountry: "TJ",
     },
@@ -741,7 +753,7 @@ function ldCourse(site, page, lang, mode) {
         name: "Shirin Sweets",
         address: {
           "@type": "PostalAddress",
-          streetAddress: site.contacts.street,
+          streetAddress: "{{contact.street}}",
           addressLocality: "Душанбе",
           addressCountry: "TJ",
         },
@@ -926,7 +938,7 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
     <script type="module" src="/src/site/main.tsx"></script>
   </body>
 </html>
-`, site);
+`, site, lang);
 }
 
 /**

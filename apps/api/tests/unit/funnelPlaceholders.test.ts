@@ -31,8 +31,8 @@ describe("renderFunnelText", () => {
   });
   it("прошедшая дата — «уточняется», а не прошлый набор", async () => {
     store.set("offlineCourseStartDate", "2020-01-10");
-    expect(await renderFunnelText("Старт {дата}")).toBe("Старт дата следующего набора уточняется");
-    expect(await renderFunnelText("Оғоз {дата} шумо")).toBe("Оғоз санаи қабули оянда аниқ мешавад шумо");
+    expect(await renderFunnelText("Курс начнётся {дата}, записывайтесь")).toBe("Курс начнётся (дата уточняется), записывайтесь");
+    expect(await renderFunnelText("Курси ояндамон {дата} сар мешавад, ҳамин шумо")).toBe("Курси ояндамон (сана ҳоло аниқ нест) сар мешавад, ҳамин шумо");
   });
   it("время не задано — часы по умолчанию из «Цены и даты», старая запись приводится к ЧЧ:ММ–ЧЧ:ММ", async () => {
     store.delete("offlineCourseHours");

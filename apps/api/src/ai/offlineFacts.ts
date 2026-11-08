@@ -26,7 +26,10 @@ export type OfflineFacts = {
   seats: number | null;
 };
 
-export const DEFAULT_OFFLINE_ADDRESS_TG = "Душанбе, Водонасос, бинои Додо Пицца";
+// Адрес сменился (решение владельца 08.11.2026): ориентир Воданасос, Рудаки 177;
+// «дом Додо Пицца» устарел. Таджикская формулировка — по образцу прежней
+// («кӯчаи Рӯдакӣ»); носителем не проверена (в tajik-phrasebook по адресам нет данных).
+export const DEFAULT_OFFLINE_ADDRESS_TG = "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177";
 
 export const DEFAULT_OFFLINE_FACTS: OfflineFacts = {
   price: 700,
@@ -34,7 +37,7 @@ export const DEFAULT_OFFLINE_FACTS: OfflineFacts = {
   hours: "13:40–16:30",
   // 21 — подтвердил владелец 08.11.2026 (было 20 и на сайте, и в карточке).
   desserts: 21,
-  address: "Душанбе, Водонасос, дом Додо Пицца",
+  address: "Душанбе, ориентир Воданасос, Рудаки 177",
   seats: null,
 };
 
@@ -78,6 +81,11 @@ export function pluralRu(n: number, one: string, few: string, many: string): str
 /** «8 дней», «21 десерт» — для текстов сайта и карточки, где число меняется в панели. */
 export const daysWordRu = (n: number): string => `${n} ${pluralRu(n, "день", "дня", "дней")}`;
 export const dessertsWordRu = (n: number): string => `${n} ${pluralRu(n, "десерт", "десерта", "десертов")}`;
+
+/** Адрес без города — для разметки поисковиков (город там отдельным полем). */
+export function streetAddress(address: string): string {
+  return address.replace(/^\s*Душанбе\s*,\s*/u, "").trim() || address;
+}
 
 /** Адрес для таджикской версии: по умолчанию — переведённый, свой — как есть. */
 export function offlineAddress(facts: OfflineFacts, language: "ru" | "tg"): string {

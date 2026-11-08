@@ -14,6 +14,7 @@ import { offlineCourseCard, offlineFactsForModel } from "../../src/ai/offlineCou
 import { courseDateLabel } from "../../src/ai/courseDate.js";
 import { renderFunnelText } from "../../src/funnelPlaceholders.js";
 import { writeSettings } from "../../src/services/settingsService.js";
+import { adminTokenSecret } from "../../src/adminLogin.js";
 
 let server: Server;
 let base = "";
@@ -41,6 +42,7 @@ type Snapshot = {
     offline: { ru: string; tg: string; source: string };
   };
   history: { field: string; before: string; after: string; actor: string }[];
+  version: string;
 };
 
 const FUTURE = "2099-12-01";
@@ -66,6 +68,9 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
       store[where.key] = create.value;
       return {};
     });
+    db.model("setting").findMany.mockImplementation(async ({ where }: { where: { key: { in: string[] } } }) =>
+      where.key.in.filter((k) => store[k] !== undefined).map((key) => ({ key, value: store[key] })),
+    );
     db.model("course").updateMany.mockResolvedValue({ count: 1 });
     db.model("offerChange").create.mockImplementation(
       async ({ data }: { data: { field: string; before: string; after: string; actor: string } }) => {
@@ -78,12 +83,15 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
   afterEach(restorePrisma);
 
   const get = async () => (await (await fetch(`${base}/admin/v1/offer`)).json()) as Snapshot;
-  const put = (offer: unknown, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
-    fetch(`${base}/admin/v1/offer`, {
+  /** Сохранение с версией, как у экрана; без явной версии берём текущую. */
+  const put = async (offer: unknown, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) => {
+    const version = "version" in extra ? extra.version : (await get()).version;
+    return fetch(`${base}/admin/v1/offer`, {
       method: "PUT",
       headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify({ offer, ...extra }),
+      body: JSON.stringify({ offer, ...extra, version }),
     });
+  };
 
   it("GET — подтверждённые умолчания, даты нет и не придумана, бот говорит «уточняется»", async () => {
     const s = await get();
@@ -125,7 +133,7 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
     expect(journal.find((j) => j.field === "prices.course50")).toMatchObject({
       before: "50",
       after: "55",
-      actor: "пароль панели",
+      actor: "админ панели",
     });
     expect(journal.find((j) => j.field === "offline.startDate")).toMatchObject({ before: "", after: FUTURE });
     expect(catalogReset).toHaveBeenCalled();
@@ -145,20 +153,25 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
 
   it("кто сохранил: Telegram-вход и Access попадают в журнал", async () => {
     const s = await get();
-    const token = jwt.sign({ role: "admin", via: "telegram", tgId: 777 }, "x");
+    const token = jwt.sign({ role: "admin", via: "telegram", tgId: 777 }, adminTokenSecret());
     await put(
       { ...s.offer, offline: { ...s.offer.offline, address: "Душанбе, Айни 10" } },
       {},
       { authorization: `Bearer ${token}` },
     );
     expect(journal[0]).toMatchObject({ field: "offline.address", actor: "Telegram 777" });
+    // Вход по паролю (Access не настроен): чужой заголовок Access в журнал не попадает.
     const access = jwt.sign({ email: "owner@example.com" }, "x");
     await put(
       { ...s.offer, offline: { ...s.offer.offline, address: "Душанбе, Айни 12" } },
       {},
       { "cf-access-jwt-assertion": access },
     );
-    expect(journal[0]).toMatchObject({ actor: "owner@example.com" });
+    expect(journal[0]).toMatchObject({ field: "offline.address", actor: "админ панели" });
+    // Неподписанный «телеграм»-токен тоже не принимается за имя.
+    const forged = jwt.sign({ role: "admin", via: "telegram", tgId: 1 }, "not-the-secret");
+    await put({ ...s.offer, offline: { ...s.offer.offline, address: "Душанбе, Айни 14" } }, {}, { authorization: `Bearer ${forged}` });
+    expect(journal[0].actor).toBe("админ панели");
   });
 
   it.each([
@@ -174,6 +187,9 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
     ],
     ["комплект дороже двух курсов", (o: Offer) => ({ ...o, prices: { ...o.prices, bundle: 125 } }), "prices.bundle"],
     ["комплект дешевле дорогого курса", (o: Offer) => ({ ...o, prices: { ...o.prices, bundle: 69 } }), "prices.bundle"],
+    // Деньги: 72 − 6 = 66 ≤ 70 — оплату «21 рецепт» бот принял бы за комплект.
+    ["50/70/72: комплект в допуске дорогого курса", (o: Offer) => ({ ...o, prices: { course50: 50, course70: 70, bundle: 72 } }), "prices.bundle"],
+    ["курсы почти одной цены (60/70)", (o: Offer) => ({ ...o, prices: { course50: 60, course70: 70, bundle: 100 } }), "prices.course70"],
   ])("400: %s — ничего не записано", async (_name, mutate, field) => {
     const s = await get();
     const res = await put(mutate(s.offer));
@@ -188,7 +204,7 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
     const s = await get();
     const next = { ...s.offer, prices: { ...s.offer.prices, course70: 7 } };
     // 7 вместо 70 — классическая опечатка; заодно комплект должен остаться валидным.
-    const typo = await put({ ...next, prices: { course50: 50, course70: 7, bundle: 50 } });
+    const typo = await put({ ...next, prices: { course50: 50, course70: 7, bundle: 57 } });
     expect(typo.status).toBe(409);
     const body = (await typo.json()) as { confirm: { field: string; percent: number }[] };
     expect(body.confirm.map((c) => c.field)).toEqual(["prices.course70", "prices.bundle"]);
@@ -209,6 +225,35 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
     const res = await put({ ...s.offer, offline: { ...s.offer.offline, price: 750 } });
     expect(res.status).toBe(200);
     expect(await courseDateLabel("ru")).toBe("дата следующего набора уточняется");
+  });
+
+  it("две вкладки: сохранение по устаревшей версии — 409 «обновите страницу», ничего не записано", async () => {
+    const tabA = await get();
+    const tabB = await get();
+    expect((await put({ ...tabA.offer, offline: { ...tabA.offer.offline, price: 750 } }, { version: tabA.version })).status).toBe(200);
+    const res = await put({ ...tabB.offer, prices: { ...tabB.offer.prices, course50: 55 } }, { version: tabB.version });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ stale: true, error: expect.stringMatching(/обновите страницу/) });
+    expect(store.priceCourse50).toBe("50");
+    expect(store.offlineCoursePrice).toBe("750");
+    expect((await put(tabB.offer, { version: "" })).status).toBe(409);
+  });
+
+  it("Course.price (витрина) выравнивается при каждом сохранении, даже если цены не менялись", async () => {
+    const s = await get();
+    await put({ ...s.offer, offline: { ...s.offer.offline, address: "Душанбе, Айни 10" } });
+    expect(db.model("course").updateMany).toHaveBeenCalledWith({ where: { code: "COURSE70" }, data: { price: 70 } });
+  });
+
+  it("набор дальше полугода — предупреждение «проверьте год»", async () => {
+    const s = await get();
+    const res = await fetch(`${base}/admin/v1/offer/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ offer: { ...s.offer, offline: { ...s.offer.offline, startDate: FUTURE } } }),
+    });
+    const body = (await res.json()) as { check: { warnings: string[] } };
+    expect(body.check.warnings.join(" ")).toMatch(/больше чем через полгода.*проверьте год/);
   });
 
   it("свой текст карточки важнее полей — предпросмотр показывает его и помечает", async () => {

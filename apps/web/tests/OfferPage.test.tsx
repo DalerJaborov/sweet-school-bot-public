@@ -17,7 +17,7 @@ const offer: Offer = {
     startDate: "",
     timeFrom: "13:40",
     timeTo: "16:30",
-    address: "Душанбе, Водонасос, дом Додо Пицца",
+    address: "Душанбе, ориентир Воданасос, Рудаки 177",
     seats: null,
     days: 8,
     desserts: 21,
@@ -26,6 +26,7 @@ const offer: Offer = {
 
 const snapshot = (o: Offer, extra: Partial<OfferSnapshot> = {}): OfferSnapshot => ({
   offer: o,
+  version: "v1",
   defaults: offer,
   today: "2026-11-08",
   warnings: o.offline.startDate ? [] : ["Дата набора не задана — клиентам скажем, что дата уточняется"],
@@ -43,9 +44,10 @@ const snapshot = (o: Offer, extra: Partial<OfferSnapshot> = {}): OfferSnapshot =
   ...extra,
 });
 
-type Call = { url: string; method: string; body?: { offer: Offer; confirm?: boolean } };
+type Call = { url: string; method: string; body?: { offer: Offer; confirm?: boolean; version?: string } };
 
-function mockApi(opts: { confirmFirst?: boolean } = {}) {
+function mockApi(opts: { confirmFirst?: boolean; stale?: boolean; slowFirstPreview?: boolean } = {}) {
+  let previews = 0;
   const calls: Call[] = [];
   let current = offer;
   vi.stubGlobal(
@@ -58,10 +60,15 @@ function mockApi(opts: { confirmFirst?: boolean } = {}) {
         return new Response(JSON.stringify(snapshot(current)), { status: 200 });
       if (url === "/admin/v1/offer/preview") {
         const o = body!.offer;
+        // Первый ответ приходит позже второго — экран не должен показать устаревший.
+        if (opts.slowFirstPreview && ++previews === 1) await new Promise((r) => setTimeout(r, 900));
         return new Response(
           JSON.stringify({ preview: snapshot(o).preview, check: { errors: {}, confirm: [], warnings: [] } }),
           { status: 200 },
         );
+      }
+      if (url === "/admin/v1/offer" && method === "PUT" && opts.stale) {
+        return new Response(JSON.stringify({ error: "Кто-то уже изменил цены или даты — обновите страницу и проверьте", stale: true }), { status: 409 });
       }
       if (url === "/admin/v1/offer" && method === "PUT") {
         if (opts.confirmFirst && !body?.confirm) {
@@ -166,5 +173,36 @@ describe("OfferPage «Цены и даты»", () => {
     await screen.findByRole("button", { name: "Всё сохранено" });
     const puts = calls.filter((c) => c.method === "PUT");
     expect(puts.map((p) => p.body?.confirm)).toEqual([false, true]);
+  });
+
+  it("сохранение уходит с версией; чужая правка между — понятная ошибка, без «Точно?»", async () => {
+    const calls = mockApi({ stale: true });
+    render(
+      <>
+        <OfferPage />
+        <ConfirmHost />
+      </>
+    );
+    fireEvent.change((await screen.findAllByLabelText("Цена, сомони"))[0], { target: { value: "55" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    });
+    expect(await screen.findByText(/Кто-то уже изменил цены или даты — обновите страницу/)).toBeTruthy();
+    expect(screen.queryByText("Точно меняем цену?")).toBeNull();
+    expect(calls.find((c) => c.method === "PUT")?.body?.version).toBe("v1");
+  });
+
+  it("устаревший ответ предпросмотра не перезаписывает свежий", async () => {
+    mockApi({ slowFirstPreview: true });
+    render(<OfferPage />);
+    const [art] = await screen.findAllByLabelText("Цена, сомони");
+    fireEvent.change(art, { target: { value: "51" } });
+    await new Promise((r) => setTimeout(r, 400));
+    fireEvent.change(art, { target: { value: "52" } });
+    expect(await screen.findByText("Арт-десерты — 52 сомони")).toBeTruthy();
+    // Первый (медленный) ответ приходит уже после второго.
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(screen.queryByText("Арт-десерты — 51 сомони")).toBeNull();
+    expect(screen.getByText("Арт-десерты — 52 сомони")).toBeTruthy();
   });
 });

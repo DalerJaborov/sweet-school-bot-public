@@ -1,5 +1,5 @@
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
-import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError } from "./ai/replyPolicy.js";
+import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError, CONTEXT_ONLY_AMOUNT, COURSE_DATE_FACT } from "./ai/replyPolicy.js";
 import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
@@ -936,10 +936,15 @@ import { confirmRequisitesToCustomer, handleReceiptVerdict } from "./ai/receiptV
 export { handleReceiptVerdict };
 
 
-/** Суммы, которые боту разрешено назвать (replyPolicy держит ответ с любой
- *  другой). Сумма двух курсов по отдельности — тоже правда («100 вместо 120»),
- *  без неё такой честный ответ задерживался как «неподтверждённая сумма». */
+/** Факты, по которым replyPolicy проверяет ответ перед отправкой: суммы,
+ *  телефон и дата набора. Сумма двух курсов по отдельности разрешена ТОЛЬКО
+ *  рядом с «вместо»/«по отдельности» («100 вместо 120» — правда, «за оба 120»
+ *  — нет, решение владельца 05.09.2026). Дата набора — та, что в «Цены и
+ *  даты», или никакая: другая дата в ответе про курс задерживает его. */
 export async function trustedSalesFacts(): Promise<string> {
-  const [texts, offline, prices] = await Promise.all([getSalesTexts(), getOfflineFacts(), getPrices()]);
-  return `${texts.priceLineRu}. По отдельности оба — ${prices.bundleFull} сомони. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони`;
+  const [texts, offline, prices, date] = await Promise.all([getSalesTexts(), getOfflineFacts(), getPrices(), courseDateLabel("ru")]);
+  return (
+    `${texts.priceLineRu}. ${CONTEXT_ONLY_AMOUNT} ${prices.bundleFull} сомони. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони. ` +
+    `${COURSE_DATE_FACT} ${date}.`
+  );
 }

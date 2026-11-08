@@ -22,7 +22,7 @@ http.createServer((req, res) => {
   if (url.pathname === "/api/site/offer-fact") {
     if (req.headers.cookie || req.headers.authorization) { res.statusCode = 500; return res.end("credentials must not reach the SSI request"); }
     if (mode === "error") { res.statusCode = 503; return res.end(""); }
-    const facts = { "offline.price": "777", "offline.days": "9", "offline.daysRu": "9 дней", "offline.desserts": "23", "offline.dessertsRu": "23 десерта", "offline.timeFrom": "09:15", "offline.timeTo": "12:45", "offline.hours": "09:15–12:45" };
+    const facts = { "offline.price": "777", "offline.days": "9", "offline.daysRu": "9 дней", "offline.desserts": "23", "offline.dessertsRu": "23 десерта", "offline.timeFrom": "09:15", "offline.timeTo": "12:45", "offline.hours": "09:15–12:45", "contact.address": "Фикстура, улица 9", "contact.street": "улица 9", "contact.mapsQuery": "fixture%20street%209" };
     const value = facts[url.searchParams.get("key")];
     if (!value) { res.statusCode = 400; return res.end(""); }
     res.setHeader("Content-Type", "text/plain; charset=utf-8");

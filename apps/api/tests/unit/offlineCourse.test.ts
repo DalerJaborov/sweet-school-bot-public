@@ -19,15 +19,16 @@ function settings(values: Record<string, string>) {
 const OCT_3 = { year: 2026, month: 10, day: 3 };
 
 describe("текст карточки", () => {
-  it("в заготовке факты сайта: 700, 13:40–16:30, 21 десерт, Водонасос (08.11.2026)", () => {
+  it("в заготовке факты сайта: 700, 13:40–16:30, 21 десерт, Воданасос, Рудаки 177 (08.11.2026)", () => {
     for (const lang of ["ru", "tg"] as const) {
       const text = offlineCardDefault(lang, OCT_3);
       expect(text).toContain("700");
       expect(text).toContain("13:40");
       expect(text).toContain("16:30");
-      expect(text).toContain("Водонасос");
+      expect(text).toContain("Воданасос");
+      expect(text).toMatch(/Рудаки 177|Рӯдакӣ 177/);
       expect(text).toMatch(/21 (вид десертов|намуд)/);
-      expect(text).not.toMatch(/14:00|17:00|Рудаки|156а|20 (видов|намуд)/);
+      expect(text).not.toMatch(/14:00|17:00|156а|Додо|Водонасос|20 (видов|намуд)/);
     }
     expect(offlineCardDefault("ru", OCT_3)).toContain("Каждый день с 13:40 до 16:30");
     expect(offlineCardDefault("tg", OCT_3)).toContain("Ҳар рӯз аз 13:40 то 16:30");

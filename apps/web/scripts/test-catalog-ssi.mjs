@@ -73,6 +73,23 @@ try {
     }
     checks++;
   }
+  // Course address (footer, map link, JSON-LD) on every public page, incl. pages without prices.
+  for (const route of ["/sertifikat", "/tg/o-shirin", "/politika-konfidentsialnosti", "/"]) {
+    const html = await (await request(route)).text();
+    assert.doesNotMatch(html, /<!--#|\{\{contact|an error occurred while processing|Додо/, route);
+    assert.match(html, /Фикстура, улица 9/, route);
+    assert.match(html, /maps\.google\.com\/\?q=fixture%20street%209/, route);
+    assert.match(html, /"streetAddress":"улица 9"/, route);
+    checks++;
+  }
+  {
+    const missing = await request("/missing-course-page");
+    const html = await missing.text();
+    assert.equal(missing.status, 404);
+    assert.doesNotMatch(html, /<!--#/);
+    assert.match(html, /Фикстура, улица 9/);
+    checks++;
+  }
   assert.equal((await request("/_site/offer-fact?key=offline.price")).status, 404); checks++;
   assert.equal((await request("/tg/")).status, 301); checks++;
   assert.equal((await request("/_site/catalog-fragment?lang=ru")).status, 404); checks++;
@@ -95,12 +112,13 @@ try {
     assert.doesNotMatch(html, /83 сомон|91 сомон|97 сомон|147 сомон|an error occurred while processing/, mode);
     checks++;
   }
-  // API down: offline facts fall back to the build-time values, never an SSI error.
+  // API down: offline facts come from the 30 s micro-cache (stale allowed) or
+  // the build-time fallback — never an SSI error or an empty price.
   await request("/api/site/fixture?mode=error");
   {
     const html = await (await request("/kursy-konditera-dushanbe")).text();
-    assert.doesNotMatch(html, /<!--#|an error occurred while processing|777 сомон/);
-    assert.match(html, /700 сомон/);
+    assert.doesNotMatch(html, /<!--#|an error occurred while processing/);
+    assert.match(html, /(777|700) сомон/);
     checks++;
   }
   console.log(`Nginx SSI integration: ${checks} scenarios passed (synthetic catalogue only).`);
