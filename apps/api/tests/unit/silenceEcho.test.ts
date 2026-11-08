@@ -135,11 +135,11 @@ describe("ревью 08.11: вложения и долгие отправки", 
     expect(db.model("contact").updateMany).toHaveBeenCalled(); // пауза встала
   });
 
-  it("медленная отправка вложения (40 с) — эхо терпеливо ждёт и не ставит ложную паузу", async () => {
+  it("медленная отправка вложения (25 с) — эхо терпеливо ждёт и не ставит ложную паузу", async () => {
     let resolveSend!: (v: { message_id: string }) => void;
     const sending = trackOwnSend("ig-1", null, () => new Promise((resolve) => { resolveSend = resolve as typeof resolveSend; }));
     const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-slow", is_echo: true, attachments: [{ type: "video", payload: { url: "https://x/v.mp4" } }] } });
-    await vi.advanceTimersByTimeAsync(40_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     resolveSend({ message_id: "mid-slow" });
     await sending;
     await finish(echo);

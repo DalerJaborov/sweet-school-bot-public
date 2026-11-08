@@ -7,6 +7,8 @@ const shouldSendAlert = vi.fn(async (..._a: unknown[]) => true);
 vi.mock("../../src/alertGate.js", () => ({ shouldSendAlert: (...a: unknown[]) => shouldSendAlert(...a) }));
 const heal = vi.fn(async () => 0);
 vi.mock("../../src/ai/takeoverHeal.js", () => ({ healFalseTakeovers: () => heal() }));
+const queuePending = vi.fn(async (..._a: unknown[]) => undefined);
+vi.mock("../../src/aiReplyRetry.js", () => ({ queuePendingAiReply: (...a: unknown[]) => queuePending(...a) }));
 vi.mock("../../src/ai/geminiKeys.js", () => ({ resolveGeminiKeys: vi.fn(async () => ["key"]) }));
 
 import { checkUnansweredInbound } from "../../src/inboundWatch.js";
@@ -84,10 +86,31 @@ describe("сторож неотвеченных: тревога, когда бо
 
   it("подозрительная пауза (причина без текста, вложение) тревожит один раз на паузу", async () => {
     setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 3_600_000), humanTakeoverMid: "m-x" } });
-    db.model("message").findUnique.mockResolvedValue({ text: null });
+    db.model("message").findUnique.mockResolvedValue({ text: null, createdAt: inAt });
+    db.model("message").findFirst.mockResolvedValue({ id: "bot-media" }); // незадолго до этого бот сам слал вложение
     await checkUnansweredInbound(now);
     expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("без текста");
     expect(shouldSendAlert).toHaveBeenCalledWith("takeover:m-x", expect.anything());
+  });
+
+  it("фото или голос хозяйки (бот вложений не слал) — не наше эхо, тревоги нет", async () => {
+    setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 3_600_000), humanTakeoverMid: "m-x" } });
+    db.model("message").findUnique.mockResolvedValue({ text: null, createdAt: inAt });
+    db.model("message").findFirst.mockResolvedValue(null);
+    expect(await checkUnansweredInbound(now)).toBe(0);
+  });
+
+  it("заявка с сайта записана как входящее, но владельцу уже ушло своё уведомление — не тревожим", async () => {
+    setup({ text: "Заявка на офлайн-курс: Зарина, +992900000000" });
+    expect(await checkUnansweredInbound(now)).toBe(0);
+  });
+
+  it("WhatsApp: глушат только строки очереди, где ответа не будет (attention, blocked, expired, held)", async () => {
+    setup({ contact: { channel: "WHATSAPP" } });
+    await checkUnansweredInbound(now);
+    expect(db.model("whatsAppInbox").findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: { in: ["attention", "blocked", "expired", "held"] } }) })
+    );
   });
 
   it("пауза после «позовите человека»/реакции хозяйки (humanSilencedUntil) не тревожит", async () => {
@@ -218,6 +241,22 @@ describe("самолечение ложного «передано челове�
     expect(db.model("contact").updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { humanTakenOverAt: null, humanTakeoverMid: null } }),
     );
+  });
+
+  it("после снятия ложной паузы сообщение клиента, оставшееся без ответа, возвращается боту", async () => {
+    arrange({});
+    const after = new Date(t0.getTime() + 20_000);
+    db.model("message").findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ text: "А сколько стоит?", createdAt: after });
+    db.model("message").count.mockResolvedValue(0);
+    await realHeal();
+    expect(queuePending).toHaveBeenCalledWith("contact-1", "А сколько стоит?");
+  });
+
+  it("короткий текст («Хорошо, жду») по совпадению не лечим: слишком легко совпасть случайно", async () => {
+    arrange({});
+    db.model("message").findUnique.mockResolvedValue({ mid: "mid-echo", byHuman: true, direction: "OUT", text: "Хорошо, жду", createdAt: t0 });
+    db.model("message").findMany.mockResolvedValue([{ text: "Хорошо, жду" }]);
+    expect(await realHeal()).toBe(0);
   });
 
   it("текст не совпал — это настоящая хозяйка, пауза остаётся", async () => {
