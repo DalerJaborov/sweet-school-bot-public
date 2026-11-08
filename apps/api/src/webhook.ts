@@ -342,9 +342,9 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 /** Фото пришло, но скачать не вышло даже с повтором — просим прислать ещё раз,
  *  вместо того чтобы отвечать так, будто ничего не было (см. лог выше). */
 const COULD_NOT_LOAD_PHOTO: Record<ClientLanguage, string> = {
-  ru: "Вижу, что вы что-то прислали, но фото не загрузилось 🙏 Пришлите, пожалуйста, ещё раз.",
-  tg: "Мебинам, ки чизе фиристодед, аммо расм бор нашуд 🙏 Лутфан бори дигар фиристед.",
-  en: "I can see you sent something, but the photo didn't load 🙏 Could you send it again?",
+  ru: "Вижу, что вы что-то прислали, но фото не загрузилось. Пришлите ещё раз",
+  tg: "Мебинам ки чизе фиристодед, аммо сурат кушода нашуд. Боз як бор фиристен",
+  en: "I can see you sent something, but the photo didn't load. Could you send it again?",
 };
 
 const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> = {

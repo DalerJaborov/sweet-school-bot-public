@@ -1,4 +1,5 @@
 import { cleanKeepingWarmTail } from "../ai/replyPolicy.js";
+import { humanizeForContact } from "./humanize.js";
 import crypto from "node:crypto";
 import { prisma, WEB_MID_PREFIX, recordOutgoingMessage, logError } from "../db.js";
 import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
@@ -47,7 +48,7 @@ export async function sendToContact(
   buttons: QuickButton[] = [],
   opts: SendOptions = {}
 ): Promise<string | null> {
-  if (!opts.byHuman) text = cleanKeepingWarmTail(text);
+  if (!opts.byHuman) text = await humanizeForContact(contact.id, cleanKeepingWarmTail(text));
   if (!text.trim()) return null;
   const purpose: MessagePurpose = opts.purpose ?? (opts.byHuman ? "human" : "reply");
   return withContactMessaging(contact.id, purpose, () => opts.byHuman && !opts.purpose

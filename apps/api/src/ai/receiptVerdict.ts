@@ -24,9 +24,9 @@ export { receiptAccepted };
  *  решение владельца 25.08.2026 веч.: сначала дать клиенту шанс самому
  *  разобраться, а не сразу звать владельца на каждый нечёткий чек. */
 const ALT_SCREENSHOT_TEXT: Record<ClientLanguage, string> = {
-  ru: "Чек не совсем понятно читается. Пришлите, пожалуйста, ещё один — можно из истории банка или под другим углом, так быстрее разберёмся.",
-  tg: "Чек чандон возеҳ дида намешавад. Лутфан сурати дигар фиристед — метавонед аз таърихи бонк гиред ё аз кунҷи дигар суратгирӣ кунед.",
-  en: "Hi! The receipt isn't fully readable — could you send another one? From your bank history or a different angle works too.",
+  ru: "Чек плохо читается. Пришлите ещё один скрин, можно из истории банка",
+  tg: "Чек хуб маълум нест. Боз як скриншот фиристен, аз истории банк хам мешавад",
+  en: "The receipt isn't readable. Could you send another screenshot? One from your bank history works too",
 };
 
 /**
@@ -51,9 +51,9 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
   const texts = await getSalesTexts();
   const line = paymentLine(texts);
   const byLang: Record<ClientLanguage, string> = {
-    ru: `Да, всё верно: ${line} — это наш номер, получатель ${texts.paymentRecipient}. Переводите и пришлите сюда чек — открою доступ.`,
-    tg: `Ҳа, ҳамааш дуруст: ${line} — рақами мо, қабулкунанда ${texts.paymentRecipient}. Интиқол кунед ва чекро ҳамин ҷо фиристед — дастрасиро мекушоям.`,
-    en: `Yes, that's correct: ${line} — our number, recipient ${texts.paymentRecipient}. Send the transfer and the receipt here, and I'll open access.`,
+    ru: `Да, всё верно, это наш номер: ${line}. Переводите и пришлите сюда чек, открою уроки`,
+    tg: `Ха, дуруст, раками мо: ${line}. Пулро гузаронен, чекро хамин чо фиристен, дарсхоя мекушоям`,
+    en: `Yes, that's correct, it's our number: ${line}. Send the transfer and the receipt here, and I'll open the lessons`,
   };
   const lastIn = lastText?.trim()
     ? { text: lastText }
@@ -71,9 +71,9 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
  *  открыла доступ). Раньше 70 сомони дважды открывали ВТОРОЙ курс как новую покупку. */
 const DUPLICATE_WINDOW_MS = 48 * 3_600_000;
 const DUPLICATE_PAYMENT_TEXT: Record<ClientLanguage, string> = {
-  ru: "Этот перевод мы уже приняли — ссылка на уроки выше в этом чате. Если это другая оплата, напишите, разберёмся.",
-  tg: "Ин интиқолро аллакай қабул кардем — ссылка ба дарсҳо болотар дар ҳамин чат аст. Агар ин пардохти дигар бошад, нависед, мефаҳмем.",
-  en: "We've already accepted this transfer — the lesson link is above in this chat. If this is a different payment, let us know.",
+  ru: "Этот перевод уже приняли, ссылка на уроки выше в этом чате. Если это другая оплата, напишите",
+  tg: "Ин пулро гирифтем, ссылкаи дарсхо болотар хаст. Агар дигар пардохт бошад, нависен",
+  en: "We've already accepted this transfer, the lesson link is above in this chat. If it's a different payment, let us know",
 };
 
 /**
@@ -89,9 +89,9 @@ const DUPLICATE_PAYMENT_TEXT: Record<ClientLanguage, string> = {
  * разбор и сразу, и из очереди перепроверки.
  */
 const FORWARDED_TO_OWNER_TEXT: Record<ClientLanguage, string> = {
-  ru: "Чек получила, передаю Ширин на проверку. Ссылка на уроки придёт сюда же — обычно в течение часа, ночью — утром.",
-  tg: "Чекро гирифтам, ба Ширин барои тафтиш медиҳам. Ссылка ба дарсҳо ҳамин ҷо меояд — одатан дар давоми як соат, шабона — пагоҳӣ.",
-  en: "Got your receipt, passing it to Shirin to check. The lesson link will arrive right here — usually within an hour, overnight — in the morning.",
+  ru: "Чек получила, передаю Ширин на проверку. Ссылка на уроки придёт сюда, обычно в течение часа, а ночью утром",
+  tg: "Чекро гирифтам, ба Ширин барои тафтиш медихам. Ссылкаи дарсхо хамин чо меояд, одатан дар як соат, шаб бошад пагох",
+  en: "Got your receipt, passing it to Shirin to check. The lesson link will arrive right here, usually within an hour, overnight in the morning",
 };
 
 export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: { id: string }): Promise<void> {

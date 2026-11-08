@@ -174,8 +174,9 @@ describe("Статичные страницы сайта", () => {
     expect(art).not.toMatch(/макарон|Три шоколада|Бот проверяет чек|чек в чат на сайте/i);
     expect(files.get("tg/art-desserty.html")).toContain("10 дарс");
     for (const [, body] of html) {
-      // Адрес сменился 08.11.2026: «Рудаки 156а» и «дом Додо Пицца» больше нигде не звучат.
-      expect(body).not.toMatch(/14:00|17:00|156а|Додо|Dodo|Водонасос|Пример отзыва|Мадина|Нигора|Фарзона/);
+      // Адрес 08.11.2026 (вечер, карточка владельца): «Рудаки 156, Воданасос, дом Додо Пицца»;
+      // старые «156а» и «Водонасос» больше нигде не звучат.
+      expect(body).not.toMatch(/14:00|17:00|156а|Водонасос|Рудаки 177|Пример отзыва|Мадина|Нигора|Фарзона/);
     }
     expect(files.get("kursy-konditera-dushanbe.html")).toContain("13:40–16:30");
     expect(files.get("ru/index.html")).toContain("Клубника в шоколаде");
@@ -222,7 +223,7 @@ describe("Факты очного курса — из панели через SS
 });
 
 describe("Адрес очного курса — одно поле панели (08.11.2026)", () => {
-  it("подвал, ссылка на карту и JSON-LD каждой страницы — из /_site/offer-fact, с запасным «Воданасос, Рудаки 177»", () => {
+  it("подвал, ссылка на карту и JSON-LD каждой страницы — из /_site/offer-fact, с запасным «Рудаки 156, Воданасос, дом Додо Пицца»", () => {
     for (const [file, body] of raw) {
       const lang = file === "site.html" || file.startsWith("tg/") ? "tg" : "ru";
       expect(body, file).toContain(`offer-fact?key=contact.address&lang=${lang}`);
@@ -230,14 +231,14 @@ describe("Адрес очного курса — одно поле панели 
       expect(body, file).toContain("offer-fact?key=contact.mapsQuery");
       const plain = resolveSsiFallback(body);
       expect(plain, file).toContain(
-        lang === "tg" ? "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177" : "Душанбе, ориентир Воданасос, Рудаки 177",
+        lang === "tg" ? "Душанбе, Рудаки 156, Воданасос, доми Додо Пицца" : "Душанбе, Рудаки 156, Воданасос, дом Додо Пицца",
       );
       expect(plain, file).toContain(
-        `https://maps.google.com/?q=${encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177")}`,
+        `https://maps.google.com/?q=${encodeURIComponent("Душанбе, Рудаки 156, Воданасос, дом Додо Пицца")}`,
       );
       const ld = plain.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1];
       expect(JSON.stringify(JSON.parse(ld))).toMatch(
-        /"streetAddress":"(ориентир Воданасос, Рудаки 177|назди Воданасос, кӯчаи Рӯдакӣ 177)"/,
+        /"streetAddress":"Рудаки 156, Воданасос, доми? Додо Пицца"/,
       );
     }
   });

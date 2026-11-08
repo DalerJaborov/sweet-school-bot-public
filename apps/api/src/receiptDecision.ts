@@ -27,13 +27,13 @@ export type CourseChoice = Course | "BOTH";
  * нормальный чек. Рядом всё уже двуязычно (receiptVerdict.ts, offlineCourse.ts)
  * — здесь тот же приём: язык по последнему входящему.
  */
-const REJECT_TEXT: Record<ClientLanguage, string> = {
+export const REJECT_TEXT: Record<ClientLanguage, string> = {
   tg:
-    "Пардо, пардохт ҳоло тасдиқ нашуд. Лутфан як бори дигар тафтиш кунед ва чеки дурустро " +
-    "равон кунед (метавонед аз таърихи бонк гиред). Ё занг занед: 905 355 355",
+    "Бубахшед, пардохт хозир тасдик нашуд. Боз як бор тафтиш кунен ва чеки дурустро фиристен, " +
+    "аз истории банк хам мешавад. Ё занг занен: 905 355 355",
   ru:
-    "Извините, оплату пока не удалось подтвердить. Проверьте, пожалуйста, ещё раз и пришлите " +
-    "правильный чек (можно взять из истории банка). Или позвоните: 905 355 355",
+    "Извините, оплату пока не удалось подтвердить. Проверьте ещё раз и пришлите правильный чек, " +
+    "можно из истории банка. Или позвоните: 905 355 355",
   en:
     "Sorry, we couldn't confirm the payment yet. Please double-check and send the correct receipt " +
     "(you can take it from your bank history). Or call: 905 355 355",
@@ -41,7 +41,7 @@ const REJECT_TEXT: Record<ClientLanguage, string> = {
 
 /** Признаки того, что клиентку уже просили прислать чек/другой скриншот. */
 const ASKED_FOR_RECEIPT =
-  /Пришлите, пожалуйста, ещё один|Лутфан сурати дигар фиристед|could you send another one|оплату пока не удалось подтвердить|пардохт ҳоло тасдиқ нашуд|confirm the payment yet/iu;
+  /Пришлите, пожалуйста, ещё один|Лутфан сурати дигар фиристед|could you send another one|оплату пока не удалось подтвердить|пардохт ҳоло тасдиқ нашуд|confirm the payment yet|Пришлите ещё один скрин|Боз як скриншот фиристен|send another screenshot|пардохт хозир тасдик нашуд/iu;
 
 export type ReceiptDecisionResult =
   | { ok: true; status: "rejected"; message: string }

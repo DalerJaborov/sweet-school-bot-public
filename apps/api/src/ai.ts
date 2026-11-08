@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
+import { humanizeForContact } from "./messaging/humanize.js";
+import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
 import {
   isBotFrozen,
   assertAutomationAllowed,
@@ -25,7 +27,7 @@ import { sendMenuImages } from "./ai/menuImages.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
-import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { detectClientLanguage, detectReplyLanguage, languageSignal, conversationLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
 import { BUDGET_FALLBACK } from "./ai/prompts.js";
 import { buildSystemPrompt, getSalesTexts, getOfflineFacts } from "./services/salesTextsService.js";
@@ -258,7 +260,11 @@ export async function aiReply(
   }
   const primaryKey = apiKeys[0];
 
-  const language = detectClientLanguage(text);
+  // Голосовое WhatsApp приходит с пустым текстом, а «Салом» пишут на любом языке:
+  // в обоих случаях язык берём из прошлых написанных сообщений клиента, а не
+  // «таджикский по умолчанию» (владелец 08.11.2026).
+  const ownLanguage = languageSignal(text ?? "");
+  const language = ownLanguage ?? (await lastWrittenLanguage(contact.id));
 
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
@@ -478,7 +484,7 @@ export async function aiReply(
     // Отправка обёрнута нарочно: отказ Meta (закрылось окно 24 ч, 429) не должен
     // уносить с собой разбор чека, который ждёт ниже — он дороже ответа.
     let replyText = result.text
-      ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate)
+      ? await enforceReplyLanguage(contact, ownLanguage ? text : "", language, result.text, prompt, generate)
       : null;
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
@@ -504,7 +510,10 @@ export async function aiReply(
           replyText = null;
         }
       }
-      if (replyText) replyText = cleanAutomatedReply(replyText);
+      // Обращение «апачон» и дежурный хвост — до голоса и до текста: озвучке они
+      // так же чужие. Особые буквы и тире правит уже дверь отправки (humanizeForContact):
+      // голосу нужны буквы, тексту — по стилю собеседника.
+      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanAutomatedReply(replyText)));
       // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
       if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
         replyText = maybeWarmEmoji(replyText);
@@ -533,8 +542,11 @@ export async function aiReply(
         );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         for (const part of toSend) {
-          const mid = await sendToContact(contact, part);
-          await recordOutgoingMessage(contact.id, part, mid);
+          // В историю — ровно то, что увидел клиент (без тире, буквы по его стилю).
+          const shown = await humanizeForContact(contact.id, part);
+          if (!shown) continue;
+          const mid = await sendToContact(contact, shown);
+          await recordOutgoingMessage(contact.id, shown, mid);
         }
         // Реалтайм-версия «где бот застрял» — см. stuckAlert.ts. Fire-and-forget,
         // как markStartedLearningIfReplied выше: сбой здесь не должен трогать
@@ -634,7 +646,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     if (isSilentKind(verdict.kind)) return;
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
-    const guardedText = guardReply(verdict.kind, language);
+    const guardedText = await humanizeForContact(contact.id, guardReply(verdict.kind, language), [text]);
     await withContactMessaging(contact.id, "reply", () =>
       sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
     ).catch((err) => {
@@ -699,7 +711,8 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
     throw new ReplyPolicyError(issues);
   }
-  const clean = cleanAutomatedReply(result.text);
+  const clean = await humanizeForContact(contact.id, cleanAutomatedReply(result.text), [text]);
+  if (!clean) return;
   const mid = await withContactMessaging(contact.id, "reply", () =>
     sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
   );
@@ -790,6 +803,21 @@ const HUMAN_REQUESTED_SILENCE_MS = 60 * 60_000;
  *  Английский не трогаем: детектор ответа на латинице слишком груб, а промт с
  *  английским справляется. */
 const OPPOSITE: Partial<Record<ClientLanguage, ClientLanguage>> = { ru: "tg", tg: "ru" };
+
+/** Язык по последним НАПИСАННЫМ сообщениям клиента (голосовое и «Салом» не в счёт).
+ *  Ничего не известно — русский: это не «по умолчанию таджикский», а честное «не знаем»,
+ *  и проверка языка ответа в этом случае не включается (модель слышит голос сама). */
+async function lastWrittenLanguage(contactId: string): Promise<ClientLanguage> {
+  const rows = await prisma.message
+    .findMany({
+      where: { contactId, direction: "IN", text: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { text: true },
+    })
+    .catch(() => null);
+  return conversationLanguage((rows ?? []).map((r) => r.text));
+}
 
 const LANGUAGE_FIX: Record<"ru" | "tg", string> = {
   ru:

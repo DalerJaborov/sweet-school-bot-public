@@ -31,10 +31,18 @@ import { isBotFrozen } from "./messaging/automation.js";
  */
 
 const DELAY_NOTICES = {
-  ru: "Сейчас не получается подготовить ответ. Ваш вопрос сохранён, вернёмся к нему немного позже.",
-  tg: "Ҳоло ҷавоб омода нашуд. Саволи шумо нигоҳ дошта шуд, каме дертар ба он бармегардем.",
-  en: "Your question is saved. We cannot prepare an answer right now and will return to it later.",
+  ru: "Сейчас не получается ответить. Вопрос ваш видела, отвечу чуть позже",
+  tg: "Хозир чавоб дода наметонам. Саволатонро дидам, каме дертар чавоб медихам",
+  en: "I can't answer right now. I've seen your question and will reply a bit later",
 };
+/** Прежние тексты уведомления: строки с ними уже лежат в истории и не должны
+ *  считаться «настоящим ответом» в очереди, которая пережила выкладку. */
+const LEGACY_DELAY_NOTICES = [
+  "Сейчас не получается подготовить ответ. Ваш вопрос сохранён, вернёмся к нему немного позже.",
+  "Ҳоло ҷавоб омода нашуд. Саволи шумо нигоҳ дошта шуд, каме дертар ба он бармегардем.",
+  "Your question is saved. We cannot prepare an answer right now and will return to it later.",
+];
+const ALL_DELAY_NOTICES = [...Object.values(DELAY_NOTICES), ...LEGACY_DELAY_NOTICES];
 
 const DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000]; // 1, 2, 5, 10, 15 минут
 const TRAILING_DELAY_MS = 20 * 60_000;
@@ -102,7 +110,7 @@ async function runQueue(): Promise<void> {
     // Кто-то (хозяйка руками, обычный ход) уже ответил после — сдачу засчитываем
     // как успех, а не как повод пробовать снова поверх готового ответа.
     const answeredSince = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", text: { notIn: Object.values(DELAY_NOTICES) }, createdAt: { gt: row.snapshotAt } },
+      where: { contactId: row.contactId, direction: "OUT", text: { notIn: ALL_DELAY_NOTICES }, createdAt: { gt: row.snapshotAt } },
     });
     if (answeredSince) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
@@ -132,7 +140,7 @@ async function runQueue(): Promise<void> {
 
     if (await isBotFrozen()) return;
     const sentNow = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", text: { notIn: Object.values(DELAY_NOTICES) }, createdAt: { gt: row.snapshotAt } },
+      where: { contactId: row.contactId, direction: "OUT", text: { notIn: ALL_DELAY_NOTICES }, createdAt: { gt: row.snapshotAt } },
     });
     if (sentNow) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);

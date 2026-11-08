@@ -104,7 +104,7 @@ describe("«Я отправила чек» без картинки", () => {
   it("по-таджикски — тот же ответ по-таджикски", async () => {
     await aiReply(web, "Чекро фиристодам, пайванд кай меояд?", [], []);
     expect(generateWithFallback).not.toHaveBeenCalled();
-    expect(String(sendToContact.mock.calls[0][1])).toContain("Чекро ҳоло намебинам");
+    expect(String(sendToContact.mock.calls[0][1])).toContain("Чек хозир намебинам");
   });
 
   it("а с картинкой — обычный путь через модель", async () => {
@@ -129,7 +129,7 @@ describe("Язык ответа проверяет код", () => {
     expect(systemPromptOfCall(0)).not.toContain("СРОЧНОЕ ИСПРАВЛЕНИЕ");
     expect(systemPromptOfCall(1)).toContain("Отвечай ТОЛЬКО на русском");
     expect(sendToContact).toHaveBeenCalledTimes(1);
-    expect(String(sendToContact.mock.calls[0][1])).toBe("Курс стоит 70 сомони, апачон.");
+    expect(String(sendToContact.mock.calls[0][1])).toBe("Курс стоит 70 сомони."); // «апачон» бот не говорит (08.11.2026)
   });
 
   it("и наоборот: таджикский вопрос, русский ответ — повтор по-таджикски", async () => {
@@ -153,7 +153,7 @@ describe("Язык ответа проверяет код", () => {
     await aiReply(web, "Можно с двух телефонов?", [], []);
 
     expect(generateWithFallback).toHaveBeenCalledTimes(2);
-    expect(String(sendToContact.mock.calls[0][1])).toBe("Ҳо, мешавад апачон");
+    expect(String(sendToContact.mock.calls[0][1])).toBe("Хо, мешавад"); // клиент пишет без особых букв, «апачон» убран (08.11.2026)
     expect(warn.mock.calls.some((c) => String(c[0]).includes("ai:languageMismatch"))).toBe(true);
   });
 

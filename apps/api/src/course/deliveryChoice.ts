@@ -13,8 +13,8 @@ export function isDeliveryChoice(value: unknown): value is CourseDeliveryChoice 
 }
 
 export const DELIVERY_QUESTION = {
-  ru: "Оплата принята. У вас есть Telegram? Ответьте «да» — пришлю приглашение в группу с уроками, или «нет» — открою уроки на сайте.",
-  tg: "Пардохт қабул шуд. Шумо Telegram доред? «Ҳа» гӯед — ссылкаи гурӯҳи дарсҳоро мефиристам, ё «не» — дарсҳоро дар сайт мекушоям.",
+  ru: "Оплата принята. У вас есть Telegram? Напишите «да», пришлю ссылку в группу с уроками. Напишите «нет», открою уроки на сайте",
+  tg: "Пардохт кабул шуд. Telegram доред? «Ха» нависен, ссылкаи группаро мефиристам. «Не» нависен, дарсхоя дар сайт мекушоям",
 };
 
 /** Only short explicit answers. An unrelated 'yes' is handled below only when

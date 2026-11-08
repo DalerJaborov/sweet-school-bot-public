@@ -5,6 +5,7 @@ import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
 import { attentionError, classifyAttention } from "./attention.js";
+import { rememberOwnerReply } from "../ai/styleLearning.js";
 
 let ingesting = false;
 const processing = new Set<string>();
@@ -34,9 +35,37 @@ export async function ingestWhatsAppEvents(): Promise<void> {
           humanTakenOverAt: new Date(e.timestamp), humanTakeoverMid: whatsappMessageId(e.accountId, e.messageId),
         } });
       });
+      if (e.type === "human" && e.text.trim() && !contact.personal && !contact.whatsappSavedContact && !contact.spamBlockedAt) {
+        await learnFromOwner(contact.id, whatsappMessageId(e.accountId, e.messageId), e.text);
+      }
       await bridgeRequest(`/events/${encodeURIComponent(e.id)}/ack`, {});
     }
   } finally { ingesting = false; }
+}
+
+/**
+ * ЖИВОЕ ОБУЧЕНИЕ НА WHATSAPP. Ширин ответила сама со своего телефона — её фраза
+ * становится образцом манеры (ai/styleLearning.ts), как в Instagram (webhook.ts).
+ * До 08.11.2026 WhatsApp-ответы хозяйки в образцы не попадали вовсе, и бот учился
+ * только на старой переписке Instagram. Строка должна остаться «человеческой»:
+ * если это эхо ответа самого бота (строка уже записана как его), не учимся.
+ */
+async function learnFromOwner(contactId: string, mid: string, ownerText: string): Promise<void> {
+  try {
+    const row = await prisma.message.findUnique({ where: { mid }, select: { byHuman: true } });
+    if (!row?.byHuman) return;
+    const lastIn = await prisma.message.findFirst({
+      where: { contactId, direction: "IN", text: { not: null } },
+      orderBy: { createdAt: "desc" },
+      select: { text: true },
+    });
+    // Чат, где пишет только Ширин (родным, знакомым — её личный номер), — не
+    // разговор с клиентом: такие фразы в образцы манеры не берём.
+    if (!lastIn?.text) return;
+    await rememberOwnerReply(lastIn.text, ownerText, "TAKEOVER", undefined, contactId);
+  } catch (err) {
+    logError("whatsapp:learnFromOwner", err);
+  }
 }
 
 export async function processInbox(id: string): Promise<void> {

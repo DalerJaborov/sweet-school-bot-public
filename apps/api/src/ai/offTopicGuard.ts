@@ -434,12 +434,12 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
   },
   asks_bot: {
     ru: "Нет, я помощница Ширин",
-    tg: "Не, ман ёрдамчии Ширин ҳастам",
+    tg: "Не, ман ёрдамчии Ширин",
     en: "No, I'm Shirin's assistant",
   },
   offtopic: {
     ru: "Это не ко мне, я только по курсам Ширин",
-    tg: "Ин мавзуи мо нест, ман танҳо оид ба курсҳои Ширин мегӯям",
+    tg: "Ин ба мо дахл надорад, ман факат дар бораи курсхои Ширин чавоб медихам",
     en: "I only help with Shirin's courses",
   },
   task_request: {
@@ -448,8 +448,8 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
     en: "Sorry, I can't help with that",
   },
   no_such_course: {
-    ru: "К сожалению нет — у нас только кондитерские курсы",
-    tg: "Мутаассифона не, мо танҳо курси кондитерӣ дорем",
+    ru: "Нет, у нас только кондитерские курсы",
+    tg: "Не, мо факат курси кондитери дорем",
     en: "Sorry, we only have pastry courses",
   },
   /**
@@ -463,21 +463,21 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
    */
   order_request: {
     ru: "К сожалению, заказы на торты и десерты мы не принимаем",
-    tg: "Мутаассифона, мо фармоиши торту ширинӣ намегирем",
-    en: "Sorry, we don't take cake or dessert orders — we only teach",
+    tg: "Бубахшед, мо торт ва ширини ба заказ намегирем",
+    en: "Sorry, we don't take cake or dessert orders, we only teach",
   },
   /**
    * Обещание, которое мы обязаны сдержать: следом уходит уведомление владельцу, и
    * бот замолкает — иначе «сейчас ответит» окажется ложью, а это хуже молчания.
    */
   wants_human: {
-    ru: "Хорошо — сейчас Ширин сама вам ответит",
-    tg: "Хуб, хозир Ширин худаш ба шумо чавоб медиханд",
-    en: "Sure — Shirin will reply to you herself shortly",
+    ru: "Хорошо, сейчас Ширин сама вам ответит",
+    tg: "Хуб, хозир Ширин худаш чавоб медиханд",
+    en: "Sure, Shirin will reply to you herself shortly",
   },
   recipe_question: {
-    ru: "По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы",
-    tg: "Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед",
+    ru: "По рецептам у нас чат в телеграм-группе, напишите туда, там отвечаем на все вопросы",
+    tg: "Саволхои рецептро дар чати группаи телеграм нависен, хамон чо чавоб медихем",
     en: "Recipe questions go to our Telegram group chat — please write there",
   },
 };
@@ -517,8 +517,8 @@ const RECIPE_FOR_GUEST: Record<ClientLanguage, string> = {
 export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStudent = false, deliveryMode: "web" | "telegram" | "both" = "telegram"): string {
   if (kind === "recipe_question" && !isStudent) return RECIPE_FOR_GUEST[language];
   if (kind === "recipe_question" && deliveryMode !== "telegram") return {
-    ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
-    tg: "Дарси худро дар кабинети шахсӣ кушоед ва «Савол»-ро пахш кунед — Ширин мебинад, ки савол дар бораи кадом дастур аст",
+    ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос», Ширин увидит, о каком рецепте речь",
+    tg: "Дарсатона дар кабинет кушоен ва «Савол»-ро пахш кунен, Ширин мебинад, ки дар бораи кадом рецепт",
     en: "Open your lesson and choose Question so Shirin can see which recipe you mean",
   }[language];
   return REPLIES[kind][language];

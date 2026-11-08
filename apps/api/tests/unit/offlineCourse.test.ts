@@ -8,7 +8,7 @@ vi.mock("../../src/instagram.js", () => ({
   channelOf: () => "INSTAGRAM",
 }));
 
-import { maybeSendOfflineCard, offlineCourseCard, offlineCardDefault, offlineFactsLine, OFFLINE_DATE_TBD, DEFAULT_OFFLINE_FACTS } from "../../src/ai/offlineCourse.js";
+import { maybeSendOfflineCard, offlineCourseCard, offlineCardDefault, offlineCardMessages, offlineFactsLine, OFFLINE_DATE_TBD, DEFAULT_OFFLINE_FACTS } from "../../src/ai/offlineCourse.js";
 import type { Contact } from "@prisma/client";
 
 function settings(values: Record<string, string>) {
@@ -19,19 +19,32 @@ function settings(values: Record<string, string>) {
 const OCT_3 = { year: 2026, month: 10, day: 3 };
 
 describe("текст карточки", () => {
-  it("в заготовке факты сайта: 700, 13:40–16:30, 21 десерт, Воданасос, Рудаки 177 (08.11.2026)", () => {
+  it("в заготовке факты из «Цены и даты»: 700, 13:40–16:30, 21 десерт, адрес словами владельца (08.11.2026)", () => {
     for (const lang of ["ru", "tg"] as const) {
       const text = offlineCardDefault(lang, OCT_3);
       expect(text).toContain("700");
       expect(text).toContain("13:40");
       expect(text).toContain("16:30");
-      expect(text).toContain("Воданасос");
-      expect(text).toMatch(/Рудаки 177|Рӯдакӣ 177/);
+      expect(text).toContain("Рудаки 156, Воданасос");
+      expect(text).toMatch(/дом Додо Пицца|доми Додо Пицца/);
       expect(text).toMatch(/21 (вид десертов|намуд)/);
-      expect(text).not.toMatch(/14:00|17:00|156а|Додо|Водонасос|20 (видов|намуд)/);
+      expect(text).not.toMatch(/14:00|17:00|156а|Водонасос|Рудаки 177|20 (видов|намуд)/);
     }
-    expect(offlineCardDefault("ru", OCT_3)).toContain("Каждый день с 13:40 до 16:30");
-    expect(offlineCardDefault("tg", OCT_3)).toContain("Ҳар рӯз аз 13:40 то 16:30");
+    expect(offlineCardDefault("ru", OCT_3)).toContain("каждый день с 13:40 до 16:30");
+    expect(offlineCardDefault("tg", OCT_3)).toContain("аз соати 13:40 ба 16:30");
+  });
+
+  it("таджикская карточка — словами владельца, разговорно, без особых букв и тире", () => {
+    const tg = offlineCardDefault("tg", OCT_3);
+    expect(tg).toContain("Курси ояндамон 3 октябр сар мешавад.");
+    expect(tg).toContain("пули продукты наметиен");
+    expect(tg).toContain("охирда сертификат мегирен");
+    expect(tg).toContain("ном и номер монен, запись мекнем");
+    for (const lang of ["ru", "tg"] as const) {
+      for (const text of [offlineCardDefault(lang, OCT_3), offlineCardDefault(lang, null)]) {
+        expect(text).not.toMatch(/[ҷқӯғҳӣ—–]|\p{Extended_Pictographic}/u);
+      }
+    }
   });
 
   it("мест в группе — строка только когда число задано", () => {
@@ -39,7 +52,7 @@ describe("текст карточки", () => {
     expect(base).not.toMatch(/мест/);
     const withSeats = offlineCardDefault("ru", OCT_3, { ...DEFAULT_OFFLINE_FACTS, seats: 8 });
     expect(withSeats).toContain("В группе всего 8 мест");
-    expect(offlineCardDefault("tg", OCT_3, { ...DEFAULT_OFFLINE_FACTS, seats: 8 })).toContain("ҳамагӣ 8 ҷой");
+    expect(offlineCardDefault("tg", OCT_3, { ...DEFAULT_OFFLINE_FACTS, seats: 8 })).toContain("факат 8 чой");
   });
 
   it("строка фактов для модели: прошедшей даты нет — прямой запрет её называть", () => {
@@ -50,29 +63,33 @@ describe("текст карточки", () => {
     expect(line).toContain("с 10:00 до 13:00");
   });
 
-  it("дата задана и впереди — «Начало: 3 октября» / «Оғоз: 3 октябр»", () => {
-    expect(offlineCardDefault("ru", OCT_3)).toContain("📅 Начало: 3 октября");
-    expect(offlineCardDefault("tg", OCT_3)).toContain("📅 Оғоз: 3 октябр");
+  it("дата задана и впереди — «начинается 3 октября» / «3 октябр сар мешавад»", () => {
+    expect(offlineCardDefault("ru", OCT_3)).toContain("Следующий курс начинается 3 октября.");
+    expect(offlineCardDefault("tg", OCT_3)).toContain("Курси ояндамон 3 октябр сар мешавад.");
   });
 
   it("даты нет — строка «уточняется», и никакого «Начало»", () => {
     for (const lang of ["ru", "tg"] as const) {
       const text = offlineCardDefault(lang, null);
       expect(text).toContain(OFFLINE_DATE_TBD[lang]);
-      expect(text).not.toMatch(/Начало|Оғоз|октябр/);
+      expect(text).not.toMatch(/начинается|сар мешавад|октябр/);
     }
   });
 
-  it("строки короткие и разделены на блоки — чтобы читалось с телефона за секунду", () => {
+  it("три коротких сообщения: когда и сколько / что готовим / где и как записаться", () => {
     for (const lang of ["ru", "tg"] as const) {
       for (const text of [offlineCardDefault(lang, OCT_3), offlineCardDefault(lang, null)]) {
-        const lines = text.split("\n").filter((l) => l.trim());
-        // Ни одной строки-простыни: глаз должен ловить одну мысль за раз.
-        expect(Math.max(...lines.map((l) => l.length))).toBeLessThan(70);
-        // Пустые строки разделяют смысловые блоки.
-        expect(text.split("\n\n").length).toBeGreaterThan(3);
+        const messages = offlineCardMessages(text);
+        expect(messages).toHaveLength(3);
+        // Каждое сообщение — пара коротких фраз, а не простыня.
+        for (const m of messages) expect(m.length).toBeLessThan(260);
       }
     }
+  });
+
+  it("свой текст из настроек с множеством абзацев — не больше трёх сообщений", () => {
+    expect(offlineCardMessages("а\n\nб\n\nв\n\nг\n\nд")).toEqual(["а", "б", "в\n\nг\n\nд"]);
+    expect(offlineCardMessages("одной строкой")).toEqual(["одной строкой"]);
   });
 });
 
@@ -102,14 +119,14 @@ describe("offlineCourseCard", () => {
     db.model("setting").findUnique.mockImplementation(settings({ offlineCourseStartDate: "2026-10-03" }));
 
     expect(await offlineCourseCard("tg")).toBe(offlineCardDefault("tg", OCT_3));
-    expect(await offlineCourseCard("ru")).toContain("Начало: 3 октября");
+    expect(await offlineCourseCard("ru")).toContain("начинается 3 октября");
   });
 
   it("день старта — ещё показываем (по Душанбе, UTC+5), назавтра — уже «уточняется»", async () => {
     db.model("setting").findUnique.mockImplementation(settings({ offlineCourseStartDate: "2026-10-03" }));
     // 2 октября 20:00 UTC = 3 октября 01:00 в Душанбе: набор сегодня.
     vi.setSystemTime(new Date("2026-10-02T20:00:00Z"));
-    expect(await offlineCourseCard("ru")).toContain("Начало: 3 октября");
+    expect(await offlineCourseCard("ru")).toContain("начинается 3 октября");
     // 3 октября 19:30 UTC = 4 октября 00:30 в Душанбе: набор прошёл.
     vi.setSystemTime(new Date("2026-10-03T19:30:00Z"));
     const text = await offlineCourseCard("ru");
@@ -146,9 +163,10 @@ describe("maybeSendOfflineCard", () => {
     const sent = await maybeSendOfflineCard(contact, "сабти ном мехоҳам");
 
     expect(sent).toBe(true);
-    // Текст заготовки без пересказа моделью; единая политика убирает emoji.
-    expect(sendText.mock.calls[0][1]).toBe(cleanAutomatedReply(offlineCardDefault("tg", null)));
-    expect(db.model("message").create).toHaveBeenCalledTimes(1);
+    // Текст заготовки без пересказа моделью, тремя короткими сообщениями.
+    const expected = offlineCardMessages(offlineCardDefault("tg", null)).map((m) => cleanAutomatedReply(m));
+    expect(sendText.mock.calls.map((c) => c[1])).toEqual(expected);
+    expect(db.model("message").create).toHaveBeenCalledTimes(3);
   });
 
   it("второй раз молчим — не заваливаем той же простынёй", async () => {

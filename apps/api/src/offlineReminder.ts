@@ -47,16 +47,16 @@ export function reminderText(language: "ru" | "tg", name: string, facts: Offline
   const at = parseHours(facts.hours)?.from;
   if (language === "tg") {
     return (
-      `${name ? `${name}, ` : ""}Пагоҳ курси мо оғоз мешавад 🌸\n\n` +
-      (at ? `⏰ Соати ${at} интизоратонем\n` : "") +
-      `📍 ${offlineAddress(facts, "tg")}\n\n` +
-      `Маҳсулот овардан лозим нест, ҳама аз мо. То дидор!`
+      `${name ? `${name}, п` : "П"}агох курсамон сар мешавад.\n` +
+      (at ? `Соати ${at} интизоратонем. ` : "") +
+      `Сурога: ${offlineAddress(facts, "tg")}.\n` +
+      `Продукты овардан лозим нест, хамааш аз мо. То дидор!`
     );
   }
   return (
-    `${name ? `${name}, ` : ""}Завтра начинается наш курс 🌸\n\n` +
-    (at ? `⏰ Ждём вас к ${at}\n` : "") +
-    `📍 ${offlineAddress(facts, "ru")}\n\n` +
+    `${name ? `${name}, з` : "З"}автра начинается наш курс.\n` +
+    (at ? `Ждём вас к ${at}. ` : "") +
+    `Адрес: ${offlineAddress(facts, "ru")}.\n` +
     `Продукты приносить не нужно, всё наше. До встречи!`
   );
 }

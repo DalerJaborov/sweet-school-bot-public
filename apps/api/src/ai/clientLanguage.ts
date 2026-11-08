@@ -27,8 +27,9 @@ const TAJIK_WORDS = new RegExp(
     "чихел|чи хел|чанд|кадом|кай|" +
     "доред|дорем|дорад|дорам|мешавад|мешад|мешан|мекунем|мекунад|мекнем|мекнен|мекунен|кунед|" +
     "бошад|бошем|хаст|нест|" +
+    // Приветствие и «спасибо» («салом», «рахмат», «бале») сюда НЕ входят (владелец
+    // 08.11.2026): ими здороваются и русскоязычные, «Салом, сколько стоит онлайн» — русский.
     "апачон|апаҷон|ападжон|хохарам|" +
-    "ассалом|салом|рахмат|раҳмат|бале|" +
     "барои|хамин|ҳамин|хеле|зиёд|" +
     "нархаш|сомони|" +
     "мехохам|мехоҳам|нофахмидам|нафахмидам|фахмидам|мефахмонем|" +
@@ -46,10 +47,10 @@ const TAJIK_WORDS = new RegExp(
  */
 const TAJIK_LATIN = new RegExp(
   "(?<!\\p{L})(" +
-    "salom|assalom|apajon|apachon|rahmat|" +
+    "apajon|apachon|" +
     "chi|chihel|chi hel|chand|kadom|" +
     "dored|dorem|dorad|meshavad|meshad|mekunem|" +
-    "narkh|narkhash|somoni|man|shumo|hub|bale" +
+    "narkh|narkhash|somoni|man|shumo|hub" +
     ")(?!\\p{L})",
   "iu"
 );
@@ -75,13 +76,15 @@ const CYRILLIC = /\p{Script=Cyrillic}/u;
  * другой язык, отвечать сразу на языке клиента — как живой человек». Поэтому здесь
  * нет памяти о прошлом выборе: на что человек перешёл, на том и отвечаем.
  *
- * Пустой текст — таджикский: это язык школы по умолчанию, и на нём же написана
- * воронка. Отвечать по-русски человеку, о котором мы ничего не знаем, — ошибка
- * в сторону чужого языка, а не своего.
+ * Пустой текст (голосовое WhatsApp, фото без подписи) — НЕ таджикский по
+ * умолчанию (владелец 08.11.2026): раньше русскоязычный клиент, приславший
+ * голосовое, получал таджикский шаблон. Язык голосового модель слышит сама, а
+ * вызывающий код, которому важен язык, берёт его из последнего написанного
+ * сообщения (ai.ts::lastWrittenLanguage). Совсем ничего не известно — русский.
  */
 export function detectClientLanguage(text: string): ClientLanguage {
   const value = (text ?? "").trim();
-  if (!value) return "tg";
+  if (!value) return "ru";
 
   // Особые буквы — признак, который не подделаешь: они есть только в таджикском.
   if (TAJIK_LETTERS.test(value)) return "tg";
@@ -91,6 +94,40 @@ export function detectClientLanguage(text: string): ClientLanguage {
   if (!CYRILLIC.test(value) && TAJIK_LATIN.test(value)) return "tg";
   if (!CYRILLIC.test(value) && ENGLISH_WORDS.test(value)) return "en";
 
+  return "ru";
+}
+
+/**
+ * Слова, по которым язык НЕ понять: приветствие, «спасибо», «да», обращение.
+ * «Салом» пишут и русскоязычные, «Ассалому алейкум» — все подряд.
+ */
+const NEUTRAL_WORDS = new Set([
+  "салом", "салам", "ассалом", "ассалому", "ассаламу", "ассалям", "алейкум", "алайкум", "алейкуи",
+  "ва", "валейкум", "ваалейкум", "ваалайкум", "воалейкум", "воалайкум",
+  "рахмат", "раҳмат", "ташаккур", "бале", "ха", "ҳа", "ок", "ok",
+  "апа", "апачон", "апаҷон", "ширин", "ширинчон", "ширинҷон",
+  "salom", "salam", "assalom", "assalomu", "assalamu", "alaykum", "aleykum", "rahmat", "raxmat",
+]);
+
+/**
+ * Есть ли в сообщении ЯЗЫК, а не только приветствие. null — сообщение пустое
+ * (голосовое, фото) или состоит из одних нейтральных слов («Салом», «Рахмат»,
+ * «Ассалому алейкум»): тогда язык берётся из прошлых написанных сообщений, и
+ * ответ модели на «не тот» язык не перегенерируется.
+ */
+export function languageSignal(text: string): ClientLanguage | null {
+  const words = (text ?? "").normalize("NFC").toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
+  if (words.length === 0 || words.every((w) => NEUTRAL_WORDS.has(w))) return null;
+  return detectClientLanguage(text);
+}
+
+/** Язык разговора по последним написанным сообщениям клиента (свежие первыми):
+ *  решает первое сообщение, в котором язык вообще виден; иначе — русский. */
+export function conversationLanguage(recentFirst: readonly (string | null | undefined)[]): ClientLanguage {
+  for (const t of recentFirst) {
+    const signal = languageSignal(t ?? "");
+    if (signal) return signal;
+  }
   return "ru";
 }
 
