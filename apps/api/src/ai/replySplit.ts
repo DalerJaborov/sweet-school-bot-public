@@ -84,7 +84,10 @@ function capParts(pieces: Piece[], maxParts: number): Piece[] {
     }
     if (at < 0) at = out.length - 2;
     const both = out[at].detail && out[at + 1].detail;
-    out[at] = { text: out[at].text + (out[at].detail || out[at + 1].detail ? "\n" : " ") + out[at + 1].text, detail: both };
+    out[at] = {
+      text: out[at].text + (out[at].detail || out[at + 1].detail ? "\n" : " ") + out[at + 1].text,
+      detail: both,
+    };
     out.splice(at + 1, 1);
   }
   return out;
@@ -130,7 +133,7 @@ export function splitHumanLike(text: string, options: SplitOptions): string[] {
 /** Настройки канала: рубильник и потолок частей. */
 export function splitOptionsFor(
   channel: string,
-  settings: { instagram?: string | null; whatsapp?: string | null; web?: string | null; maxParts?: string | null }
+  settings: { instagram?: string | null; whatsapp?: string | null; web?: string | null; maxParts?: string | null },
 ): SplitOptions {
   const flag = channel === "WHATSAPP" ? settings.whatsapp : channel === "WEB" ? settings.web : settings.instagram;
   const configured = Number(settings.maxParts);
