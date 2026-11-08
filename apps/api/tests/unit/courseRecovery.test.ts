@@ -13,7 +13,7 @@ vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
-import { maybeRestoreAccess, looksLikeAccessRequest } from "../../src/course/recovery.js";
+import { maybeRestoreAccess, looksLikeAccessRequest, restoreAccessFromSite } from "../../src/course/recovery.js";
 import type { Contact } from "@prisma/client";
 
 const contact = fakeContact() as unknown as Contact;
@@ -308,5 +308,87 @@ describe("maybeRestoreAccess", () => {
 
     expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("бот сам выдал");
+  });
+
+  it("готовые фразы экрана «напишите нам» сами запускают выдачу ссылки (RU и TG)", () => {
+    // Те же слова, что в apps/web/src/course/i18n.ts linkAskText.
+    expect(looksLikeAccessRequest("Нужна новая ссылка")).toBe(true);
+    expect(looksLikeAccessRequest("Ссылкаи нав лозим")).toBe(true);
+  });
+});
+
+/**
+ * «ПОЛУЧИТЬ НОВУЮ ССЫЛКУ» НА САЙТЕ (аудит 08.11.2026): ссылка уходит в
+ * переписку, на экран — только исход. Окно Instagram 24 часа соблюдаем.
+ */
+describe("restoreAccessFromSite", () => {
+  let db: PrismaMock;
+  const expiredContact = fakeContact({ accessTokenId: "Ab3kQ9xZpm", accessIssuedAt: new Date(Date.now() - 8 * 86_400_000) }) as unknown as Contact;
+
+  beforeEach(() => {
+    db = mockPrisma();
+    db.model("contact").findUnique.mockResolvedValue(expiredContact);
+    db.model("contact").updateMany.mockResolvedValue({ count: 1 });
+    db.model("setting").findUnique.mockImplementation(settings(WEB_MODE));
+    sendText.mockClear();
+    sendTelegramMessage.mockClear();
+  });
+  afterEach(restorePrisma);
+
+  it("ГЛАВНОЕ: человек писал сегодня — новая ссылка уходит в директ сама, без хозяйки", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    db.model("message").findFirst.mockResolvedValue({ createdAt: new Date(Date.now() - 3_600_000), text: "салом" });
+
+    expect(await restoreAccessFromSite(expiredContact)).toBe("sent");
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
+    // Новая ссылка — новый код (старый просрочен), счётчик перевыдач растёт.
+    expect(db.model("contact").updateMany).toHaveBeenCalled();
+    expect(db.model("purchase").update).toHaveBeenCalled();
+    expect(db.model("device").delete).not.toHaveBeenCalled();
+  });
+
+  it("окно Instagram закрыто (писала неделю назад) — просим написать первой, ничего не выдаём", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    db.model("message").findFirst.mockResolvedValue({ createdAt: new Date(Date.now() - 7 * 86_400_000), text: "салом" });
+
+    expect(await restoreAccessFromSite(expiredContact)).toBe("write_first");
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+    expect(db.model("purchase").update).not.toHaveBeenCalled();
+  });
+
+  it("чека нет — к хозяйке, и в переписку НИЧЕГО не пишем (повторные нажатия не спамят)", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(0);
+    db.model("purchase").count.mockResolvedValue(0);
+
+    expect(await restoreAccessFromSite(expiredContact)).toBe("escalated");
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("кнопка на сайте");
+  });
+
+  it("доступ отозван — честно «закрыт», ссылку не выдаём", async () => {
+    db.model("purchase").findMany.mockResolvedValue([activePurchase({ revokedAt: new Date() })]);
+
+    expect(await restoreAccessFromSite(expiredContact)).toBe("revoked");
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+  });
+
+  it("контакт заведён вручную (нет канала для бота) — к хозяйке, код не трогаем", async () => {
+    const manual = { ...expiredContact, channel: "MANUAL" } as Contact;
+    db.model("purchase").findMany.mockResolvedValue([activePurchase()]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+
+    expect(await restoreAccessFromSite(manual)).toBe("escalated");
+
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
   });
 });

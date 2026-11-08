@@ -8,6 +8,7 @@ import {
   openWithToken,
   pairDevice,
   patchProgress,
+  requestNewLink,
   saveLanguage,
   saveProgress,
   saveProgressBeacon,
@@ -16,6 +17,7 @@ import {
   type CourseView,
   type DeviceLimitData,
   type LessonView,
+  type RelinkResult,
   type SchoolContacts,
 } from "../api";
 import { applyLang, dict, type Lang } from "../i18n";
@@ -66,6 +68,15 @@ export type CourseErrorState = { message: string; reason: string };
 export type ProgressVia = "fetch" | "beacon";
 /** Экран лимита устройств: что занято, сколько замен, куда писать. */
 export type DeviceLimitState = DeviceLimitData & { school: SchoolContacts | null };
+/** Экран просроченной ссылки: код из адреса и исход «получить новую». */
+export type LinkExpiredState = {
+  token: string;
+  busy: boolean;
+  /** Запрос не дошёл (сеть) — кнопка остаётся, строка просит повторить. */
+  failed: boolean;
+  result: RelinkResult | null;
+  school: SchoolContacts | null;
+};
 
 export function useCourse() {
   const online = useOnline();
@@ -91,6 +102,7 @@ export function useCourse() {
   // Встроенный браузер + токен в адресе: сначала выводим в настоящий браузер.
   const [inAppTrap, setInAppTrap] = useState(false);
   const [deviceLimit, setDeviceLimit] = useState<DeviceLimitState | null>(null);
+  const [linkExpired, setLinkExpired] = useState<LinkExpiredState | null>(null);
 
   /**
    * Первый заход: в адресе есть токен из переписки (`?token=`) или токен
@@ -146,6 +158,14 @@ export function useCourse() {
         try {
           await openWithToken(token);
         } catch (err) {
+          // Ссылка просрочена, а живой сессии в этом браузере нет (живую сервер
+          // сам пустил бы в кабинет): экран «получить новую ссылку», не тупик.
+          if (err instanceof CourseError && err.reason === "link_expired") {
+            const cached = await loadMe().catch(() => undefined);
+            setLinkExpired({ token, busy: false, failed: false, result: null, school: cached?.view.school ?? null });
+            setError(null);
+            return;
+          }
           const limit = err instanceof CourseError ? err.deviceLimit() : null;
           if (limit) {
             const cached = await loadMe().catch(() => undefined);
@@ -195,6 +215,21 @@ export function useCourse() {
       } else if (!silent) {
         setError({ message: "", reason: "network" });
       }
+    }
+  }, []);
+
+  const linkExpiredRef = useRef(linkExpired);
+  linkExpiredRef.current = linkExpired;
+  /** «Получить новую ссылку»: сервер шлёт её в переписку, нам — только исход. */
+  const requestLink = useCallback(async () => {
+    const token = linkExpiredRef.current?.token;
+    if (!token) return;
+    setLinkExpired((s) => (s ? { ...s, busy: true, failed: false } : s));
+    try {
+      const result = await requestNewLink(token);
+      setLinkExpired((s) => (s ? { ...s, busy: false, result } : s));
+    } catch {
+      setLinkExpired((s) => (s ? { ...s, busy: false, failed: true } : s));
     }
   }, []);
 
@@ -340,6 +375,8 @@ export function useCourse() {
     error,
     inAppTrap,
     deviceLimit,
+    linkExpired,
+    requestLink,
     source,
     online,
     lang,

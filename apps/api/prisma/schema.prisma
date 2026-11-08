@@ -197,6 +197,7 @@ model Contact {
   /// на сайт. Ставится один раз, без внешнего ключа: строгое добавление
   /// столбца, без пересоздания большой таблицы (links/siteLinks.ts).
   siteLinkId           String?
+  accessEvents         AccessEvent[]
 
   @@unique([channel, igUserId])
   @@index([siteLinkId])
@@ -931,8 +932,30 @@ model Device {
   blockedAt           DateTime?
   blockedReason       String?
 
-  @@unique([purchaseId, fingerprint])
+  // Уникальности (purchaseId, fingerprint) больше нет (08.11.2026): отпечаток
+  // присылает клиент, у двух одинаковых iPhone он совпадает, и «тот же
+  // аппарат» теперь узнаётся по нему только в 30-минутном окне (access.ts).
+  // Второе устройство с тем же отпечатком — законная запись, а не дубль.
   @@index([contactId])
+}
+
+/// ЖУРНАЛ ДЕЙСТВИЙ С УСТРОЙСТВАМИ УЧЕНИЦ (08.11.2026): кто и когда освободил,
+/// заблокировал или вернул место. Пишет только access.ts (recordAccessEvent);
+/// deviceId — строка без связи: освобождённого устройства в базе уже нет.
+model AccessEvent {
+  id        String   @id @default(uuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  deviceId  String?
+  /// released | blocked | unblocked
+  action    String
+  /// owner (панель) | student (сама заменила) | bot (самовосстановление)
+  actor     String
+  /// Подпись устройства на момент действия: «Safari на iPhone · TJ».
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([contactId, createdAt])
 }
 
 /// Прогресс по уроку: одна строка на пару «покупка + урок», обновляется, а не

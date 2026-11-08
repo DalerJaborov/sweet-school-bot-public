@@ -345,6 +345,8 @@ export type StudentResponse = {
     lessons: { id: string; title: string; order: number; ready: boolean; done: boolean; percent: number; positionSec: number; durationSec: number | null }[];
   }[];
   devices: { id: string; label: string; city: string | null; lastSeenAt: string; blocked: boolean; blockedReason: string | null }[];
+  /** Журнал мест (AccessEvent): последние 5 действий, новые сверху. */
+  deviceEvents: { action: string; actor: string; detail: string | null; at: string }[];
   unansweredQuestions: number;
 };
 
@@ -413,6 +415,7 @@ export async function buildStudent(contactId: string): Promise<StudentResponse |
         },
       },
       devices: { orderBy: { lastSeenAt: "desc" } },
+      accessEvents: { orderBy: { createdAt: "desc" }, take: 5 },
       certificates: { select: { courseId: true, number: true, issuedAt: true } },
       offlineSignup: { select: { phone: true } },
     },
@@ -487,6 +490,13 @@ export async function buildStudent(contactId: string): Promise<StudentResponse |
       lastSeenAt: d.lastSeenAt.toISOString(),
       blocked: Boolean(d.blockedAt),
       blockedReason: d.blockedReason,
+    })),
+    // `?? []` — записи из старых тестовых заготовок и кэшей без этого поля.
+    deviceEvents: (c.accessEvents ?? []).map((e) => ({
+      action: e.action,
+      actor: e.actor,
+      detail: e.detail,
+      at: e.createdAt.toISOString(),
     })),
     unansweredQuestions: unanswered,
   };
