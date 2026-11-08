@@ -1,33 +1,34 @@
 import { Router } from "express";
 import { autoCatch } from "./asyncRoute.js";
-import { prisma, getSetting } from "./db.js";
+import { prisma } from "./db.js";
+import { isTrivialKind, isTrivialMessage } from "./trivialMessage.js";
+import { attentionText, chatTitle, describeIncoming } from "./whatsapp/attention.js";
 
 /**
- * «КЛИЕНТЫ ЖДУТ ОТВЕТА» — для экрана «Сегодня» в панели.
+ * «КЛИЕНТАМ НУЖЕН ОТВЕТ» — для экрана «Сегодня» в панели.
  *
- * Человек ждёт живого ответа, когда его последнее СВОБОДНОЕ сообщение пришло
- * после последнего ответа ЖИВОГО человека (byHuman), а бот отвечать не будет:
- *   - клиент попросил позвать человека — бот замолчал на час (ai.ts
- *     callOwnerToChat, humanSilencedUntil); сообщение клиента пришло до конца
- *     этой тишины;
- *   - хозяйка вела разговор из приложения Instagram (humanTakenOverAt) и
- *     клиент написал снова;
- *   - помощник выключен целиком (aiEnabled не "true") или бот заморожен
- *     (botFrozen) — тогда ждут все, кто написал.
+ * Сюда попадают ТОЛЬКО клиенты, которых бот сам передал человеку:
+ *   1. клиент попросил позвать Ширин (Contact.humanRequestedAt, ставит
+ *      ai.ts callOwnerToChat) и живой ответ после этого ещё не был;
+ *   2. бот не смог ответить: ответ ИИ завис в очереди повторов
+ *      (PendingAiReply, две и больше неудачные попытки);
+ *   3. WhatsApp: чат помечен «нужен ответ» (WhatsAppInbox.status = attention).
+ * Просто «последнее входящее сообщение» не показывается НИКОГДА: «Рахмат»,
+ * «Хоб майла» и приветствия владелец видеть не хочет, а если надо — прочитает
+ * сам в Instagram. Выключенный помощник («ждут все») тоже ничего не меняет.
  *
- * ОТВЕТЫ БОТА НЕ СЧИТАЮТСЯ. Сразу после просьбы «позовите человека» бот шлёт
- * «зову Ширин» — и это исходящее сообщение раньше становилось «последним»,
- * клиент пропадал из списка в тот же миг. Теперь смотрим только на свободные
- * входящие и на ответы живого человека.
+ * Пустяки (благодарность, «ок», «хоб», приветствие, смайлик, стикер, реакция)
+ * отсеиваются в любом случае — см. trivialMessage.ts.
  *
- * Новых полей не нужно. Личные контакты и заблокированных за спам пропускаем.
+ * Наружу уходят имя, канал и причина простыми словами. Текст переписки
+ * карточке не отдаём — он открывается отдельно, по нажатию
+ * (GET /admin/contacts/:id/messages).
  */
 export const waitingRouter = autoCatch(Router());
 
-/** Старше недели — уже не «ждёт», а забытый разговор: в «Сегодня» не тащим. */
+/** Старше недели — уже не «ждёт», а забытый разговор. */
 const WINDOW_MS = 7 * 86_400_000;
 const LIMIT = 30;
-const SCAN = 300;
 
 export type WaitingClient = {
   contactId: string;
@@ -36,7 +37,8 @@ export type WaitingClient = {
   channelLabel: string;
   /** Куда нажать, чтобы ответить (Instagram по имени). null — ссылки нет, панель покажет переписку. */
   replyUrl: string | null;
-  lastText: string;
+  /** Почему клиент здесь — простыми словами. */
+  reason: string;
   at: string;
 };
 
@@ -69,82 +71,96 @@ export function waitingName(c: ContactLite): string {
  * WhatsApp того, кто нажал, а не рабочий номер школы.
  */
 export function replyUrlOf(c: ContactLite): string | null {
-  if (c.channel === "INSTAGRAM" && c.username?.trim())
-    return `https://ig.me/m/${encodeURIComponent(c.username.trim())}`;
+  if (c.channel === "INSTAGRAM" && c.username?.trim()) return `https://ig.me/m/${encodeURIComponent(c.username.trim())}`;
   return null;
 }
 
-export async function waitingClients(now = Date.now()): Promise<{ clients: WaitingClient[]; aiOff: boolean }> {
+export const REASON_ASKED_HUMAN = "Просит позвать Ширин";
+export const REASON_BOT_FAILED = "Помощник не смог ответить";
+
+/** Приоритет причины, если у клиента их несколько: просьба человека важнее поломки. */
+const PRIORITY = [REASON_ASKED_HUMAN, REASON_BOT_FAILED];
+
+export async function waitingClients(now = Date.now()): Promise<WaitingClient[]> {
   const since = new Date(now - WINDOW_MS);
-  const [aiSetting, frozen] = await Promise.all([getSetting("aiEnabled"), getSetting("botFrozen")]);
-  const aiOff = aiSetting !== "true" || frozen === "true";
+  const found = new Map<string, { reason: string; at: Date; chatId?: string }>();
+  const add = (contactId: string, reason: string, at: Date, chatId?: string) => {
+    const prev = found.get(contactId);
+    const rank = (r: string) => (PRIORITY.indexOf(r) === -1 ? PRIORITY.length : PRIORITY.indexOf(r));
+    if (!prev || rank(reason) < rank(prev.reason)) found.set(contactId, { reason, at, chatId });
+  };
 
-  const rows = await prisma.contact.findMany({
-    where: {
-      personal: false,
-      spamBlockedAt: null,
-      whatsappSavedContact: false,
-      // Есть свободное входящее за неделю — иначе кандидат не нужен вовсе.
-      messages: { some: { direction: "IN", payload: null, createdAt: { gte: since } } },
-      ...(aiOff ? {} : { OR: [{ humanSilencedUntil: { gte: since } }, { humanTakenOverAt: { not: null } }] }),
-    },
-    orderBy: { updatedAt: "desc" },
-    take: SCAN,
-    select: {
-      id: true,
-      channel: true,
-      igUserId: true,
-      username: true,
-      name: true,
-      humanSilencedUntil: true,
-      humanTakenOverAt: true,
-      messages: {
-        where: { direction: "IN", payload: null },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        select: { text: true, createdAt: true },
-      },
-    },
+  // 1. Клиент попросил позвать человека, и после этого живой ответ не приходил.
+  const asked = await prisma.contact.findMany({
+    where: { humanRequestedAt: { gte: since }, personal: false, spamBlockedAt: null, whatsappSavedContact: false },
+    orderBy: { humanRequestedAt: "desc" },
+    take: 200,
+    select: { id: true, humanRequestedAt: true },
   });
-  if (rows.length === 0) return { clients: [], aiOff };
-
-  // Последний ответ живого человека по каждому кандидату — одним запросом.
-  const humanReplies = await prisma.message.findMany({
-    where: { contactId: { in: rows.map((r) => r.id) }, direction: "OUT", byHuman: true, createdAt: { gte: since } },
-    orderBy: { createdAt: "desc" },
-    select: { contactId: true, createdAt: true },
-  });
-  const lastHuman = new Map<string, Date>();
-  for (const m of humanReplies) if (!lastHuman.has(m.contactId)) lastHuman.set(m.contactId, m.createdAt);
-
-  const out: WaitingClient[] = [];
-  for (const row of rows) {
-    const last = row.messages[0];
-    if (!last || last.createdAt < since) continue;
-    const human = lastHuman.get(row.id);
-    if (human && human >= last.createdAt) continue; // уже ответили
-    if (!aiOff) {
-      // Бот молчал именно тогда, когда клиент писал: тишина ещё идёт или была
-      // включена до его сообщения; либо разговор перехвачен живым человеком.
-      const silentThen = row.humanSilencedUntil != null && row.humanSilencedUntil >= last.createdAt;
-      if (!silentThen && !row.humanTakenOverAt) continue;
+  if (asked.length > 0) {
+    const replies = await prisma.message.findMany({
+      where: { contactId: { in: asked.map((c) => c.id) }, direction: "OUT", byHuman: true, createdAt: { gte: since } },
+      orderBy: { createdAt: "desc" },
+      select: { contactId: true, createdAt: true },
+    });
+    const lastHuman = new Map<string, Date>();
+    for (const m of replies) if (!lastHuman.has(m.contactId)) lastHuman.set(m.contactId, m.createdAt);
+    for (const c of asked) {
+      const human = lastHuman.get(c.id);
+      if (human && human >= c.humanRequestedAt!) continue;
+      add(c.id, REASON_ASKED_HUMAN, c.humanRequestedAt!);
     }
+  }
+
+  // 2. Ответ ИИ завис: две и больше неудачные попытки. Пустяки не считаем.
+  const stuck = await prisma.pendingAiReply.findMany({
+    where: { attempts: { gte: 2 }, createdAt: { gte: since } },
+    orderBy: { createdAt: "asc" },
+    take: 200,
+    select: { contactId: true, text: true, createdAt: true },
+  });
+  for (const p of stuck) if (!isTrivialMessage(p.text)) add(p.contactId, REASON_BOT_FAILED, p.createdAt);
+
+  // 3. WhatsApp: чат помечен «нужен ответ».
+  const marked = await prisma.whatsAppInbox.findMany({
+    where: { status: "attention", contactId: { not: null }, createdAt: { gte: since } },
+    orderBy: { createdAt: "desc" },
+    take: 300,
+  });
+  for (const row of marked) {
+    if (isTrivialKind(row.kind)) continue;
+    const incoming = describeIncoming(row.payload);
+    // Текстовое «Рахмат» — пустяк; фото/голосовое без текста — нет, оно непонятно без человека.
+    if (incoming.kind === "text" && incoming.text !== "" && isTrivialMessage(incoming.text)) continue;
+    add(row.contactId!, attentionText(row.attentionReason), row.createdAt, row.chatId);
+  }
+
+  if (found.size === 0) return [];
+  const contacts = await prisma.contact.findMany({
+    where: { id: { in: [...found.keys()] }, personal: false, spamBlockedAt: null },
+    select: { id: true, channel: true, igUserId: true, username: true, name: true },
+  });
+  const out: WaitingClient[] = [];
+  for (const c of contacts) {
+    const f = found.get(c.id)!;
+    const name = c.channel === "WHATSAPP" && !c.name?.trim() && f.chatId ? chatTitle(null, f.chatId) : waitingName(c);
     out.push({
-      contactId: row.id,
-      name: waitingName(row),
-      channel: row.channel,
-      channelLabel: channelLabel(row.channel),
-      replyUrl: replyUrlOf(row),
-      lastText: (last.text ?? "").trim() || "Прислал(а) фото или файл",
-      at: last.createdAt.toISOString(),
+      contactId: c.id,
+      name,
+      channel: c.channel,
+      channelLabel: channelLabel(c.channel),
+      replyUrl: replyUrlOf(c),
+      reason: f.reason,
+      at: f.at.toISOString(),
     });
   }
   // Кто ждёт дольше всех — первым.
   out.sort((a, b) => a.at.localeCompare(b.at));
-  return { clients: out.slice(0, LIMIT), aiOff };
+  return out.slice(0, LIMIT);
 }
 
 waitingRouter.get("/admin/v1/waiting", async (_req, res) => {
-  const { clients, aiOff } = await waitingClients();
-  res.json({ count: clients.length, aiOff, clients });
+  res.setHeader("Cache-Control", "no-store");
+  const clients = await waitingClients();
+  res.json({ count: clients.length, clients });
 });

@@ -8,7 +8,8 @@ export type WaitingClient = {
   channel: string;
   channelLabel: string;
   replyUrl: string | null;
-  lastText: string;
+  /** Почему клиенту нужен человек — простыми словами. Текст переписки сюда не приходит. */
+  reason: string;
   at: string;
 };
 
@@ -17,8 +18,6 @@ export type Attention = {
   questions: number;
   notOpened: number;
   waiting: WaitingClient[];
-  /** Помощник выключен — на всех, кто написал, отвечает человек (сервер считает так же). */
-  aiOff: boolean;
   /** Первые в очереди — для подписи под числом («первый: @madina, 70 с.»). */
   queue: QueueItem[];
   problems: string[];
@@ -53,7 +52,7 @@ export function useAttention(
       api<Today>("/admin/today"),
       // Список клиентов не должен ронять весь экран: если маршрут не ответил,
       // показываем остальное, а ошибку держим отдельно.
-      api<{ clients: WaitingClient[]; aiOff?: boolean }>("/admin/v1/waiting").catch((e: unknown) => {
+      api<{ clients: WaitingClient[] }>("/admin/v1/waiting").catch((e: unknown) => {
         console.error("waiting clients", e);
         return null;
       }),
@@ -66,7 +65,6 @@ export function useAttention(
           questions: today.unansweredQuestions,
           notOpened: today.notOpened,
           waiting: waiting ? waiting.clients : (prev?.waiting ?? []),
-          aiOff: waiting ? Boolean(waiting.aiOff) : (prev?.aiOff ?? false),
           queue: today.queue,
           problems: today.system.problems,
         }));
@@ -97,10 +95,10 @@ export function useAttention(
 /** Что показывать на карточках «Сегодня» — чистая функция, чтобы проверять без экрана. */
 export type TodayCardId = "receipts" | "waiting" | "questions" | "notOpened" | "recipes" | "problems";
 
-export function activeCards(a: Attention, simple: boolean): TodayCardId[] {
+export function activeCards(a: Attention, simple: boolean, showWaiting = true): TodayCardId[] {
   const out: TodayCardId[] = [];
   if (a.receipts > 0) out.push("receipts");
-  if (a.waiting.length > 0) out.push("waiting");
+  if (showWaiting && a.waiting.length > 0) out.push("waiting");
   if (a.questions > 0) out.push("questions");
   if (a.notOpened > 0) out.push("notOpened");
   if (!simple) {

@@ -677,7 +677,7 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
   await prisma.contact
     .update({
       where: { id: contact.id },
-      data: { humanSilencedUntil: new Date(Date.now() + HUMAN_REQUESTED_SILENCE_MS) },
+      data: { humanSilencedUntil: new Date(Date.now() + HUMAN_REQUESTED_SILENCE_MS), humanRequestedAt: new Date() },
     })
     .catch((err) => {
       logError("ai:callOwnerToChat:silence", err);

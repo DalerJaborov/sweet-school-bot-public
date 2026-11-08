@@ -13,6 +13,7 @@ import { useSyncExternalStore } from "react";
  */
 const SIMPLE_KEY = "panel_simple";
 const THEME_KEY = "panel_theme";
+const ESCALATIONS_KEY = "panel_show_escalations";
 
 export type PanelTheme = "light" | "dark";
 
@@ -32,6 +33,8 @@ function write(key: string, value: string): void {
 }
 
 let simple = read(SIMPLE_KEY) === "1";
+/** По умолчанию ВКЛ: показываем только тех, кого бот сам передал человеку. */
+let showEscalations = read(ESCALATIONS_KEY) !== "0";
 let theme: PanelTheme = read(THEME_KEY) === "dark" ? "dark" : "light";
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
@@ -73,4 +76,16 @@ export function setTheme(next: PanelTheme): void {
 }
 export function useTheme(): PanelTheme {
   return useSyncExternalStore(subscribe, currentTheme, currentTheme);
+}
+
+export function isShowEscalations(): boolean {
+  return showEscalations;
+}
+export function setShowEscalations(on: boolean): void {
+  showEscalations = on;
+  write(ESCALATIONS_KEY, on ? "1" : "0");
+  emit();
+}
+export function useShowEscalations(): boolean {
+  return useSyncExternalStore(subscribe, isShowEscalations, isShowEscalations);
 }
