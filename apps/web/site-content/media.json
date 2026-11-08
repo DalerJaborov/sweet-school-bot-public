@@ -119,6 +119,114 @@
       },
       "avif": "/img/desserts/shu.avif",
       "avifSm": "/img/desserts/shu-sm.avif"
+    },
+    "Десерт «Анна Павлова»": {
+      "src": "/img/desserts/anna-pavlova.webp",
+      "srcSm": "/img/desserts/anna-pavlova-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Десерт «Анна Павлова» — готовый десерт",
+        "tg": "Ширинӣ «Анна Павлова»"
+      },
+      "avif": "/img/desserts/anna-pavlova.avif",
+      "avifSm": "/img/desserts/anna-pavlova-sm.avif"
+    },
+    "Афганская пахлава": {
+      "src": "/img/desserts/afganskaya-pahlava.webp",
+      "srcSm": "/img/desserts/afganskaya-pahlava-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Афганская пахлава — готовый десерт",
+        "tg": "Паҳлаваи афғонӣ"
+      },
+      "avif": "/img/desserts/afganskaya-pahlava.avif",
+      "avifSm": "/img/desserts/afganskaya-pahlava-sm.avif"
+    },
+    "Банановое пирожное": {
+      "src": "/img/desserts/bananovoe-pirozhnoe.webp",
+      "srcSm": "/img/desserts/bananovoe-pirozhnoe-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Банановое пирожное — готовый десерт",
+        "tg": "Ширинии бананӣ"
+      },
+      "avif": "/img/desserts/bananovoe-pirozhnoe.avif",
+      "avifSm": "/img/desserts/bananovoe-pirozhnoe-sm.avif"
+    },
+    "Торт «Карамельный»": {
+      "src": "/img/desserts/tort-karamelnyj.webp",
+      "srcSm": "/img/desserts/tort-karamelnyj-sm.webp",
+      "width": 1600,
+      "height": 1600,
+      "alt": {
+        "ru": "Торт «Карамельный» — готовый десерт",
+        "tg": "Торти карамелӣ"
+      },
+      "avif": "/img/desserts/tort-karamelnyj.avif",
+      "avifSm": "/img/desserts/tort-karamelnyj-sm.avif"
+    },
+    "Рулет «Меренга»": {
+      "src": "/img/desserts/rulet-merenga.webp",
+      "srcSm": "/img/desserts/rulet-merenga-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Рулет «Меренга» — готовый десерт",
+        "tg": "Рулети «Меренга»"
+      },
+      "avif": "/img/desserts/rulet-merenga.avif",
+      "avifSm": "/img/desserts/rulet-merenga-sm.avif"
+    },
+    "Пирожное «Орео»": {
+      "src": "/img/desserts/pirozhnoe-oreo.webp",
+      "srcSm": "/img/desserts/pirozhnoe-oreo-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Пирожное «Орео» — готовый десерт",
+        "tg": "Ширинӣ «Орео»"
+      },
+      "avif": "/img/desserts/pirozhnoe-oreo.avif",
+      "avifSm": "/img/desserts/pirozhnoe-oreo-sm.avif"
+    },
+    "Творожный пирог": {
+      "src": "/img/desserts/tvorozhnyj-pirog.webp",
+      "srcSm": "/img/desserts/tvorozhnyj-pirog-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Творожный пирог — готовый десерт",
+        "tg": "Пироги творогӣ"
+      },
+      "avif": "/img/desserts/tvorozhnyj-pirog.avif",
+      "avifSm": "/img/desserts/tvorozhnyj-pirog-sm.avif"
+    },
+    "Эклеры": {
+      "src": "/img/desserts/ekler.webp",
+      "srcSm": "/img/desserts/ekler-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Эклеры — готовый десерт",
+        "tg": "Эклерҳо"
+      },
+      "avif": "/img/desserts/ekler.avif",
+      "avifSm": "/img/desserts/ekler-sm.avif"
+    },
+    "Чизкейк «Твикс»": {
+      "src": "/img/desserts/chizkejk-tviks.webp",
+      "srcSm": "/img/desserts/chizkejk-tviks-sm.webp",
+      "width": 720,
+      "height": 720,
+      "alt": {
+        "ru": "Чизкейк «Твикс» — готовый десерт",
+        "tg": "Чизкейк «Твикс»"
+      },
+      "avif": "/img/desserts/chizkejk-tviks.avif",
+      "avifSm": "/img/desserts/chizkejk-tviks-sm.avif"
     }
   },
   "tools": [
