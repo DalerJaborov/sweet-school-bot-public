@@ -38,9 +38,21 @@ export async function voiceEnabled(): Promise<boolean> {
 }
 
 /** Версия пост-обработки звука: меняем при смене фильтра, чтобы кеш не отдавал старое звучание. */
-const VOICE_POST = "v3-final-1";
-// Настройки выбраны владельцем на слух 08.11.2026: 6 из 6 проб были неотличимы от живой речи (eleven_v3, одна метка в начале).
-const VOICE_SETTINGS = { stability: 0.5, similarity_boost: 0.95, style: 0.4, speed: 1.2, use_speaker_boost: true };
+const VOICE_POST = "v4-natural-1";
+/** Семейство модели: у eleven_v4 / eleven_v4_turbo нет ползунков style и speed (ФАКТ: справка ElevenLabs «What is Eleven v4»), только stability и similarity. */
+export const isV4 = (model = env.elevenLabsModel) => model.startsWith("eleven_v4");
+/**
+ * Настройки голоса. Владелец 08.11.2026 вечером: переходим на v4 (turbo или полный), голос должен звучать как
+ * живое голосовое в WhatsApp — без ускорения 1.2 (оно читалось «тараторит»). Цифры голосом не читаем (voiceReply.ts).
+ * Ползунки можно переопределить через ELEVENLABS_STABILITY / ELEVENLABS_SIMILARITY, подобранные на сайте ElevenLabs.
+ */
+export function voiceSettingsFor(model = env.elevenLabsModel): Record<string, number | boolean> {
+  const stability = env.elevenLabsStability || 0.5;
+  const similarity = env.elevenLabsSimilarity || 0.9;
+  if (isV4(model)) return { stability, similarity_boost: similarity, use_speaker_boost: true };
+  // Прежние настройки v3 (владелец 08.11.2026 днём), но без ускорения: естественный темп.
+  return { stability, similarity_boost: env.elevenLabsSimilarity || 0.95, style: 0.4, speed: 1.0, use_speaker_boost: true };
+}
 /** Закреплённая случайность: одинаковый текст звучит одинаково. */
 const VOICE_SEED = 4242;
 
@@ -56,9 +68,12 @@ function pick(list: string[], text: string): string {
   for (const ch of text) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
   return list[h % list.length];
 }
-export function decorateForV3(chunk: string, index: number, _total: number, model = env.elevenLabsModel): string {
-  if (model !== "eleven_v3" || index !== 0) return chunk;
-  return `${pick(OPEN_TAGS, chunk)} ${chunk}`;
+export function decorateForV3(chunk: string, index: number, _total: number, model = env.elevenLabsModel, tag = env.elevenLabsTag): string {
+  if (index !== 0) return chunk;
+  // v4: метка только та, что выбрал владелец на слух (ELEVENLABS_TAG); пусто — чистая речь.
+  if (isV4(model)) return tag ? `${tag} ${chunk}` : chunk;
+  if (model !== "eleven_v3") return chunk;
+  return `${tag || pick(OPEN_TAGS, chunk)} ${chunk}`;
 }
 
 const MEDIA_DIR = "/data/uploads";
@@ -66,9 +81,9 @@ export const DEFAULT_MONTHLY_CAP_USD = 20;
 /** Цена, присланная владельцем (ElevenLabs Business: $0.08 за 1000 знаков для v3/v4; не проверена на официальной странице). Меняется настройкой voicePricePer1kUsd. */
 export const DEFAULT_PRICE_PER_1K_USD = 0.08;
 
-/** Один кусок голосом - примерно до 9-10 секунд речи (~150 знаков), всего не больше 4 кусков. */
-export const VOICE_CHUNK_CHARS = 150;
-export const VOICE_MAX_CHUNKS = 4;
+/** Один кусок голосом - до ~18 секунд речи (~280 знаков), всего не больше 2 голосовых подряд (владелец 08.11.2026: «не по кускам»). */
+export const VOICE_CHUNK_CHARS = 280;
+export const VOICE_MAX_CHUNKS = 2;
 
 /**
  * Режет ответ на короткие голосовые по границам предложений (как человек: фраза - пауза - фраза).
@@ -104,7 +119,7 @@ export function normalizeVoiceText(text: string): string {
 /** Ключ кеша: тот же текст + голос + модель + настройки = тот же файл, повторно не платим. */
 export function voiceCacheKey(text: string): string {
   return createHash("sha256")
-    .update(JSON.stringify([normalizeVoiceText(text), env.elevenLabsVoiceId, env.elevenLabsModel, VOICE_SETTINGS, VOICE_POST]))
+    .update(JSON.stringify([normalizeVoiceText(text), env.elevenLabsVoiceId, env.elevenLabsModel, voiceSettingsFor(), env.elevenLabsTag, env.elevenLabsTempo, env.elevenLabsFx, VOICE_POST]))
     .digest("hex")
     .slice(0, 32);
 }
@@ -183,7 +198,7 @@ export async function synthesizeToFile(rawText: string, format: VoiceFormat = "o
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
   // Только перекодирование в ogg/opus, без шума и фильтров (решение владельца 08.11.2026: чистый голос).
   // mp3 как голосовое НЕ отдаём и не кешируем: на iPhone он не играет, лучше ошибка и ответ текстом.
-  const opus = await toOpusOgg(mp3, 30_000, format);
+  const opus = await toOpusOgg(mp3, 30_000, format, env.elevenLabsTempo, env.elevenLabsFx);
   if (!opus) throw new VoiceCloneError("Не удалось подготовить голосовое (ffmpeg)", 503);
   const name = `tts-${key}.${format}`;
   // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».
@@ -211,7 +226,7 @@ export async function synthesizeSpeech(rawText: string): Promise<Buffer> {
         text,
         model_id: env.elevenLabsModel,
         seed: VOICE_SEED,
-        voice_settings: VOICE_SETTINGS,
+        voice_settings: voiceSettingsFor(),
       }),
       signal: AbortSignal.timeout(60_000),
     },
