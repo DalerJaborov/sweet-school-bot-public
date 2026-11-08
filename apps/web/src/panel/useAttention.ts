@@ -17,6 +17,8 @@ export type Attention = {
   questions: number;
   notOpened: number;
   waiting: WaitingClient[];
+  /** Помощник выключен — на всех, кто написал, отвечает человек (сервер считает так же). */
+  aiOff: boolean;
   /** Первые в очереди — для подписи под числом («первый: @madina, 70 с.»). */
   queue: QueueItem[];
   problems: string[];
@@ -51,7 +53,7 @@ export function useAttention(
       api<Today>("/admin/today"),
       // Список клиентов не должен ронять весь экран: если маршрут не ответил,
       // показываем остальное, а ошибку держим отдельно.
-      api<{ clients: WaitingClient[] }>("/admin/v1/waiting").catch((e: unknown) => {
+      api<{ clients: WaitingClient[]; aiOff?: boolean }>("/admin/v1/waiting").catch((e: unknown) => {
         console.error("waiting clients", e);
         return null;
       }),
@@ -64,6 +66,7 @@ export function useAttention(
           questions: today.unansweredQuestions,
           notOpened: today.notOpened,
           waiting: waiting ? waiting.clients : (prev?.waiting ?? []),
+          aiOff: waiting ? Boolean(waiting.aiOff) : (prev?.aiOff ?? false),
           queue: today.queue,
           problems: today.system.problems,
         }));

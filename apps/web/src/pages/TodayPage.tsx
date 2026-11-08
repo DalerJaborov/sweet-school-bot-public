@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ConversationSheet } from "../components/ConversationSheet";
 import { Icons } from "../components/Brand";
 import { EmptyState, OfflineState } from "../components/EmptyState";
 import { Skeleton } from "../components/Skeleton";
@@ -15,7 +16,7 @@ import { activeCards, type Attention, type TodayCardId, type WaitingClient } fro
  *
  * Данные приходят готовыми (useAttention): никаких выдуманных цифр.
  */
-export type TodayGo = "receipts" | "questions" | "clients" | "recipes" | "settings";
+export type TodayGo = "receipts" | "questions" | "clients" | "recipes" | "summary";
 
 export function TodayPage(props: {
   data: Attention | null;
@@ -108,7 +109,7 @@ function renderCard(
       );
     }
     case "waiting": {
-      return <WaitingCard waiting={a.waiting} onOpenStudent={onOpenStudent} />;
+      return <WaitingCard waiting={a.waiting} aiOff={a.aiOff} />;
     }
     case "questions":
       return (
@@ -162,9 +163,19 @@ function renderCard(
           icon={Icons.settings}
           count={a.problems.length}
           title="Что-то работает не так"
-          sub="Что-то работает не так, как обычно. Откройте настройки или покажите это тому, кто всё настраивал."
-          action="Открыть настройки"
-          onAction={() => onGo("settings")}
+          sub={
+            <>
+              Помощник или сайт сообщили:
+              <ul className="today-problems">
+                {a.problems.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+              Покажите это тому, кто всё настраивал.
+            </>
+          }
+          action="Открыть сводку"
+          onAction={() => onGo("summary")}
         />
       );
   }
@@ -175,7 +186,7 @@ function TodayCard(props: {
   icon: JSX.Element;
   count: number;
   title: string;
-  sub: string;
+  sub: ReactNode;
   action: string;
   onAction: () => void;
 }) {
@@ -187,7 +198,7 @@ function TodayCard(props: {
         <div className="today-count">{count}</div>
       </div>
       <h3 className="today-title">{title}</h3>
-      <p className="today-sub">{sub}</p>
+      <div className="today-sub">{sub}</div>
       <button type="button" className="btn wide today-action" onClick={onAction}>
         {action}
       </button>
@@ -198,8 +209,9 @@ function TodayCard(props: {
 /** Сколько ждущих показываем сразу; остальные появятся, как только эти получат ответ. */
 const WAITING_SHOWN = 3;
 
-function WaitingCard(props: { waiting: WaitingClient[]; onOpenStudent: (id: string) => void }) {
-  const { waiting, onOpenStudent } = props;
+function WaitingCard(props: { waiting: WaitingClient[]; aiOff: boolean }) {
+  const { waiting, aiOff } = props;
+  const [open, setOpen] = useState<WaitingClient | null>(null);
   const shown = waiting.slice(0, WAITING_SHOWN);
   const hidden = waiting.length - shown.length;
   return (
@@ -209,6 +221,7 @@ function WaitingCard(props: { waiting: WaitingClient[]; onOpenStudent: (id: stri
         <div className="today-count">{waiting.length}</div>
       </div>
       <h3 className="today-title">Клиенты ждут ответа</h3>
+      {aiOff && <p className="today-sub">Помощник сейчас выключен — всем, кто пишет, отвечаете вы.</p>}
       <ul className="today-people">
         {shown.map((c) => (
           <li key={c.contactId} className="today-person">
@@ -230,16 +243,17 @@ function WaitingCard(props: { waiting: WaitingClient[]; onOpenStudent: (id: stri
               <button
                 type="button"
                 className="btn wide today-action"
-                onClick={() => onOpenStudent(c.contactId)}
-                aria-label={`Открыть переписку: ${c.name}`}
+                onClick={() => setOpen(c)}
+                aria-label={`Прочитать переписку: ${c.name}`}
               >
-                Открыть переписку
+                Прочитать переписку
               </button>
             )}
           </li>
         ))}
       </ul>
       {hidden > 0 && <p className="today-sub">И ещё {hidden} — появятся здесь, когда вы ответите этим.</p>}
+      <ConversationSheet contactId={open?.contactId ?? null} name={open?.name ?? ""} onClose={() => setOpen(null)} />
     </article>
   );
 }

@@ -14,6 +14,7 @@ interface CheckResult {
 }
 import { api } from "../api";
 import { Switch } from "../components/Switch";
+import { confirmDialog } from "../components/ConfirmDialog";
 import { toast } from "../components/Toast";
 import { Icons } from "../components/Brand";
 import { useUnsavedGuard } from "../components/UnsavedGuard";
@@ -273,8 +274,25 @@ export function SettingsPage() {
     }
   }
 
-  /** Тумблер меняется сразу; если сервер не принял — возвращаем и говорим об этом. */
+  /** Тумблеры, которые сейчас сохраняются: повторное нажатие на тот же игнорируем. */
+  const inFlight = useRef(new Set<string>());
+
+  /**
+   * Тумблер меняется сразу; если сервер не принял — возвращаем и говорим об
+   * этом. Включение ответов клиентам — только после подтверждения: после него
+   * помощник начинает писать настоящим людям.
+   */
   async function flip(key: "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled", next: boolean, set: (v: boolean) => void) {
+    if (inFlight.current.has(key)) return;
+    if (key === "aiEnabled" && next) {
+      const ok = await confirmDialog({
+        title: "Включить ответы клиентам?",
+        message: "Помощник начнёт сам отвечать людям в Instagram и на сайте. Выключить можно этим же тумблером.",
+        confirmLabel: "Включить",
+      });
+      if (!ok) return;
+    }
+    inFlight.current.add(key);
     set(next);
     try {
       await api("/admin/settings", { method: "PUT", body: { [key]: String(next) } });
@@ -282,6 +300,8 @@ export function SettingsPage() {
     } catch (e) {
       set(!next);
       toast(e instanceof Error ? e.message : "Не удалось сохранить", "error");
+    } finally {
+      inFlight.current.delete(key);
     }
   }
 

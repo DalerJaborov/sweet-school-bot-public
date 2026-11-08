@@ -19,7 +19,11 @@
  * областью, поэтому в панели работает этот, а у учениц — тот. Файл лежит в
  * корне, nginx отдаёт его без долгого кеша (nginx.conf → /panel-sw.js).
  */
-const SHELL_CACHE = "panel-shell-v1";
+/* Версия в имени: при смене файла старые панельные кеши удаляются в activate. */
+const CACHE_PREFIX = "panel-";
+const SHELL_CACHE = "panel-shell-v2";
+/* Статика с хешем копится при каждой выкладке; держим только свежие файлы. */
+const MAX_STATIC_ENTRIES = 80;
 const SHELL_URL = "/panel/";
 const STATIC_PREFIXES = ["/assets/", "/fonts/", "/icons/"];
 const STATIC_FILES = ["/icon-192.png", "/icon-512.png", "/favicon.svg", "/favicon.ico"];
@@ -59,12 +63,19 @@ self.addEventListener("activate", (event) => {
     (async () => {
       const names = await caches.keys();
       await Promise.all(
-        names.filter((n) => n.startsWith("panel-shell-") && n !== SHELL_CACHE).map((n) => caches.delete(n)),
+        names.filter((n) => n.startsWith(CACHE_PREFIX) && n !== SHELL_CACHE).map((n) => caches.delete(n)),
       );
       await self.clients.claim();
     })(),
   );
 });
+
+/** Самые старые записи уходят первыми, чтобы кеш не рос от выкладки к выкладке. */
+async function trimCache(cache) {
+  const keys = (await cache.keys()).filter((r) => new URL(r.url).pathname !== SHELL_URL);
+  const extra = keys.length - MAX_STATIC_ENTRIES;
+  for (let i = 0; i < extra; i++) await cache.delete(keys[i]);
+}
 
 self.addEventListener("fetch", (event) => {
   const kind = classify(new URL(event.request.url), event.request);
@@ -100,7 +111,12 @@ self.addEventListener("fetch", (event) => {
       const res = await fetch(event.request);
       if (res.ok && res.type === "basic") {
         const copy = res.clone();
-        event.waitUntil(caches.open(SHELL_CACHE).then((c) => c.put(event.request, copy)));
+        event.waitUntil(
+          caches.open(SHELL_CACHE).then(async (c) => {
+            await c.put(event.request, copy);
+            await trimCache(c);
+          }),
+        );
       }
       return res;
     })(),

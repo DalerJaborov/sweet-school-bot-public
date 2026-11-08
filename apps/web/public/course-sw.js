@@ -63,7 +63,7 @@ self.addEventListener("activate", (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((k) => k !== SHELL_CACHE && k !== FONT_CACHE).map((k) => caches.delete(k)))
+        Promise.all(keys.filter((k) => k.startsWith("course-") && k !== SHELL_CACHE && k !== FONT_CACHE).map((k) => caches.delete(k)))
       )
       .then(() => self.clients.claim())
   );

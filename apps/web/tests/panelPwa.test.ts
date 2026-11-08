@@ -17,7 +17,12 @@ function loadSw() {
     skipWaiting: () => undefined,
     clients: { claim: async () => undefined },
   };
-  vm.runInNewContext(readFileSync(pub("panel-sw.js"), "utf8"), { self, URL, caches: { match: async () => undefined, open: async () => ({ put: async () => undefined }), keys: async () => [] }, fetch: async () => ({ ok: false, type: "basic" }) });
+  vm.runInNewContext(readFileSync(pub("panel-sw.js"), "utf8"), {
+    self,
+    URL,
+    caches: { match: async () => undefined, open: async () => ({ put: async () => undefined }), keys: async () => [] },
+    fetch: async () => ({ ok: false, type: "basic" }),
+  });
   return listeners;
 }
 
@@ -38,7 +43,13 @@ function fetchEvent(path: string, init: { method?: string; mode?: string; auth?:
 }
 
 describe("PWA панели", () => {
-  const manifest = json("panel.webmanifest") as { scope: string; start_url: string; name: string; icons: { src: string }[]; display: string };
+  const manifest = json("panel.webmanifest") as {
+    scope: string;
+    start_url: string;
+    name: string;
+    icons: { src: string }[];
+    display: string;
+  };
   const student = json("manifest.webmanifest") as { scope: string; start_url: string };
 
   it("манифест: название, область /panel/, старт внутри области, значки на месте", () => {
@@ -46,7 +57,8 @@ describe("PWA панели", () => {
     expect(manifest.scope).toBe("/panel/");
     expect(manifest.start_url.startsWith(manifest.scope)).toBe(true);
     expect(manifest.display).toBe("standalone");
-    for (const icon of manifest.icons) expect(() => readFileSync(pub(icon.src.split("?")[0].replace(/^\//, "")))).not.toThrow();
+    for (const icon of manifest.icons)
+      expect(() => readFileSync(pub(icon.src.split("?")[0].replace(/^\//, "")))).not.toThrow();
   });
 
   it("область панели не пересекается с приложением учениц", () => {
@@ -61,7 +73,7 @@ describe("PWA панели", () => {
   it("index.html подключает манифест панели, а не учениц", () => {
     const html = readFileSync(resolve(__dirname, "../index.html"), "utf8");
     expect(html).toContain('href="/panel.webmanifest"');
-    expect(html).not.toContain("manifest.webmanifest\"");
+    expect(html).not.toContain('manifest.webmanifest"');
   });
 
   it("nginx отдаёт service worker панели без долгого кеша", () => {
@@ -71,7 +83,16 @@ describe("PWA панели", () => {
 
   it("service worker не трогает данные: API, админку, медиа, не-GET, чужие адреса, Authorization", () => {
     const sw = loadSw();
-    for (const path of ["/admin/today", "/admin/v1/waiting", "/api/course/me", "/media/receipt.jpg", "/webhooks/meta", "/health", "/course", "/l/abc"]) {
+    for (const path of [
+      "/admin/today",
+      "/admin/v1/waiting",
+      "/api/course/me",
+      "/media/receipt.jpg",
+      "/webhooks/meta",
+      "/health",
+      "/course",
+      "/l/abc",
+    ]) {
       const { event, calls } = fetchEvent(path);
       sw.fetch(event);
       expect(calls.responded, path).toBe(false);
@@ -85,7 +106,13 @@ describe("PWA панели", () => {
 
   it("service worker берёт только оболочку: страницу панели и статику", () => {
     const sw = loadSw();
-    for (const [path, mode] of [["/panel/", "navigate"], ["/panel", "navigate"], ["/assets/index-abc.js", "cors"], ["/fonts/onest.woff2", "cors"], ["/icons/icon-192.png", "no-cors"]]) {
+    for (const [path, mode] of [
+      ["/panel/", "navigate"],
+      ["/panel", "navigate"],
+      ["/assets/index-abc.js", "cors"],
+      ["/fonts/onest.woff2", "cors"],
+      ["/icons/icon-192.png", "no-cors"],
+    ]) {
       const { event, calls } = fetchEvent(path, { mode });
       sw.fetch(event);
       expect(calls.responded, path).toBe(true);

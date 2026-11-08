@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState, type ComponentType } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { api, setToken, hasToken, checkAdminSession, signOut } from "./api";
 import { isInsideTelegram, loginViaTelegram, applyTelegramChrome } from "./telegram";
 import { Logo, Icons } from "./components/Brand";
@@ -15,6 +15,7 @@ import type { TasksView } from "./pages/TasksPage";
 import { BOTTOM_NAV, MORE_SECTIONS, bottomNavFor, isAllowed, navOwner, type Tab } from "./panel/nav";
 import { useSimpleMode } from "./panel/prefs";
 import { useAttention } from "./panel/useAttention";
+import { lazyPage } from "./panel/lazy";
 
 /**
  * ЛЕНИВАЯ ЗАГРУЗКА: на первом экране нужен только «Сегодня»; остальные
@@ -22,9 +23,6 @@ import { useAttention } from "./panel/useAttention";
  * при первом открытии и в простое после входа — тап по нижней кнопке тогда
  * мгновенный.
  */
-function lazyPage<K extends string, P extends object>(load: () => Promise<Record<K, ComponentType<P>>>, name: K) {
-  return lazy(() => load().then((m) => ({ default: m[name] })));
-}
 const pages = {
   tasks: () => import("./pages/TasksPage"),
   clients: () => import("./pages/ClientsPage"),

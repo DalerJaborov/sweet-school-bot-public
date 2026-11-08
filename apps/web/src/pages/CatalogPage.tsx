@@ -1,8 +1,9 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
+import { lazyPage } from "../panel/lazy";
 import { SkeletonList } from "../components/Skeleton";
 
-const CoursesPage = lazy(() => import("./CoursesPage").then((m) => ({ default: m.CoursesPage })));
-const TextsPage = lazy(() => import("./TextsPage").then((m) => ({ default: m.TextsPage })));
+const CoursesPage = lazyPage(() => import("./CoursesPage"), "CoursesPage");
+const TextsPage = lazyPage(() => import("./TextsPage"), "TextsPage");
 
 /**
  * «КУРСЫ И ЦЕНЫ» — одна кнопка внизу, два экрана под переключателем:

@@ -15,17 +15,44 @@ afterEach(() => {
   setTheme("light");
 });
 
-const empty: Attention = { receipts: 0, questions: 0, notOpened: 0, waiting: [], queue: [], problems: [] };
+const empty: Attention = { receipts: 0, questions: 0, notOpened: 0, waiting: [], aiOff: false, queue: [], problems: [] };
 const busy: Attention = {
   receipts: 2,
   questions: 1,
   notOpened: 0,
+  aiOff: false,
   waiting: [
-    { contactId: "w1", name: "@demo", channel: "INSTAGRAM", channelLabel: "Instagram", replyUrl: "https://www.instagram.com/demo/", lastText: "Позовите Ширин", at: new Date().toISOString() },
-    { contactId: "w2", name: "Без ссылки", channel: "WEB", channelLabel: "Сайт", replyUrl: null, lastText: "Здравствуйте", at: new Date().toISOString() },
+    {
+      contactId: "w1",
+      name: "@demo",
+      channel: "INSTAGRAM",
+      channelLabel: "Instagram",
+      replyUrl: "https://ig.me/m/demo",
+      lastText: "Позовите Ширин",
+      at: new Date().toISOString(),
+    },
+    {
+      contactId: "w2",
+      name: "Без ссылки",
+      channel: "WEB",
+      channelLabel: "Сайт",
+      replyUrl: null,
+      lastText: "Здравствуйте",
+      at: new Date().toISOString(),
+    },
   ],
   queue: [
-    { kind: "receipt", id: "r1", who: { contactId: "c1", handle: "@demo", instagramUrl: null, channel: "INSTAGRAM" }, imageUrl: null, amount: 70, courseGuess: null, reason: "", confidence: 60, createdAt: new Date().toISOString() },
+    {
+      kind: "receipt",
+      id: "r1",
+      who: { contactId: "c1", handle: "@demo", instagramUrl: null, channel: "INSTAGRAM" },
+      imageUrl: null,
+      amount: 70,
+      courseGuess: null,
+      reason: "",
+      confidence: 60,
+      createdAt: new Date().toISOString(),
+    },
     { kind: "recipesToReview", count: 4 },
   ],
   problems: ["база не отвечает"],
@@ -62,9 +89,28 @@ describe("Сегодня", () => {
     fireEvent.click(screen.getByText("Ответить", { selector: "button" }));
     expect(p.onGo).toHaveBeenCalledWith("questions");
     const link = screen.getByLabelText("Ответить: @demo") as HTMLAnchorElement;
-    expect(link.href).toBe("https://www.instagram.com/demo/");
-    fireEvent.click(screen.getByLabelText("Открыть переписку: Без ссылки"));
-    expect(p.onOpenStudent).toHaveBeenCalledWith("w2");
+    expect(link.href).toBe("https://ig.me/m/demo");
+  });
+
+  it("без ссылки — читаем переписку здесь же, а не уходим в тупик", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([{ id: "m1", direction: "IN", text: "Здравствуйте, нужна помощь", byHuman: false, createdAt: new Date().toISOString() }]), { status: 200 })));
+    today(busy);
+    fireEvent.click(screen.getByLabelText("Прочитать переписку: Без ссылки"));
+    expect(await screen.findByText("Здравствуйте, нужна помощь")).toBeTruthy();
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/admin/contacts/w2/messages");
+    vi.unstubAllGlobals();
+  });
+
+  it("помощник выключен — карточка так и говорит", () => {
+    today({ ...busy, aiOff: true });
+    expect(screen.getByText(/Помощник сейчас выключен/)).toBeTruthy();
+  });
+
+  it("сбои показаны прямо в карточке и ведут в сводку", () => {
+    const p = today(busy);
+    expect(screen.getByText("база не отвечает")).toBeTruthy();
+    fireEvent.click(screen.getByText("Открыть сводку"));
+    expect(p.onGo).toHaveBeenCalledWith("summary");
   });
 
   it("активные карточки: в режиме сестры нет технических", () => {
@@ -90,7 +136,10 @@ describe("Навигация и режим сестры", () => {
   });
 
   it("в видимых названиях нет жаргона", () => {
-    const words = [...MORE_SECTIONS, ...BOTTOM_NAV].map((s) => ("about" in s ? `${s.label} ${s.about}` : s.label)).join(" ").toLowerCase();
+    const words = [...MORE_SECTIONS, ...BOTTOM_NAV]
+      .map((s) => ("about" in s ? `${s.label} ${s.about}` : s.label))
+      .join(" ")
+      .toLowerCase();
     for (const bad of ["воронк", "лид", "слот", "api", "токен", "вебхук"]) expect(words).not.toContain(bad);
   });
 
