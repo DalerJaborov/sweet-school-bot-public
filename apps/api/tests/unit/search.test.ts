@@ -33,8 +33,8 @@ function contact(i: number, paid: boolean) {
 }
 
 describe("searchSections — разделы по словам владелицы", () => {
-  it("синонимы: «цена» и «реквизиты» → Тексты и цены, «чек» → Чеки", () => {
-    expect(searchSections("цена").map((s) => s.tab)).toEqual(["texts"]);
+  it("синонимы: «цена» → Цены и даты, «реквизиты» → Тексты, «чек» → Чеки", () => {
+    expect(searchSections("цена").map((s) => s.tab)).toEqual(["offer"]);
     expect(searchSections("реквизиты").map((s) => s.tab)).toEqual(["texts"]);
     expect(searchSections("чек").map((s) => s.tab)).toContain("receipts");
   });
@@ -100,8 +100,8 @@ describe("GET /admin/search", () => {
     expect(arg.where.deletedAt).toBeNull();
   });
 
-  it("«цена» находит раздел «Цены и тексты»", async () => {
+  it("«цена» находит раздел «Цены и даты»", async () => {
     const r = await search("цена");
-    expect(r.sections).toEqual([{ tab: "texts", title: "Цены и тексты" }]);
+    expect(r.sections).toEqual([{ tab: "offer", title: "Цены и даты" }]);
   });
 });
