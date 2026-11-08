@@ -153,7 +153,7 @@ describe("maybeRestoreAccess", () => {
     expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
   });
 
-  it("ГЛАВНОЕ: второй перенос в этом месяце бот не делает даже с доказательством — ей «30 дней», владельцу сводка", async () => {
+  it("ГЛАВНОЕ: второй перенос в этом месяце бот не делает даже с доказательством — ей без цифр про лимит, владельцу сводка", async () => {
     const twice = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * 86_400_000) } as unknown as Contact;
     db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1" })]);
     db.model("receiptCheck").count.mockResolvedValue(1);
@@ -165,7 +165,7 @@ describe("maybeRestoreAccess", () => {
 
     expect(result).toMatchObject({ handled: true, outcome: "escalated" });
     expect(db.model("device").deleteMany).not.toHaveBeenCalled();
-    expect(String(sendText.mock.calls[0][1])).toContain("один раз в 30 дней");
+    expect(String(sendText.mock.calls[0][1])).not.toContain("30");
     const alert = String(sendTelegramMessage.mock.calls[0][2]);
     expect(alert).toContain("ещё раз в этом месяце");
     expect(alert).toContain("Android");

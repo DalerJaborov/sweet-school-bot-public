@@ -39,7 +39,6 @@ const TEXT: Record<Lang, { changed: string; noProof: string; limit: string; appr
       "Чтобы я перенесла доступ на новый телефон сама, пришлите чек об оплате картинкой или код из вашей ссылки (вид 7F3A-91C2). " +
       "Пока передала Ширин: она посмотрит и ответит вам.",
     limit:
-      "Перенос на другой телефон можно сделать один раз в 30 дней, и в этом месяце он уже был. " +
       "Передала Ширин: она посмотрит и ответит вам.",
     approved:
       "Ширин разрешила перенос на новый телефон. Вот новая ссылка, откройте её на нём. " +
@@ -54,7 +53,6 @@ const TEXT: Record<Lang, { changed: string; noProof: string; limit: string; appr
       "Барои он ки ман дастрасиро ба телефони нав худам гузаронам, чеки пардохтро ҳамчун акс ё рамзи линкатонро (намуди 7F3A-91C2) фиристед. " +
       "Ҳоло ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
     limit:
-      "Гузаронидан ба телефони дигар як бор дар 30 рӯз мумкин аст ва дар ин моҳ он аллакай шуда буд. " +
       "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
     approved:
       "Ширин гузаронидан ба телефони навро иҷозат дод. Мана линки нав, онро дар телефони нав кушоед. " +
@@ -62,10 +60,13 @@ const TEXT: Record<Lang, { changed: string; noProof: string; limit: string; appr
     failed: "Ба Ширин расондам: ӯ месанҷад ва ба шумо ҷавоб медиҳад.",
   },
   en: {
-    changed: "I moved your access to the new phone. Here is the new link, open it there. The old link and the old phone no longer open the lessons:\n",
-    noProof: "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I passed this to Shirin.",
-    limit: "Access can be moved once every 30 days and it was already moved this month. I passed this to Shirin.",
-    approved: "Shirin approved the move. Here is the new link, open it on the new phone. The old link and phone no longer work:\n",
+    changed:
+      "I moved your access to the new phone. Here is the new link, open it there. The old link and the old phone no longer open the lessons:\n",
+    noProof:
+      "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I passed this to Shirin.",
+    limit: "I passed this to Shirin, she will look and reply.",
+    approved:
+      "Shirin approved the move. Here is the new link, open it on the new phone. The old link and phone no longer work:\n",
     failed: "I passed this to Shirin, she will look and reply.",
   },
 };
@@ -102,7 +103,7 @@ function nameMatches(known: string | null | undefined, text: string): boolean {
 export async function phoneChangeProof(
   contact: Contact,
   text: string,
-  imageHashes: string[] = []
+  imageHashes: string[] = [],
 ): Promise<ProofKind | null> {
   // 1. Код из её ссылки (производный от кода ссылки, секрет сервера).
   const code = parseRecoveryCode(text);
@@ -140,12 +141,17 @@ export async function phoneChangeProof(
  */
 export async function performPhoneChange(
   contact: Contact,
-  kind: "bot" | "owner"
+  kind: "bot" | "owner",
 ): Promise<"changed" | "send_failed" | "no_link"> {
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh || fresh.accessRevokedAt || fresh.spamBlockedAt) return "no_link";
   const { url, jti } = issueMagicLink(fresh.id);
   if (!url.startsWith("http")) return "no_link";
+  // Заблокированное устройство тоже занимает единственное место. Бот его не
+  // снимает (блокировка — решение владельца): отдаём владельцу кнопкой.
+  if (kind === "bot" && (await prisma.device.count({ where: { contactId: fresh.id, blockedAt: { not: null } } })) > 0) {
+    return "send_failed";
+  }
   const claimed = await prisma.contact.updateMany({
     where: {
       id: fresh.id,
@@ -179,7 +185,7 @@ export async function performPhoneChange(
       .catch((err) => logError("phoneChange:restoreLink", err));
     return "send_failed";
   }
-  const result = await transferToNewPhone(fresh).catch((err) => {
+  const result = await transferToNewPhone(fresh, kind === "owner").catch((err) => {
     logError("phoneChange:transfer", err);
     return "nothing" as const;
   });
@@ -204,12 +210,15 @@ export async function handlePhoneChange(
   contact: Contact,
   text: string,
   language: Lang,
-  imageHashes: string[] = []
+  imageHashes: string[] = [],
 ): Promise<PhoneChangeOutcome> {
   const proof = await phoneChangeProof(contact, text, imageHashes);
   if (!proof) {
     await replyTo(contact, TEXT[language].noProof);
-    await askOwner(contact, "просит сменить телефон, доказательств нет (ни кода ссылки, ни её чека, ни имени с номером)");
+    await askOwner(
+      contact,
+      "просит сменить телефон, доказательств нет (ни кода ссылки, ни её чека, ни имени с номером)",
+    );
     return "no_proof";
   }
   if (!canTransferNow(contact)) {
@@ -251,7 +260,7 @@ async function devicesNow(contactId: string): Promise<string> {
     devices
       .map(
         (d) =>
-          `${describeDevice(d.userAgent)}${d.lastCity ? `, ${d.lastCity}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}`
+          `${describeDevice(d.userAgent)}${d.lastCity ? `, ${d.lastCity}` : ""}, в сети ${d.lastSeenAt.toISOString().slice(0, 10)}`,
       )
       .join("; ") || "нет данных"
   );
@@ -269,7 +278,7 @@ async function askOwner(contact: Contact, what: string): Promise<void> {
     `${who(contact)}: ${what}. Прошлый перенос: ${last}. Сейчас занято: ${await devicesNow(contact.id)}. ` +
       "Если это она, нажмите «Разрешить перенос»: старый телефон и старая ссылка перестанут работать, новая уйдёт ей в чат.",
     undefined,
-    { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] }
+    { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] },
   ).catch((err) => logError("phoneChange:askOwner", err));
 }
 
@@ -277,7 +286,7 @@ async function notifyOwner(contact: Contact, what: string): Promise<void> {
   const chat = await ownerChat();
   if (!chat) return;
   await sendTelegramMessage(chat.botToken, chat.chatId, `${who(contact)}: ${what}`).catch((err) =>
-    logError("phoneChange:notifyOwner", err)
+    logError("phoneChange:notifyOwner", err),
   );
 }
 

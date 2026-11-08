@@ -55,7 +55,7 @@ const NEW_DEVICE = /(смен(ил|ила)\s*телефон|нов(ый|ом)\s*
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
-const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ|на\s+другом\s+телефоне|дар\s+телефони\s+дигар/iu;
+const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.*занят|дигар.*дастгоҳ/iu;
 
 const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string; foreign: string }> = {
   ru: {

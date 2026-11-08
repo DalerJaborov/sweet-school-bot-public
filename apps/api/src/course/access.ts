@@ -359,9 +359,12 @@ export function canTransferNow(contact: Pick<Contact, "deviceSwaps" | "deviceSwa
  *  - "limit" — в этом месяце перенос уже был, решает владелец.
  * Заблокированные владельцем устройства не удаляем: их блокировка — его решение.
  */
-export async function transferToNewPhone(contact: Contact): Promise<"transferred" | "nothing" | "limit"> {
+export async function transferToNewPhone(
+  contact: Contact,
+  includeBlocked = false
+): Promise<"transferred" | "nothing" | "limit"> {
   if (!canTransferNow(contact)) return "limit";
-  const old = await prisma.device.findMany({ where: { contactId: contact.id, blockedAt: null }, select: { id: true } });
+  const old = await prisma.device.findMany({ where: { contactId: contact.id, ...(includeBlocked ? {} : { blockedAt: null }) }, select: { id: true } });
   if (old.length === 0) return "nothing";
   await prisma.device.deleteMany({ where: { id: { in: old.map((d) => d.id) } } });
   const used = recentTransfers(contact);
