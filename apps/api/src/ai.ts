@@ -238,8 +238,8 @@ export async function aiReply(
   // ни от настроения модели, ни от того, включён ли консультант вообще.
   // Выдача идёт по данным (покупка + чек в базе), а не по словам — см.
   // course/recovery.ts.
-  if (text) {
-    const recovery = await maybeRestoreAccess(contact, text).catch((err) => {
+  if (text || images.length > 0) {
+    const recovery = await maybeRestoreAccess(contact, text ?? "", images.map((i) => i.hash)).catch((err) => {
       logError("ai:recovery", err);
       return { handled: false as const };
     });

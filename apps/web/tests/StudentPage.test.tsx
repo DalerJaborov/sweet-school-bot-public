@@ -139,7 +139,7 @@ describe("StudentPage — карточка ученицы", () => {
     await screen.findByText("Мадина Р.");
     fireEvent.click(screen.getAllByRole("button", { name: "Освободить место" })[0]);
     expect(await screen.findByText("Освободить место «Chrome на Android»?")).toBeTruthy();
-    expect(screen.getByText(/уроки закроются/)).toBeTruthy();
+    expect(screen.getByText(/старая ссылка закроются/)).toBeTruthy();
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Освободить" }));
     });

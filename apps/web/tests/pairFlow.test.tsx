@@ -87,7 +87,7 @@ describe("request(): 401 no_session → /pair → повтор", () => {
 });
 
 describe("openWithToken(): лимит устройств", () => {
-  it("429 device_limit несёт список устройств и число замен", async () => {
+  it("429 device_limit несёт список устройств и модель занятого телефона", async () => {
     store.loadPair.mockResolvedValue(undefined);
     mockFetch([
       {
@@ -96,7 +96,7 @@ describe("openWithToken(): лимит устройств", () => {
           error: "лимит",
           reason: "device_limit",
           devices: [{ id: "d1", label: "iPhone", city: null, lastSeenAt: null, blocked: false }],
-          swapsLeft: 2,
+          phone: "SM-A515F",
         },
       },
     ]);
@@ -108,16 +108,7 @@ describe("openWithToken(): лимит устройств", () => {
     }
     expect(caught).toBeInstanceOf(CourseError);
     const limit = (caught as CourseError).deviceLimit();
-    expect(limit?.swapsLeft).toBe(2);
+    expect(limit?.phone).toBe("SM-A515F");
     expect(limit?.devices[0].label).toBe("iPhone");
-  });
-
-  it("replaceOldest уходит в тело запроса только когда ученица подтвердила", async () => {
-    store.loadPair.mockResolvedValue(undefined);
-    const calls = mockFetch([{ status: 200, body: { ok: true, contactId: "c1" } }]);
-    await openWithToken("T");
-    await openWithToken("T", true);
-    expect((calls[0].body as Record<string, unknown>).replaceOldest).toBeUndefined();
-    expect((calls[1].body as Record<string, unknown>).replaceOldest).toBe(true);
   });
 });
