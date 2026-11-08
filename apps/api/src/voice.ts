@@ -62,7 +62,7 @@ export function toOwnerVoice(text: string): string {
  * ограниченный шаг ПОСЛЕ неё: только на коротких тёплых репликах, без цифр,
  * ссылок и вопроса в конце. Выбор детерминированный (по тексту), без случайности.
  */
-const WARM = ["❤️", "🌸", "💚"];
+const WARM = ["❤️", "🌸", "💚", "🤍", "🥰", "😊", "✨", "🌷"];
 export function maybeWarmEmoji(text: string): string {
   const t = text.trim();
   if (!t || t.length > 140) return text;
@@ -70,6 +70,9 @@ export function maybeWarmEmoji(text: string): string {
   if (/\p{Extended_Pictographic}/u.test(t)) return text;
   let h = 0;
   for (const ch of t) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
+  // Перемешивание: младшие биты простого хеша почти не зависят от текста.
+  h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
   if (h % 8 !== 0) return text;
   return t + " " + WARM[(h >>> 3) % WARM.length];
 }

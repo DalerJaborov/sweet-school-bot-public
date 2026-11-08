@@ -37,6 +37,7 @@ import { buildObjectionsBlock } from "./ai/objectionLibrary.js";
 import { maybeRestoreAccess } from "./course/recovery.js";
 import { maybeWarmEmoji } from "./voice.js";
 import { passesRelevanceGate } from "./ai/relevanceGate.js";
+import { reactInsteadOfReply } from "./ai/reactions.js";
 import type { Contact } from "@prisma/client";
 
 
@@ -239,6 +240,9 @@ export async function aiReply(
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
   if (!(await passesRelevanceGate(contact, text, attachments, images.length > 0, language))) return;
+
+  // «Спасибо» без вопроса — живой человек ставит сердечко, а не пишет ещё одно сообщение (ai/reactions.ts).
+  if (attachments.length === 0 && images.length === 0 && (await reactInsteadOfReply(contact, text))) return;
 
   // «Я отправила чек» — а картинки в сообщении нет и в этот ход ничего не
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
