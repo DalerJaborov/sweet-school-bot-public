@@ -3,7 +3,7 @@ import Hls from "hls.js";
 import { freeVideoCopy, type Lang } from "./i18n";
 
 /** Loaded only after registration; hls.js is absent from the landing-page entry. */
-export default function FreeLessonVideo({ src, title, lang }: { src: string; title: string; lang: Lang }) {
+export default function FreeLessonVideo({ src, title, lang, onEnded }: { src: string; title: string; lang: Lang; onEnded?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -32,7 +32,7 @@ export default function FreeLessonVideo({ src, title, lang }: { src: string; tit
   }, [src, attempt]);
   return (
     <div>
-      <video ref={ref} controls playsInline preload="metadata" aria-label={title} onError={() => setFailed(true)} />
+      <video ref={ref} controls playsInline preload="metadata" aria-label={title} onError={() => setFailed(true)} onEnded={onEnded} />
       {failed && (
         <div role="alert">
           <p>{freeVideoCopy[lang].error}</p>
