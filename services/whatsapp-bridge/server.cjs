@@ -42,6 +42,8 @@ const bridge = new Bridge({
     puppeteer: {
       executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
       headless: true,
+      // Большая адресная книга: getContacts после перезапуска может идти дольше стандартных 3 минут (08.11.2026 дважды упёрлось в таймаут).
+      protocolTimeout: 15 * 60 * 1000,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     },
   }),
