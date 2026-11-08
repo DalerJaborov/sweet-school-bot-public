@@ -119,7 +119,7 @@ export function normalizeVoiceText(text: string): string {
 /** Ключ кеша: тот же текст + голос + модель + настройки = тот же файл, повторно не платим. */
 export function voiceCacheKey(text: string): string {
   return createHash("sha256")
-    .update(JSON.stringify([normalizeVoiceText(text), env.elevenLabsVoiceId, env.elevenLabsModel, voiceSettingsFor(), env.elevenLabsTag, env.elevenLabsTempo, VOICE_POST]))
+    .update(JSON.stringify([normalizeVoiceText(text), env.elevenLabsVoiceId, env.elevenLabsModel, voiceSettingsFor(), env.elevenLabsTag, env.elevenLabsTempo, env.elevenLabsFx, VOICE_POST]))
     .digest("hex")
     .slice(0, 32);
 }
@@ -198,7 +198,7 @@ export async function synthesizeToFile(rawText: string, format: VoiceFormat = "o
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
   // Только перекодирование в ogg/opus, без шума и фильтров (решение владельца 08.11.2026: чистый голос).
   // mp3 как голосовое НЕ отдаём и не кешируем: на iPhone он не играет, лучше ошибка и ответ текстом.
-  const opus = await toOpusOgg(mp3, 30_000, format, env.elevenLabsTempo);
+  const opus = await toOpusOgg(mp3, 30_000, format, env.elevenLabsTempo, env.elevenLabsFx);
   if (!opus) throw new VoiceCloneError("Не удалось подготовить голосовое (ffmpeg)", 503);
   const name = `tts-${key}.${format}`;
   // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».

@@ -142,3 +142,17 @@ describe("voiceFilter — темп только для озвучки бота",
     expect(voiceFilter(1.07)).toBe(`atempo=1.070,${VOICE_FILTER}`);
   });
 });
+
+describe("filterArgs — телефонный эффект подмешивает шум через filter_complex", () => {
+  it("none даёт -af, light/strong дают filter_complex с темпом и выходом [out]", async () => {
+    const { filterArgs, VOICE_FILTER } = await import("../../src/ai/audioConvert.js");
+    expect(filterArgs(1, "none")).toEqual(["-af", VOICE_FILTER]);
+    const light = filterArgs(1.07, "light");
+    expect(light[0]).toBe("-filter_complex");
+    expect(light[1]).toContain("[0:a]atempo=1.070[v]");
+    expect(light[1]).toContain("anoisesrc");
+    expect(light[1].endsWith(`[m]${VOICE_FILTER}[out]`)).toBe(true);
+    expect(light.slice(2)).toEqual(["-map", "[out]"]);
+    expect(filterArgs(1, "strong")[1]).toContain("[0:a]anull[v]");
+  });
+});
