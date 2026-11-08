@@ -198,6 +198,23 @@ describe("смена телефона через бота", () => {
     expect(await approveTransferByOwner("c-1")).toBe("expired");
   });
 
+  it("ОДНОВРЕМЕННЫЕ нажатия на карточку: переносит только одно, остальные — «устарела»; после сбоя карточка не оживает", async () => {
+    await handlePhoneChange(contact, "сменила телефон", "ru"); // карточка ушла владельцу
+    const used = { ...contact, deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 2 * 86_400_000) };
+    db.model("contact").findUnique.mockResolvedValue(used);
+
+    const results = await Promise.all([approveTransferByOwner("c-1"), approveTransferByOwner("c-1"), approveTransferByOwner("c-1")]);
+
+    expect(results.filter((r) => r === "ok")).toHaveLength(1);
+    expect(results.filter((r) => r === "expired")).toHaveLength(2);
+    expect(db.model("contact").updateMany).toHaveBeenCalledTimes(1);
+    // Сбой отправки: карточка не взводится заново.
+    await handlePhoneChange(contact, "сменила телефон", "ru");
+    sendText.mockRejectedValueOnce(new Error("окно закрыто"));
+    expect(await approveTransferByOwner("c-1")).toBe("failed");
+    expect(await approveTransferByOwner("c-1")).toBe("expired");
+  });
+
   it("фото без совпадения (домашка) после запроса доказательства — не доказательство и бот молчит", async () => {
     await handlePhoneChange(contact, "сменила телефон", "ru");
     sendText.mockClear();

@@ -213,8 +213,12 @@ export async function performPhoneChange(
   }
   // Лимит владелец снимает только на этот перенос: счётчик растёт ПОСЛЕ доставки ссылки.
   const forTransfer = opts.ignoreLimit ? ({ ...fresh, deviceSwaps: 0, deviceSwapAt: null } as Contact) : fresh;
-  const result = await transferToNewPhone(forTransfer, false, kind === "owner" ? "owner" : "bot").catch((err) => {
+  const result = await transferToNewPhone(forTransfer, false, kind === "owner" ? "owner" : "bot").catch(async (err) => {
     logError("phoneChange:transfer", err);
+    await notifyOwner(
+      fresh,
+      "ссылка на новый телефон ОТПРАВЛЕНА, но старые устройства снять не удалось: снимите их вручную в панели",
+    );
     return "nothing" as const;
   });
   logInfo("course:phoneChange", `контакт ${fresh.id}: смена телефона (${kind}), доказательство: ${opts.proof ?? "решение владельца"}, устройства: ${result}`);
@@ -332,22 +336,19 @@ async function notifyOwner(contact: Contact, what: string): Promise<void> {
  * делается сразу (новая ссылка в чат, старые устройства и ссылка аннулируются).
  */
 export async function approveTransferByOwner(contactId: string): Promise<"ok" | "expired" | "blocked" | "failed"> {
+  // Проверка и погашение карточки — БЕЗ await между ними: два одновременных
+  // нажатия не пройдут оба.
   const until = approvals.get(contactId);
-  if (!until || until < Date.now()) {
-    approvals.delete(contactId);
-    return "expired";
-  }
+  approvals.delete(contactId);
+  if (!until || until < Date.now()) return "expired";
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return "failed";
-  // Одноразово: гасим карточку до отправки, чтобы второе нажатие не успело.
-  approvals.delete(contactId);
   const done = await performPhoneChange(contact, "owner", { ignoreLimit: true });
   logInfo("course:phoneChange", `контакт ${contactId}: владелец разрешил перенос, итог ${done}`);
   if (done === "changed") return "ok";
-  if (done === "blocked") {
-    approvals.set(contactId, until);
-    return "blocked";
-  }
-  approvals.set(contactId, until);
-  return "failed";
+  // Заново взводим только когда ничего не менялось из-за блокировки: сначала
+  // владелец разблокирует. После сбоя отправки карточка не оживает (другой
+  // перенос мог идти параллельно): новая придёт, когда она напишет снова.
+  if (done === "blocked") approvals.set(contactId, until);
+  return done === "blocked" ? "blocked" : "failed";
 }

@@ -721,14 +721,16 @@ describe("политика «один телефон»", () => {
   it("смена сети (Wi-Fi → мобильный): та же модель Android, другой адрес — пускаем, владельцу сводка", async () => {
     const result = await open(ANDROID_A, [occupied({ lastIp: "192.168.7.20" })]);
     expect(result.ok).toBe(true);
-    expect(db.model("device").create).not.toHaveBeenCalled();
+    expect(db.model("device").create).toHaveBeenCalledTimes(1);
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Возможно, второй телефон");
   });
 
   it("iPhone без модели: Instagram → Safari в той же сети недавно — пускаем, владельцу сводка (модель неизвестна)", async () => {
     const result = await open(IPHONE, [occupied({ userAgent: IPHONE.replace("Mobile/15E148", "Mobile/15E148 Instagram 300"), lastSeenAt: new Date(Date.now() - 20 * 60_000) })]);
     expect(result.ok).toBe(true);
-    expect(db.model("device").create).not.toHaveBeenCalled();
+    // Метку ученицы не отдаём: заводится ОТДЕЛЬНАЯ запись, владельцу сводка.
+    expect(db.model("device").create).toHaveBeenCalledTimes(1);
+    expect(db.model("device").update).not.toHaveBeenCalled();
     expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -740,7 +742,9 @@ describe("политика «один телефон»", () => {
   it("Android с урезанным User-Agent («K»), та же сеть, свежий заход — пускаем, владельцу сводка", async () => {
     const result = await open(ANDROID_REDUCED, [occupied({ userAgent: ANDROID_REDUCED, lastSeenAt: new Date(Date.now() - 5 * 60_000) })]);
     expect(result.ok).toBe(true);
-    expect(db.model("device").create).not.toHaveBeenCalled();
+    // Метку ученицы не отдаём: заводится ОТДЕЛЬНАЯ запись, владельцу сводка.
+    expect(db.model("device").create).toHaveBeenCalledTimes(1);
+    expect(db.model("device").update).not.toHaveBeenCalled();
     expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
   });
 

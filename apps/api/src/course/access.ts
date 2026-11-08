@@ -647,7 +647,10 @@ export async function registerDevice(
 
   // Место занято. Прежде чем отказать, выясняем, не тот ли это телефон в другом
   // браузере (см. samePhoneVerdict). Сомнительное НЕ блокируем — пускаем на
-  // запись того же устройства и сообщаем владельцу.
+  // отдельную запись устройства (НЕ метку ученицы: сестра дома на том же Wi-Fi
+  // не получает её навсегда, владелец может заблокировать именно эту запись)
+  // и сообщаем владельцу.
+  let graceSeat = false;
   if (used >= limit) {
     const existing = await prisma.device.findMany({ where: { contactId: contact.id, blockedAt: null } });
     const sure = existing.find((d) => samePhoneVerdict(d, req, ip) === "same");
@@ -655,16 +658,19 @@ export async function registerDevice(
     if (doubtful) {
       // Уверенное совпадение — тихо, как будто ничего не произошло; только
       // сомнительное идёт владельцу сводкой.
-      if (!sure) await alertUnsurePhone(contact, doubtful);
-      const device = await prisma.device.update({
-        where: { id: doubtful.id },
-        data: { lastSeenAt: new Date(), lastIp: ip, lastCity: country ?? doubtful.lastCity, offlineKeyExpiresAt },
-      });
-      return { ok: true, contact, purchases, purchase, device };
+      if (sure) {
+        const device = await prisma.device.update({
+          where: { id: doubtful.id },
+          data: { lastSeenAt: new Date(), lastIp: ip, lastCity: country ?? doubtful.lastCity, offlineKeyExpiresAt },
+        });
+        return { ok: true, contact, purchases, purchase, device };
+      }
+      await alertUnsurePhone(contact, doubtful);
+      graceSeat = true;
     }
   }
 
-  if (used >= limit) {
+  if (used >= limit && !graceSeat) {
     // Второй телефон не пускаем и сами не переносим: смена телефона идёт только
     // через бота с доказательством (recovery.ts), а второй телефон — это
     // отдельная покупка (владелец 08.11.2026).
@@ -711,7 +717,7 @@ export async function registerDevice(
  */
 export type PhoneVerdict = "same" | "unsure" | "different";
 /** Тот же сегмент сети и заход не старше этого — один и тот же телефон. */
-const SAME_NET_WINDOW_MS = 6 * 3_600_000;
+const SAME_NET_WINDOW_MS = 30 * 60_000;
 
 function osFamily(ua: string | null | undefined): string {
   const u = ua ?? "";
