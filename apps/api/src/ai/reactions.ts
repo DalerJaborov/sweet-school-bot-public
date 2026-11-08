@@ -19,6 +19,13 @@ import type { Contact } from "@prisma/client";
 const PURE_THANKS =
   /^[\s\p{P}\p{S}\p{M}]*(спасибо|благодарю|благодарствую|рахмат|раҳмат|ташаккур|мерси|спс|thanks|thank\s+you)(\s+(большое|огромное|вам|вас|калон|зиёд|бисёр))*(\s+(апачон|апаҷон|апа|ширин|хохарчон|хоҳарҷон))?[\s\p{P}\p{S}\p{M}]*$/iu;
 
+/** Когда мы сами поставили реакцию: Meta может прислать на неё вебхук, а webhook.ts принял бы её за вмешательство хозяйки. */
+const ourReactionAt = new Map<string, number>();
+export function wasOurRecentReaction(igUserId: string, windowMs = 120_000): boolean {
+  const at = ourReactionAt.get(igUserId);
+  return at !== undefined && Date.now() - at < windowMs;
+}
+
 export function isPureThanks(text: string): boolean {
   const t = (text ?? "").trim();
   return t.length > 0 && t.length <= 60 && PURE_THANKS.test(t);
@@ -54,6 +61,7 @@ export async function reactInsteadOfReply(contact: Contact, text: string): Promi
         select: { mid: true },
       });
       if (!last?.mid) return false;
+      ourReactionAt.set(contact.igUserId, Date.now());
       await reactToInstagramMessage(contact.igUserId, last.mid, pickReaction(last.mid));
       return true;
     }

@@ -98,6 +98,8 @@ export async function passesRelevanceGate(
   language: ClientLanguage
 ): Promise<boolean> {
   if ((await getSetting("replyGateEnabled")) === "false") return true;
+  // Чат на сайте — посетитель сам открыл окно школы: курьеров и знакомых там нет, а молчание хуже шума.
+  if (contact.channel === "WEB") return true;
   if (hasRescuedImages || attachments.some((a) => a.kind === "image")) return true;
   if (await isEstablished(contact)) return true;
 
@@ -105,10 +107,12 @@ export async function passesRelevanceGate(
   let body = text.trim();
   const audio = attachments.find((a) => a.kind === "audio");
   if (!body && audio) {
-    const stt = (await getSetting("aiModelGateStt"))?.trim() || GATE_MODEL;
+    // Таджикскую речь дешёвые модели понимают плохо: если aiModelGateStt не задана, берётся модель голоса (aiModelVoice / pro).
+    const stt = (await getSetting("aiModelGateStt"))?.trim() || undefined;
     body = (await voiceToText(audio.url, stt)) ?? "";
     if (!body) {
       // Голос не расшифровался: гадать нельзя ни в одну сторону.
+      if (contact.channel !== "WHATSAPP") return true; // Instagram: как раньше — голос уходит модели целиком
       const v: RelevanceVerdict = { cls: "unclear", source: "fallback", reason: "голосовое не удалось расшифровать" };
       await journal(contact, "[голосовое]", v, "attention");
       await markAttention(contact);
@@ -146,17 +150,25 @@ export async function passesRelevanceGate(
   }
 
   const clarifiedBefore = await prisma.replyGate.count({ where: { contactId: contact.id, action: "clarify" } });
-  const action = decideAction(verdict, { clarifiedBefore });
-  await journal(contact, body, verdict, action);
+  // Мы уже отвечали этому человеку (кроме уточняющих вопросов шлюза) — идёт разговор,
+  // короткое «Хорошо» или «Ок» в нём не повод переспрашивать (ревью 08.11.2026).
+  const engaged = (await prisma.message.count({ where: { contactId: contact.id, direction: "OUT" } })) > clarifiedBefore;
+  let action = decideAction(verdict, { clarifiedBefore });
+  if (verdict.cls === "unclear" && engaged) action = "reply";
+  // «Нужен человек» есть только в списке WhatsApp. Instagram: после одного вопроса отвечаем как обычно,
+  // молча пропадать хуже.
+  if (action === "attention" && contact.channel !== "WHATSAPP") action = "reply";
 
-  if (action === "reply") return true;
   if (action === "clarify") {
+    // Сначала отправка, потом запись в журнал: упавшая отправка не должна считаться заданным вопросом.
     const reply = clarifyText(language);
     const mid = await sendToContact(contact, reply);
     await recordOutgoingMessage(contact.id, reply, mid);
-  } else if (action === "attention") {
-    await markAttention(contact);
   }
+  await journal(contact, body, verdict, action);
+
+  if (action === "reply") return true;
+  if (action === "attention") await markAttention(contact);
   return false;
 }
 

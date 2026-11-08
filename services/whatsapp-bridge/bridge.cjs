@@ -428,7 +428,7 @@ class Bridge {
       try {
         const chat = await this.client.getChatById?.(chatId);
         // Прочитала → набирает: так делает человек (owner 08.11.2026). Только когда мы отвечаем.
-        await chat?.sendSeen?.();
+        try { await chat?.sendSeen?.(); } catch { /* отметка прочтения не должна ломать «печатает» */ }
         await chat?.sendStateTyping?.();
         await this.sleep(typingMs);
         await chat?.clearState?.();

@@ -101,7 +101,7 @@ const PERSONAL = rx([
 /** Одно приветствие и больше ничего. */
 const GREETING_ONLY = new RegExp(
   `^[\\s\\p{P}\\p{S}]*(салом|салам|ассалом|ассалому\\s+алайкум|ассалому\\s+алейкум|ассалам\\p{L}*|воалайкум\\p{L}*|воалекум\\p{L}*|ва[\\s-]*а?(лайкум|лейкум|ликум|лекум)\\p{L}*(\\s+(ассалом|салом|ассалому))?|привет|приветствую|здравствуйте|здравствуй|добрый\\s+(день|вечер|утро)|доброе\\s+утро|хай|hi|hello|hey|salom|assalom\\p{L}*|salam|privet|рӯз\\s+ба\\s+хайр|субҳ\\s+ба\\s+хайр|шом\\s+ба\\s+хайр)[\\s\\p{P}\\p{S}]*(апачон|апа|апаҷон|хоҳарҷон|хохарчон|ширин|ширинхон)?[\\s\\p{P}\\p{S}]*$`,
-  "iu"
+  "iu",
 );
 
 /** Нет ни одной буквы и цифры — смайлик, точка, стикер. */
@@ -117,15 +117,26 @@ function hasNoContent(text: string): boolean {
  */
 export function codeRelevance(textRaw: string, hasMedia = false): RelevanceVerdict | null {
   const text = (textRaw ?? "").trim();
+  // «+» в ответ на рекламу («напишите + в директ») — это покупательница, а не пустота.
+  if (/^[+＋]+$/.test(text)) return { cls: "greeting", source: "code", reason: "плюс в ответ на рекламу" };
   if (!text || hasNoContent(text)) {
     return hasMedia ? null : { cls: "empty", source: "code", reason: "пустое сообщение, стикер или смайлик" };
   }
   if (GREETING_ONLY.test(text)) return { cls: "greeting", source: "code", reason: "только приветствие" };
-  if (STRONG_COURSE.test(text)) return { cls: "on_topic", source: "code", reason: "в тексте слова про курс или оплату" };
+  if (STRONG_COURSE.test(text))
+    return { cls: "on_topic", source: "code", reason: "в тексте слова про курс или оплату" };
   if (SPAM.test(text)) return { cls: "spam", source: "code", reason: "признаки спама" };
-  if (DELIVERY.test(text)) return { cls: "delivery", source: "code", reason: "курьер или доставка" };
-  if (PERSONAL.test(text)) return { cls: "personal", source: "code", reason: "личное обращение" };
-  if (SHOP.test(text)) return { cls: "shop", source: "code", reason: "магазин, поставщик или чужое предложение" };
+  // Курьера, личное и магазин правила НЕ решают сами (ревью 08.11.2026): «Торт с доставкой сколько?»,
+  // «Салом апа, как дела?», «У вас есть магазин?» — это покупательницы. Молчание решает модель
+  // с историей переписки; правила дают ей только подсказку (см. suspectedClass).
+  return null;
+}
+
+/** Подозрение правил — не решение, а подсказка модели. */
+export function suspectedClass(text: string): RelevanceClass | null {
+  if (DELIVERY.test(text)) return "delivery";
+  if (PERSONAL.test(text)) return "personal";
+  if (SHOP.test(text)) return "shop";
   return null;
 }
 
@@ -201,7 +212,7 @@ export async function classifyRelevance(
   text: string,
   recent: { direction: "IN" | "OUT"; text: string }[],
   deps: RelevanceDeps,
-  hasMedia = false
+  hasMedia = false,
 ): Promise<RelevanceVerdict> {
   const byCode = codeRelevance(text, hasMedia);
   if (byCode) return byCode;
@@ -209,14 +220,19 @@ export async function classifyRelevance(
   if (!text.trim()) return { cls: "unclear", source: "code", reason: "вложение без текста" };
   let raw: string | null = null;
   try {
-    raw = await deps.generate(RELEVANCE_PROMPT, formatRelevanceInput(text, recent));
+    const hint = suspectedClass(text);
+    raw = await deps.generate(
+      RELEVANCE_PROMPT,
+      formatRelevanceInput(text, recent) +
+        (hint ? `\n\nПодсказка простых правил (может быть ошибкой, реши по смыслу и истории): ${hint}` : "")
+    );
   } catch {
     raw = null;
   }
   const parsed = parseRelevance(raw);
   if (!parsed) return { cls: "unclear", source: "fallback", reason: "модель недоступна или ответила непонятно" };
-  // Второй замок: модель назвала «по делу», а правила видят явный курьер/спам без слов о курсах — не верим.
-  if (parsed.cls === "on_topic" && (DELIVERY.test(text) || SPAM.test(text)) && !STRONG_COURSE.test(text)) {
+  // Второй замок: модель назвала «по делу», а правила видят явный спам без слов о курсах — не верим.
+  if (parsed.cls === "on_topic" && SPAM.test(text) && !STRONG_COURSE.test(text)) {
     return { cls: "unclear", source: "model", reason: `модель: по делу, но правила видят чужое (${parsed.reason})` };
   }
   return { cls: parsed.cls, source: "model", reason: parsed.reason };
