@@ -39,6 +39,7 @@ import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
 import { runDiskMaintenance } from "./diskInfo.js";
 import { checkIgToken } from "./igTokenWatch.js";
+import { checkFbToken } from "./fbTokenWatch.js";
 import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
 import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
@@ -277,6 +278,10 @@ setInterval(() => {
 // предупреждаем владельца, если продлить не выходит.
 setTimeout(() => void checkIgToken().catch((err) => logError("igToken", err)), 4 * 60_000);
 setInterval(() => void checkIgToken().catch((err) => logError("igToken", err)), 6 * 60 * 60_000);
+// МАРКЕР СТРАНИЦЫ FACEBOOK (fbTokenWatch.ts): сам бессрочный, но доступ к данным у него
+// кончается (data_access_expires_at). Раз в 12 часов спрашиваем Meta и предупреждаем заранее.
+setTimeout(() => void checkFbToken().catch((err) => logError("fbToken", err)), 5 * 60_000);
+setInterval(() => void checkFbToken().catch((err) => logError("fbToken", err)), 12 * 60 * 60_000);
 // СЕКРЕТ ПРИЛОЖЕНИЯ META (appSecretWatch.ts): пуст — вебхук отклоняет всё, бот глухой.
 const secretTick = () =>
   void checkAppSecret()
