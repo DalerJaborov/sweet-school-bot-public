@@ -7,6 +7,7 @@ import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
 import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
+import { recordAdReferral, referralFromMeta } from "./metaConversions.js";
 import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
 import { looksPersonal } from "./ai/personalContact.js";
@@ -48,7 +49,13 @@ export type MessagingEvent = {
     attachments?: { type?: string; payload?: { url?: string } }[];
     /** Ответ на нашу историю: Meta кладёт сюда её адрес и id. */
     reply_to?: { story?: { url?: string; id?: string }; mid?: string };
+    /** Первое сообщение из рекламы «клик в переписку»: id объявления (metaConversions.ts). */
+    referral?: unknown;
   };
+  /** Отдельное событие messaging_referrals: человек открыл переписку из рекламы. */
+  referral?: unknown;
+  /** Кнопка «Начать» в Messenger из рекламы приносит referral здесь. */
+  postback?: { payload?: string; referral?: unknown };
   /**
    * Реакция на сообщение (сердечко и прочие). Приходит отдельным событием, БЕЗ
    * message — поэтому раньше проваливалась мимо обработки целиком.
@@ -387,6 +394,27 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   if (event.reaction) {
     await handleReaction(event, selfId, channel);
     return;
+  }
+  // Метка рекламы — до всех фильтров ниже: даже если на само сообщение бот
+  // промолчит, знать, что человек пришёл из объявления, нужно для отчёта о
+  // продажах и для передачи оплаты в Meta.
+  // Отдельное событие без сообщения (открыл переписку, кнопка «Начать») контакт
+  // НЕ создаёт — иначе счётчик новых заявок вырос бы на тех, кто не написал.
+  // Сбой здесь не должен задержать само сообщение: только запись в журнал.
+  const referral = senderId && senderId !== selfId && !msg?.is_echo
+    ? referralFromMeta(msg?.referral ?? event.referral ?? event.postback?.referral) : null;
+  if (referral && senderId) {
+    try {
+      const existing = msg
+        ? await prisma.contact.upsert({
+            where: { channel_igUserId: { channel, igUserId: senderId } },
+            create: { channel, igUserId: senderId }, update: {}, select: { id: true },
+          })
+        : await prisma.contact.findUnique({ where: { channel_igUserId: { channel, igUserId: senderId } }, select: { id: true } });
+      if (existing) await recordAdReferral(existing.id, referral);
+    } catch (err) {
+      logError("webhook:adReferral", err);
+    }
   }
   if (!msg) return;
   if (msg.is_echo || senderId === selfId) {

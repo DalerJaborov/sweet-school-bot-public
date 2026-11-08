@@ -24,6 +24,7 @@ import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
 import { assistantRouter } from "./assistantPanel.js";
 import { whatsappAdminRouter, conversationAdminRouter } from "./whatsapp/routes.js";
+import { metaConversionsAdminRouter } from "./metaConversionsRoutes.js";
 import { knowledgeReviewRouter } from "./knowledgeReview.js";
 import { getPrices } from "./services/priceService.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
@@ -68,6 +69,7 @@ adminRouter.use("/admin", (req, res, next) => {
   requireAuth(req, res, next);
 });
 adminRouter.use("/admin/v1/whatsapp", whatsappAdminRouter);
+adminRouter.use("/admin/v1/meta-conversions", metaConversionsAdminRouter);
 adminRouter.use("/admin/v1/conversations", conversationAdminRouter);
 adminRouter.use("/admin/v1/knowledge", knowledgeReviewRouter);
 

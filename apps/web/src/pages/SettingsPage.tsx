@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FreeLessonSettings } from "../components/FreeLessonSettings";
 import { WhatsAppSettings } from "../components/WhatsAppSettings";
+import { MetaPurchaseSettings } from "../components/MetaPurchaseSettings";
 import { VideoLibrarySettings } from "../components/VideoLibrarySettings";
 import { KnowledgeReview } from "../components/KnowledgeReview";
 
@@ -320,6 +321,7 @@ export function SettingsPage() {
       <FreeLessonSettings />
       <VideoLibrarySettings />
       <WhatsAppSettings />
+      <MetaPurchaseSettings />
       <KnowledgeReview />
       <p className="hint">Подключения и подсказки для помощника. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}

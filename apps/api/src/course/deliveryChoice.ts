@@ -1,4 +1,5 @@
 import type { Contact } from "@prisma/client";
+import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
 import { detectClientLanguage } from "../ai/clientLanguage.js";
 import { sendToContact } from "../messaging/send.js";
@@ -43,6 +44,7 @@ export async function deferGrantForChoice(
   }
   if (fresh.accessRevokedAt || fresh.spamBlockedAt) return true;
   if (!opts.byHuman && await isBotFrozen()) return true;
+  const createdIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     for (let i = 0; i < plan.grant.length; i++) {
       const course = plan.grant[i];
@@ -53,15 +55,18 @@ export async function deferGrantForChoice(
       } else {
         const share = Math.floor(amount / plan.grant.length);
         const catalog = await tx.course.findUnique({ where: { code: course } });
-        await tx.purchase.create({ data: {
+        const created = await tx.purchase.create({ data: {
           contactId: contact.id, course, courseId: catalog?.id ?? null,
           amount: i === plan.grant.length - 1 ? amount - share * i : share,
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", deliveryAwaitingChoice: true,
         } });
+        if (created?.id) createdIds.push(created.id);
       }
     }
     await tx.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
   });
+  // Оплата подтверждена уже здесь — выбор «куда прислать уроки» её не меняет.
+  await enqueuePurchaseConversion(contact.id, createdIds);
   if (await awaitingDeliveryChoice(contact.id)) await askDeliveryChoice(fresh, opts);
   return true;
 }

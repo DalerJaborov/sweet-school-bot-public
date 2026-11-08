@@ -194,6 +194,17 @@ export const SETTING_KEYS = [
   "voiceReplyEnabled",
   "voiceMonthlyCapUsd",
   "voicePricePer1kUsd",
+  // ---- покупки — в рекламу Meta (metaConversions.ts, 08.11.2026) ----
+  // Рубильник по умолчанию ВЫКЛЮЧЕН. Набор данных (dataset) и маркер с правами
+  // page_events / instagram_manage_events / whatsapp_business_manage_events.
+  // Проверочный код — из «Тестовых событий» Events Manager: пока он задан,
+  // события видны только там и в статистику рекламы не идут.
+  "metaCapiEnabled",
+  "metaCapiDatasetId",
+  "metaCapiToken",
+  "metaCapiTestEventCode",
+  "metaCapiIgAccountId",
+  "metaCapiWabaId",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -208,6 +219,7 @@ const SECRET_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   "fbPageToken",
   "r2AccessKeyId",
   "r2SecretKey",
+  "metaCapiToken",
 ]);
 
 /** Маска, которой наружу отдаётся заданный секрет. Панель шлёт её обратно
