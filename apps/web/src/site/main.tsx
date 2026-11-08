@@ -31,6 +31,22 @@ document
   .querySelector("[data-theme-toggle]")
   ?.setAttribute("aria-pressed", String(document.documentElement.dataset.theme === "dark"));
 
+/** Фоновое видео героя: включаем, когда пошёл первый кадр; при «меньше анимации» и экономии трафика остаётся постер. */
+(() => {
+  const videos = document.querySelectorAll<HTMLVideoElement>("[data-hero-video]");
+  if (!videos.length) return;
+  const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData === true;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  videos.forEach((video) => {
+    if (saveData || reduce) {
+      video.remove();
+      return;
+    }
+    video.addEventListener("playing", () => video.classList.add("is-playing"), { once: true });
+    void video.play().catch(() => video.remove());
+  });
+})();
+
 if (!syncLangOnEntry()) {
   const lang = pageLang();
   const t = dict(lang);

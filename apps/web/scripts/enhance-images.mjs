@@ -61,6 +61,8 @@ const AVIF = { quality: 55, effort: 5 };
 /** Группы: пропорция кадра и ключ в media.json. */
 const GROUPS = {
   desserts: { aspect: [1, 1], position: sharp.strategy.attention },
+  // Кадры из 10 видеоуроков «Арт-десертов» (программа курса), плитка 1:1.
+  art: { aspect: [1, 1], position: sharp.strategy.attention },
   // Инструменты сняты у неоновой вывески: «интересная область» для attention —
   // сама вывеска, а предмет всегда внизу кадра. Поэтому кроп прижат к низу.
   tools: { aspect: [4, 3], position: "south" },
@@ -234,6 +236,7 @@ function updateMediaJson(results) {
     }
   };
   for (const entry of Object.values(media.desserts ?? {})) patch(entry);
+  for (const entry of Object.values(media.artLessons ?? {})) patch(entry);
   for (const entry of media.tools ?? []) patch(entry);
   for (const entry of Object.values(media.heroPages ?? {})) patch(entry);
   if (touched > 0) fs.writeFileSync(MEDIA_JSON, `${JSON.stringify(media, null, 2)}\n`, "utf8");

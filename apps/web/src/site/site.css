@@ -2051,3 +2051,39 @@ section[id] { scroll-margin-top: 96px; }
   .dessert-all .dessert-photo figcaption { font-size: 13px; }
   .dessert-name .ico b { font-size: 14px; }
 }
+
+/* Видео-петля в слоте героя: поверх постера, прозрачна до первого кадра (класс ставит main.tsx). */
+.hero-photo.has-video { overflow: hidden; border-radius: var(--r-4); }
+.hero-video {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--r-4);
+  opacity: 0;
+  transition: opacity 0.7s ease;
+  pointer-events: none;
+}
+.hero-video.is-playing { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .hero-video { display: none; } }
+
+/* Кнопка покупки под сеткой десертов */
+.section-cta { margin-top: 28px; justify-content: center; }
+.cta-band .trust-row { justify-content: center; color: var(--c-muted); font-weight: 500; }
+
+/* Мало плиток (10 уроков «Арт-десертов»): крупнее, по 2 на телефоне и по 5 на ПК */
+.dessert-all.is-big { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.dessert-all.is-big .dessert-photo figcaption { font-size: 14px; font-weight: 600; }
+@media (min-width: 720px) {
+  .dessert-all.is-big { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 18px; }
+  .dessert-all.is-big .dessert-photo figcaption { font-size: 14px; }
+}
+
+/* Телефон: навигация по странице — одна строка с прокруткой, чтобы герой с видео был на первом экране */
+@media (max-width: 719px) {
+  .page-contents { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-top: 8px; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  .page-contents::-webkit-scrollbar { display: none; }
+  .page-contents a { flex: 0 0 auto; min-height: 44px; white-space: nowrap; }
+}

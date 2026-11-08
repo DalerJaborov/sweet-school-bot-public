@@ -345,12 +345,12 @@ function moreLink(s, lang) {
 // зашиты здесь же, рядом с остальной вёрсткой шаблона, тем же способом, что
 // и другие мелкие UI-подписи (см. notFound* выше). Первый бейдж берёт число
 // из site.stats («выпускниц»), чтобы не дублировать цифру руками.
-function trustRow(site, lang) {
+function trustRow(site, lang, { phone = true } = {}) {
   const grads = site.stats.find((s) => /выпускниц|хатм/i.test(s.ru + s.tg));
   const items = [
     grads ? { icon: "⭐", text: { ru: `${grads.n} ${L(grads, "ru")}`, tg: `${grads.n} ${L(grads, "tg")}` } } : null,
     { icon: "🏅", text: { ru: "сертификат", tg: "сертификат" } },
-    { icon: "📱", text: { ru: "с телефона", tg: "аз телефон" } },
+    phone ? { icon: "📱", text: { ru: "с телефона", tg: "аз телефон" } } : null,
   ].filter(Boolean);
   return `<ul class="trust-row">${items
     .map((it) => `<li><span aria-hidden="true">${contentIcon(it.icon)}</span>${esc(L(it.text, lang))}</li>`)
@@ -400,9 +400,15 @@ const SECTIONS = {
     const heroEntry = s.compact ? null : heroMedia(media, page);
     // Слайдшоу: первый кадр — LCP (eager, прелоад); остальные lazy и кроссфейдятся чистым CSS
     // (без JS, без сдвига раскладки: слот имеет фиксированное соотношение сторон).
-    const extras = heroEntry ? heroExtraSlides(media, heroEntry) : [];
+    const extras = heroEntry && !s.video ? heroExtraSlides(media, heroEntry) : [];
+    // Фоновое видео-петля (s.video): поверх постера в том же слоте 4:5. Без JS и до
+    // первого кадра видео прозрачно — виден постер; JS (main.tsx) включает видео
+    // классом is-playing и убирает его при «меньше анимации» и экономии трафика.
+    const video = heroEntry && s.video
+      ? `<video class="hero-video" src="${esc(s.video)}" autoplay muted loop playsinline preload="metadata" disablepictureinpicture aria-hidden="true" tabindex="-1" data-hero-video></video>`
+      : "";
     const photo = heroEntry
-      ? `<div class="hero-photo${extras.length ? " hero-slides" : ""}" ${extras.length ? `data-slides="${extras.length + 1}" style="--slides:${extras.length + 1}"` : ""}>${mediaImg(
+      ? `<div class="hero-photo${extras.length ? " hero-slides" : ""}${video ? " has-video" : ""}" ${extras.length ? `data-slides="${extras.length + 1}" style="--slides:${extras.length + 1}"` : ""}>${video}${mediaImg(
           heroEntry,
           L(heroEntry.alt, lang) || L(page.h1, lang),
           {
@@ -419,7 +425,7 @@ const SECTIONS = {
       <h1 class="h1">${esc(L(page.h1, lang))}</h1>
       <p class="lead">${esc(L(s.lead, lang))}</p>
       <div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>
-      ${trustRow(site, lang)}
+      ${trustRow(site, lang, { phone: page.slug !== "kursy-konditera-dushanbe" })}
     </div>${photo}</div>${s.stats ? statsList(site, lang) : ""}</div></section>${!page.slug || page.slug === "online-kurs" ? '<div class="wrap" id="free-lesson-island"></div>' : ""}`;
   },
 
@@ -512,13 +518,14 @@ const SECTIONS = {
       const lessonPhoto = (ru) => (media?.lessonSamples ?? []).find((x) => x.title?.ru === ru)?.image;
       const tile = (d) => {
         const ru = d.ru ?? L(d, "ru");
-        const entry = photos?.[ru] ?? lessonPhoto(ru);
+        const entry = photos?.[ru] ?? media?.artLessons?.[ru] ?? lessonPhoto(ru);
         const img = entry ? mediaImg(entry, ru, { sizes: "(min-width: 720px) 180px, 31vw" }) : "";
         return img
           ? `<figure class="dessert-photo">${img}<figcaption>${esc(ru)}</figcaption></figure>`
           : `<figure class="dessert-photo dessert-name"><span class="ico"><span aria-hidden="true">${contentIcon(d.icon)}</span><b>${esc(ru)}</b></span></figure>`;
       };
-      const body = `<div class="dessert-all">${desserts.map(tile).join("")}</div>`;
+      // s.ctas — кнопка покупки сразу под сеткой: человек только что увидел десерты, самый тёплый момент.
+      const body = `<div class="dessert-all${desserts.length <= 12 ? " is-big" : ""}">${desserts.map(tile).join("")}</div>${s.ctas ? `<div class="btn-row section-cta">${ctaButtons(s.ctas, lang, ctx)}</div>` : ""}`;
       return wrap(s, `${sectionHead(s, lang)}${body}`, ctx);
     }
     // mode:"accordion" (главная) — карусель всегда видна (первые
@@ -704,7 +711,9 @@ const SECTIONS = {
         L(s.text, lang),
         lang,
         ctx,
-      )}</p><div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div></div>`,
+      )}</p><div class="btn-row">${ctaButtons(s.ctas ?? [], lang, ctx)}</div>${
+        ["online-kurs", "art-desserty"].includes(ctx.page.slug) ? trustRow(ctx.site, lang) : ""
+      }</div>`,
       ctx,
     );
   },
@@ -914,7 +923,8 @@ export function renderPage(site, page, lang, now = new Date(), media = null, off
   const ui = site.ui[lang];
   const ctx = { site, page, ui, now, media, offlineProgramme, wa: waLink(site, L(page.waText, lang) || ui.ctaBuyPrefill) };
   let pageSections = page.sections;
-  if (["online-kurs", "art-desserty"].includes(page.slug) && media?.lessonSamples?.length) {
+  // На «Арт-десертах» программа курса уже сеткой из 10 фото уроков — отдельный блок образцов дублировал бы её.
+  if (page.slug === "online-kurs" && media?.lessonSamples?.length) {
     const at = Math.max(1, pageSections.findIndex((section) => section.type === "menu") + 1);
     pageSections = [...pageSections.slice(0, at), {type: "lessonSamples", id: "iz-urokov"}, ...pageSections.slice(at)];
   }

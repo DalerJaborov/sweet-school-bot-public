@@ -136,10 +136,25 @@ describe("Статичные страницы сайта", () => {
   });
 
   it("compact pages do not preload an unused hero photograph", () => {
-    for (const slug of ["online-kurs", "faq"]) {
+    for (const slug of ["faq"]) {
       const body = files.get(`${slug}.html`)!;
       expect(body).not.toContain('rel="preload" as="image"');
     }
+  });
+
+  it("страницы курсов: видео-петля в герое, 10 фото уроков, галерея офлайна, кнопка под сеткой", () => {
+    for (const slug of ["online-kurs", "art-desserty", "kursy-konditera-dushanbe"]) {
+      const body = files.get(`${slug}.html`)!;
+      expect(body).toMatch(/<video class="hero-video"[^>]*autoplay muted loop playsinline/);
+      expect(body).toMatch(/\/img\/hero\/video-[a-z]+\.mp4/);
+      expect(body).toContain("section-cta");
+    }
+    const art = files.get("art-desserty.html")!;
+    expect((art.match(/<figure class="dessert-photo">/g) ?? []).length).toBe(10);
+    expect(art).not.toContain("dessert-name");
+    const offline = files.get("kursy-konditera-dushanbe.html")!;
+    expect(offline).toContain('id="desserty"');
+    expect((offline.match(/<figure class="dessert-photo/g) ?? []).length).toBe(21);
   });
 
   it("оплата вручную, реальная программа арт-десертов и актуальные часы", () => {
