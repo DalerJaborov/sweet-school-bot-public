@@ -38,7 +38,7 @@ export async function voiceEnabled(): Promise<boolean> {
 }
 
 /** Версия пост-обработки звука: меняем при смене фильтра, чтобы кеш не отдавал старое звучание. */
-const VOICE_POST = "phone-v3";
+const VOICE_POST = "clean-v1";
 const VOICE_SETTINGS = { stability: 0.45, similarity_boost: 0.85, style: 0.3, use_speaker_boost: true };
 const MEDIA_DIR = "/data/uploads";
 export const DEFAULT_MONTHLY_CAP_USD = 20;
@@ -162,9 +162,9 @@ export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
   await chargeOrRefuse(text.length);
   const mp3 = await synthesizeSpeech(text);
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
-  // Сложный фильтр не вышел - пробуем перекодировать без него. mp3 как голосовое НЕ отдаём и не кешируем:
-  // на iPhone он не играет (ревью 08.11.2026), лучше честная ошибка и ответ текстом.
-  const opus = (await toOpusOgg(mp3, 30_000, true)) ?? (await toOpusOgg(mp3, 30_000, false));
+  // Только перекодирование в ogg/opus, без шума и фильтров (решение владельца 08.11.2026: чистый голос).
+  // mp3 как голосовое НЕ отдаём и не кешируем: на iPhone он не играет, лучше ошибка и ответ текстом.
+  const opus = await toOpusOgg(mp3, 30_000);
   if (!opus) throw new VoiceCloneError("Не удалось подготовить голосовое (ffmpeg)", 503);
   const name = `tts-${key}.ogg`;
   // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».
