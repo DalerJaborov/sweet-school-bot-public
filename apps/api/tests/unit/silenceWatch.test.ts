@@ -15,7 +15,9 @@ import { guardOffTopic } from "../../src/ai/offTopicGuard.js";
 import { trackOwnSend, resetOwnSendLedger } from "../../src/ai/ownSendLedger.js";
 
 const realHeal = async (): Promise<number> =>
-  (await vi.importActual<typeof import("../../src/ai/takeoverHeal.js")>("../../src/ai/takeoverHeal.js")).healFalseTakeovers();
+  (
+    await vi.importActual<typeof import("../../src/ai/takeoverHeal.js")>("../../src/ai/takeoverHeal.js")
+  ).healFalseTakeovers();
 
 let db: PrismaMock;
 const SETTINGS: Record<string, string> = { aiEnabled: "true", timezoneOffsetHours: "5" };
@@ -23,20 +25,34 @@ const SETTINGS: Record<string, string> = { aiEnabled: "true", timezoneOffsetHour
 const inAt = new Date(Date.now() + 60_000);
 const now = new Date(Date.now() + 10 * 60_000);
 
-function setup(opts: { contact?: Record<string, unknown>; text?: string | null; outCount?: number; inAtOverride?: Date } = {}) {
+function setup(
+  opts: { contact?: Record<string, unknown>; text?: string | null; outCount?: number; inAtOverride?: Date } = {},
+) {
   db.model("message").findMany.mockResolvedValue([
-    { contactId: "contact-1", createdAt: opts.inAtOverride ?? inAt, text: opts.text === undefined ? "Сколько стоит курс?" : opts.text },
+    {
+      contactId: "contact-1",
+      createdAt: opts.inAtOverride ?? inAt,
+      text: opts.text === undefined ? "Сколько стоит курс?" : opts.text,
+    },
   ]);
   db.model("message").count.mockResolvedValue(opts.outCount ?? 0);
   db.model("contact").findUnique.mockResolvedValue(
-    fakeContact({ name: "Зарина", humanTakenOverAt: null, humanSilencedUntil: null, humanRequestedAt: null, spamBlockedAt: null, whatsappSavedContact: false, ...opts.contact })
+    fakeContact({
+      name: "Зарина",
+      humanTakenOverAt: null,
+      humanSilencedUntil: null,
+      humanRequestedAt: null,
+      spamBlockedAt: null,
+      whatsappSavedContact: false,
+      ...opts.contact,
+    }),
   );
 }
 
 beforeEach(() => {
   db = mockPrisma();
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null
+    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null,
   );
   notifyOwnerDirect.mockClear();
   shouldSendAlert.mockClear().mockResolvedValue(true);
@@ -44,7 +60,10 @@ beforeEach(() => {
   resetDeliberateSilence();
   resetOwnSendLedger();
 });
-afterEach(() => { restorePrisma(); vi.restoreAllMocks(); });
+afterEach(() => {
+  restorePrisma();
+  vi.restoreAllMocks();
+});
 
 describe("сторож неотвеченных: тревога, когда бот молчит без причины", () => {
   it("ГЛАВНОЕ: сообщение без ответа 9 минут, бот включён — тревога с именем и причиной", async () => {
@@ -57,11 +76,42 @@ describe("сторож неотвеченных: тревога, когда бо
     expect(heal).toHaveBeenCalled(); // самолечение идёт раньше сторожа
   });
 
-  it("ложная пауза от эха попадает в причину: «передано человеку», ответа нет", async () => {
+  it("настоящая пауза хозяйки (причина с текстом) НЕ тревожит: она ведёт разговор сама", async () => {
     setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 3_600_000), humanTakeoverMid: "m-x" } });
-    db.model("message").findUnique.mockResolvedValue({ text: "[картинка воронки]" });
+    db.model("message").findUnique.mockResolvedValue({ text: "Приходите на курс, всё расскажу" });
+    expect(await checkUnansweredInbound(now)).toBe(0);
+  });
+
+  it("подозрительная пауза (причина без текста, вложение) тревожит один раз на паузу", async () => {
+    setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 3_600_000), humanTakeoverMid: "m-x" } });
+    db.model("message").findUnique.mockResolvedValue({ text: null });
     await checkUnansweredInbound(now);
-    expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("передано человеку");
+    expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("без текста");
+    expect(shouldSendAlert).toHaveBeenCalledWith("takeover:m-x", expect.anything());
+  });
+
+  it("пауза после «позовите человека»/реакции хозяйки (humanSilencedUntil) не тревожит", async () => {
+    setup({ contact: { humanSilencedUntil: new Date(now.getTime() + 20 * 60_000) } });
+    expect(await checkUnansweredInbound(now)).toBe(0);
+  });
+
+  it("WhatsApp: событие в очереди моста («нужен человек», пауза моста) не дублируем тревогой", async () => {
+    setup({ contact: { channel: "WHATSAPP" } });
+    db.model("whatsAppInbox").findFirst.mockResolvedValue({ status: "attention" });
+    expect(await checkUnansweredInbound(now)).toBe(0);
+  });
+
+  it("общая поломка (много клиентов без ответа) — одна сводка, а не поток сообщений", async () => {
+    db.model("message").findMany.mockResolvedValue(
+      ["a", "b", "c", "d"].map((id) => ({ contactId: id, createdAt: inAt, text: "Вопрос " + id }))
+    );
+    db.model("message").count.mockResolvedValue(0);
+    db.model("contact").findUnique.mockResolvedValue(
+      fakeContact({ name: "Клиент", humanTakenOverAt: null, humanSilencedUntil: null, humanRequestedAt: null, spamBlockedAt: null, whatsappSavedContact: false })
+    );
+    expect(await checkUnansweredInbound(now)).toBe(4);
+    expect(notifyOwnerDirect).toHaveBeenCalledTimes(1);
+    expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("4 клиентам");
   });
 
   it("меньше двух минут — ещё рано", async () => {
@@ -139,10 +189,16 @@ describe("самолечение ложного «передано челове�
 
   function arrange(opts: { twinText?: string | null; ownMid?: string }) {
     db.model("contact").findMany.mockResolvedValue([{ id: "contact-1", humanTakeoverMid: "mid-echo" }]);
-    db.model("message").findUnique.mockResolvedValue({ mid: "mid-echo", byHuman: true, direction: "OUT", text: sameText, createdAt: t0 });
+    db.model("message").findUnique.mockResolvedValue({
+      mid: "mid-echo",
+      byHuman: true,
+      direction: "OUT",
+      text: sameText,
+      createdAt: t0,
+    });
     db.model("message").findMany.mockResolvedValue(opts.twinText === null ? [] : [{ text: opts.twinText ?? sameText }]);
     db.model("contact").findUnique.mockResolvedValue(
-      fakeContact({ humanTakenOverAt: t0, humanTakeoverMid: "mid-echo" })
+      fakeContact({ humanTakenOverAt: t0, humanTakeoverMid: "mid-echo" }),
     );
     db.model("message").findFirst.mockResolvedValue(null); // настоящих реплик хозяйки позже нет
     db.model("contact").updateMany.mockResolvedValue({ count: 1 });
@@ -153,7 +209,7 @@ describe("самолечение ложного «передано челове�
     expect(await realHeal()).toBe(1);
     expect(db.model("message").update).toHaveBeenCalledWith({ where: { mid: "mid-echo" }, data: { byHuman: false } });
     expect(db.model("contact").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { humanTakenOverAt: null, humanTakeoverMid: null } })
+      expect.objectContaining({ data: { humanTakenOverAt: null, humanTakeoverMid: null } }),
     );
   });
 
@@ -170,7 +226,13 @@ describe("самолечение ложного «передано челове�
 
   it("mid подтверждён журналом отправок (текста нет — вложение) — пауза снимается", async () => {
     arrange({ twinText: null });
-    db.model("message").findUnique.mockResolvedValue({ mid: "mid-echo", byHuman: true, direction: "OUT", text: null, createdAt: t0 });
+    db.model("message").findUnique.mockResolvedValue({
+      mid: "mid-echo",
+      byHuman: true,
+      direction: "OUT",
+      text: null,
+      createdAt: t0,
+    });
     await trackOwnSend("ig-1", null, async () => ({ message_id: "mid-echo" }));
     expect(await realHeal()).toBe(1);
   });
@@ -180,7 +242,9 @@ describe("самолечение ложного «передано челове�
     db.model("message").findFirst.mockResolvedValue({ mid: "mid-real", createdAt: new Date(t0.getTime() + 60_000) });
     await realHeal();
     expect(db.model("contact").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { humanTakenOverAt: new Date(t0.getTime() + 60_000), humanTakeoverMid: "mid-real" } })
+      expect.objectContaining({
+        data: { humanTakenOverAt: new Date(t0.getTime() + 60_000), humanTakeoverMid: "mid-real" },
+      }),
     );
   });
 });
@@ -192,11 +256,16 @@ describe("фильтр молчания: наши собственные пре�
     "бепул дарс дорем?",
     "Дарси ройгон кай мешавад",
     "Денег нет пока, есть рассрочка?",
+    "Какая рассрочка на оплату?",
   ])("«%s» → отвечает бот, не молчит", (text) => {
     expect(guardOffTopic(text)?.kind).not.toBe("freeloader");
   });
 
-  it.each(["дайте курс бесплатно", "пустите так", "ройгон диҳед"])("«%s» → осознанное молчание сохранено", (text) => {
+  it.each([
+    "дайте курс бесплатно", "пустите так", "ройгон диҳед",
+    "скиньте уроки бесплатно", "дарсҳоро ройгон диҳед", "я занята, пустите так",
+    "денег нет, потом заплачу за уроки", "пустите на курс бесплатно",
+  ])("«%s» → осознанное молчание сохранено", (text) => {
     expect(guardOffTopic(text)?.kind).toBe("freeloader");
   });
 });

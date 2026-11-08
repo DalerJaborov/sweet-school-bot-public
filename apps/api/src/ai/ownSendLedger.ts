@@ -18,7 +18,11 @@ import { metaFailureKind } from "../messaging/metaErrors.js";
 
 const OWN_MID_TTL_MS = 10 * 60_000;
 const AMBIGUOUS_TTL_MS = 3 * 60_000;
-const MAX_WAIT_MS = 15_000;
+/** Дольше самой долгой отправки (вложение — 60 с, instagram.ts ATTACHMENT_TIMEOUT_MS) с запасом. */
+const MAX_WAIT_MS = 75_000;
+/** Вложение без mid сопоставляем только с эхом в ближайшие секунды: у вложения нет текста,
+ *  и иначе настоящее фото/голосовое хозяйки приняли бы за наше. */
+const AMBIGUOUS_ATTACHMENT_TTL_MS = 30_000;
 const POLL_MS = 100;
 
 const ownMids = new Map<string, number>();
@@ -35,6 +39,8 @@ function prune(now = Date.now()): void {
   ambiguous = ambiguous.filter((a) => now - a.at < AMBIGUOUS_TTL_MS);
 }
 
+function bumpPrune(): void { prune(); }
+
 function bump(key: string, delta: number): void {
   const next = (inflight.get(key) ?? 0) + delta;
   if (next <= 0) inflight.delete(key);
@@ -48,9 +54,10 @@ function bump(key: string, delta: number): void {
 export async function trackOwnSend(
   recipient: string | null,
   text: string | null,
-  send: () => Promise<{ message_id?: unknown }>
+  send: () => Promise<{ message_id?: unknown }>,
 ): Promise<string | null> {
   const key = recipient ?? ANY;
+  bumpPrune();
   bump(key, 1);
   try {
     const res = await send();
@@ -98,14 +105,17 @@ export async function classifyUnknownEcho(
   recipient: string,
   mid: string,
   text: string | null,
-  hasAttachment: boolean
+  hasAttachment: boolean,
 ): Promise<OwnEchoVerdict> {
   await waitInflight(recipient);
   prune();
   if (ownMids.has(mid)) return "own";
   const wanted = norm(text);
+  const now = Date.now();
   const idx = ambiguous.findIndex(
-    (a) => a.recipient === recipient && (wanted ? norm(a.text) === wanted : hasAttachment && a.text === null)
+    (a) =>
+      a.recipient === recipient &&
+      (wanted ? norm(a.text) === wanted : hasAttachment && a.text === null && now - a.at < AMBIGUOUS_ATTACHMENT_TTL_MS)
   );
   if (idx >= 0) {
     ambiguous.splice(idx, 1);

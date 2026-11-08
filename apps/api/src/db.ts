@@ -94,7 +94,13 @@ export async function releaseTakeoverCausedBy(contactId: string, mid: string): P
   // Never clear a real takeover because a different outgoing echo raced us.
   if (!contact || contact.humanTakeoverMid !== mid || !contact.humanTakenOverAt) return false;
   const laterHuman = await prisma.message.findFirst({
-    where: { contactId, direction: "OUT", byHuman: true, mid: { not: mid }, createdAt: { gte: contact.humanTakenOverAt } },
+    where: {
+      contactId,
+      direction: "OUT",
+      byHuman: true,
+      mid: { not: mid },
+      createdAt: { gte: contact.humanTakenOverAt },
+    },
     orderBy: { createdAt: "desc" },
   });
   const res = await prisma.contact.updateMany({
@@ -118,10 +124,12 @@ export async function setSetting(key: string, value: string): Promise<void> {
  *  адрес. Вырезаем значение секретных query-параметров, а не сам факт вызова:
  *  так видно, что произошло, но не видно, чем можно воспользоваться. */
 function redact(msg: string): string {
-  return msg
-    .replace(/((?:access_token|token|key)=)[^&\s"]+/gi, "$1***")
-    // Telegram Bot API несёт токен прямо в пути: https://api.telegram.org/bot<id>:<секрет>/…
-    .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot***");
+  return (
+    msg
+      .replace(/((?:access_token|token|key)=)[^&\s"]+/gi, "$1***")
+      // Telegram Bot API несёт токен прямо в пути: https://api.telegram.org/bot<id>:<секрет>/…
+      .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot***")
+  );
 }
 
 /**
@@ -178,7 +186,11 @@ async function persistAndMaybeAlert(source: string, text: string): Promise<void>
     // в полной тишине (разбор надёжности 03.09.2026). Сутки тишины — и та же
     // ошибка снова считается новостью.
     const seenLately = await prisma.errorLog.findFirst({
-      where: { source, message: { startsWith: dedupKey }, createdAt: { gte: new Date(Date.now() - RENOTIFY_AFTER_MS) } },
+      where: {
+        source,
+        message: { startsWith: dedupKey },
+        createdAt: { gte: new Date(Date.now() - RENOTIFY_AFTER_MS) },
+      },
       select: { id: true },
     });
 

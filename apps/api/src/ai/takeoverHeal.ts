@@ -20,14 +20,25 @@ import { isOwnMid } from "./ownSendLedger.js";
  * и сбросить пауза должна через его /takeover/reset, а не только в нашей базе.
  */
 
-const MATCH_WINDOW_MS = 3 * 60_000;
+/** Эхо нашего сообщения приходит сразу после него: двойник — до причины (минута) и чуть после (10 с). */
+const TWIN_BEFORE_MS = 60_000;
+const TWIN_AFTER_MS = 10_000;
+/** Короткие реплики («Хорошо», «Да») у хозяйки и бота совпадают случайно — их по тексту не сверяем. */
+const MIN_TWIN_TEXT = 12;
+/** Журнал отправок помнит 10 минут: старше паузы лечить нечем, а выборка не должна расти вечно. */
+const HEAL_LOOKBACK_MS = 15 * 60_000;
 const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
 export async function healFalseTakeovers(): Promise<number> {
   const rows = await prisma.contact.findMany({
-    where: { humanTakenOverAt: { not: null }, humanTakeoverMid: { not: null }, channel: { in: ["INSTAGRAM", "MESSENGER"] } },
+    where: {
+      humanTakenOverAt: { gte: new Date(Date.now() - HEAL_LOOKBACK_MS) },
+      humanTakeoverMid: { not: null },
+      channel: { in: ["INSTAGRAM", "MESSENGER"] },
+    },
     select: { id: true, humanTakeoverMid: true },
-    take: 300,
+    orderBy: { humanTakenOverAt: "desc" },
+    take: 100,
   });
   let healed = 0;
   for (const c of rows) {
@@ -38,7 +49,7 @@ export async function healFalseTakeovers(): Promise<number> {
       let ours = isOwnMid(mid);
       let how = "mid подтверждён журналом отправок";
       const text = norm(cause.text);
-      if (!ours && text) {
+      if (!ours && text.length >= MIN_TWIN_TEXT) {
         const twins = await prisma.message.findMany({
           where: {
             contactId: c.id,
@@ -46,8 +57,8 @@ export async function healFalseTakeovers(): Promise<number> {
             byHuman: false,
             mid: { not: mid },
             createdAt: {
-              gte: new Date(cause.createdAt.getTime() - MATCH_WINDOW_MS),
-              lte: new Date(cause.createdAt.getTime() + MATCH_WINDOW_MS),
+              gte: new Date(cause.createdAt.getTime() - TWIN_BEFORE_MS),
+              lte: new Date(cause.createdAt.getTime() + TWIN_AFTER_MS),
             },
           },
           select: { text: true },

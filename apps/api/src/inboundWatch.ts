@@ -109,7 +109,7 @@ const fmt = (d: Date, offset: number): string => {
   return `${String(l.getUTCDate()).padStart(2, "0")}.${String(l.getUTCMonth() + 1).padStart(2, "0")} ${String(l.getUTCHours()).padStart(2, "0")}:${String(l.getUTCMinutes()).padStart(2, "0")}`;
 };
 
-export type UnansweredReason = { skip: true; why: string } | { skip: false; reason: string };
+export type UnansweredReason = { skip: true; why: string } | { skip: false; reason: string; dedupeKey?: string };
 
 /** Почему на последнее входящее нет ответа: намеренно (skip) или нет (reason). */
 export async function explainUnanswered(
@@ -136,15 +136,29 @@ export async function explainUnanswered(
   if (receipt) return { skip: true, why: "чек ждёт решения владельца" };
 
   // Дальше — молчание без записанной причины. Подбираем самое вероятное объяснение.
+  // Живая хозяйка ведёт разговор — это намеренная пауза, шуметь про неё нельзя (разбор
+  // «умного перехвата» — отдельная задача). Подозрительной считаем только паузу, причину
+  // которой не видно: нет сообщения-причины или у него нет текста (вложение) — так выглядит
+  // и ложное эхо нашей картинки. Одна тревога на паузу (ключ — mid причины).
   if (contact.humanTakenOverAt) {
     const cause = contact.humanTakeoverMid
       ? await prisma.message.findUnique({ where: { mid: contact.humanTakeoverMid } })
       : null;
-    const sample = cause?.text ? ` («${cause.text.slice(0, 60)}»)` : "";
-    return { skip: false, reason: `бот на паузе: передано человеку ${fmt(contact.humanTakenOverAt, await offsetMs())}${sample}, ответа после этого нет` };
+    if (cause?.text) return { skip: true, why: "живая пауза хозяйки" };
+    return {
+      skip: false,
+      reason: `бот на паузе с ${fmt(contact.humanTakenOverAt, await offsetMs())}, а причина паузы — сообщение без текста (вложение): возможно, это было наше же эхо`,
+      dedupeKey: `takeover:${contact.humanTakeoverMid ?? contactId}`,
+    };
   }
   if (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > now.getTime()) {
-    return { skip: false, reason: `пауза после действия хозяйки до ${fmt(contact.humanSilencedUntil, await offsetMs())}, ответа нет` };
+    return { skip: true, why: "пауза после действия хозяйки или просьбы позвать человека" };
+  }
+  // WhatsApp: очередь «нужен человек», обработка и просроченные события ведёт сам мост;
+  // эти строки уже видны владельцу в панели, повторная тревога была бы шумом.
+  if (contact.channel === "WHATSAPP") {
+    const inbox = await prisma.whatsAppInbox.findFirst({ where: { contactId, createdAt: { gte: new Date(lastIn.createdAt.getTime() - 60_000) } } });
+    if (inbox) return { skip: true, why: `WhatsApp: событие в очереди моста (${inbox.status})` };
   }
   const retry = await prisma.pendingAiReply.findFirst({ where: { contactId } });
   if (retry) return { skip: false, reason: `ИИ не ответил, ход ждёт повтора (попыток: ${retry.attempts})` };
@@ -160,7 +174,8 @@ export async function checkUnansweredInbound(now = new Date()): Promise<number> 
   // Самолечение раньше сторожа: ложная пауза от нашего же эха снимается сама.
   await healFalseTakeovers().catch((err) => logError("takeoverHeal", err));
 
-  const since = new Date(Math.max(now.getTime() - LOOKBACK_MS, PROCESS_STARTED_AT));
+  // Окно начинается за 15 минут до старта: сообщение, потерянное при выкатке, тоже ловим.
+  const since = new Date(Math.max(now.getTime() - LOOKBACK_MS, PROCESS_STARTED_AT - 15 * 60_000));
   const cutoff = new Date(now.getTime() - UNANSWERED_AFTER_MS);
   const recent = await prisma.message.findMany({
     where: { direction: "IN", createdAt: { gte: since } },
@@ -172,28 +187,44 @@ export async function checkUnansweredInbound(now = new Date()): Promise<number> 
   for (const m of recent) if (!latest.has(m.contactId)) latest.set(m.contactId, { createdAt: m.createdAt, text: m.text });
 
   const offset = await offsetMs();
-  let sent = 0;
+  const items: { who: string; when: string; preview: string; reason: string; channel: string }[] = [];
   for (const [contactId, lastIn] of latest) {
-    if (sent >= MAX_ALERTS_PER_TICK) break;
+    if (items.length >= MAX_ALERTS_PER_TICK * 4) break;
     if (lastIn.createdAt.getTime() > cutoff.getTime()) continue; // ещё в пределах двух минут
     const answered = await prisma.message.count({ where: { contactId, direction: "OUT", createdAt: { gt: lastIn.createdAt } } });
     if (answered > 0) continue;
     const verdict = await explainUnanswered(contactId, lastIn, now);
     if (verdict.skip) continue;
-    // Одна тревога на одно сообщение; уже отправленные не тратят лимит тика.
-    const key = `unanswered:${contactId}:${lastIn.createdAt.getTime()}`;
+    // Одна тревога на одно сообщение (или на одну паузу); уже отправленные не тратят лимит тика.
+    const key = verdict.dedupeKey ?? `unanswered:${contactId}:${lastIn.createdAt.getTime()}`;
     if (!(await shouldSendAlert(key, { cooldownMs: 24 * 3_600_000 }))) continue;
     const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { name: true, username: true, igUserId: true, channel: true } });
-    const who = contact?.name || (contact?.username ? `@${contact.username}` : contact?.igUserId) || contactId;
-    const preview = lastIn.text ? `«${lastIn.text.slice(0, 120)}»` : "(вложение без текста)";
-    await notifyOwnerDirect(
-      `Бот не ответил клиенту: ${who} (${contact?.channel ?? "?"})
-` +
-        `Написал(а) в ${fmt(lastIn.createdAt, offset)}: ${preview}
-` +
-        `Причина: ${verdict.reason}`,
-    ).catch((err) => logError("inboundWatch:unanswered", err));
-    sent += 1;
+    items.push({
+      who: contact?.name || (contact?.username ? "@" + contact.username : contact?.igUserId) || contactId,
+      channel: contact?.channel ?? "?",
+      when: fmt(lastIn.createdAt, offset),
+      preview: lastIn.text ? "«" + lastIn.text.slice(0, 120) + "»" : "(вложение без текста)",
+      reason: verdict.reason,
+    });
   }
-  return sent;
+  if (items.length === 0) return 0;
+
+  // Общая поломка (упал ИИ, пропал ключ) бьёт по многим клиентам сразу: вместо потока
+  // сообщений в Telegram — одна сводка. Одна-две тревоги идут отдельно, с деталями.
+  if (items.length <= 2) {
+    for (const it of items) {
+      await notifyOwnerDirect(
+        "Бот не ответил клиенту: " + it.who + " (" + it.channel + ")\n" +
+          "Написал(а) в " + it.when + ": " + it.preview + "\n" +
+          "Причина: " + it.reason
+      ).catch((err) => logError("inboundWatch:unanswered", err));
+    }
+  } else {
+    const lines = items.slice(0, 10).map((it) => "- " + it.who + " (" + it.when + "): " + it.reason);
+    await notifyOwnerDirect(
+      "Бот не ответил " + items.length + " клиентам дольше двух минут:\n" + lines.join("\n") +
+        (items.length > 10 ? "\n...и ещё " + (items.length - 10) : "")
+    ).catch((err) => logError("inboundWatch:unanswered", err));
+  }
+  return items.length;
 }

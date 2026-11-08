@@ -234,8 +234,11 @@ const NAGGING = rx(["^\\s*(алло|ало|ау)[\\s!?.]*$", "(ответь|ҷа
  * отвечает модель по правилам продаж.
  */
 const FREE_LESSON_OR_INSTALLMENT = rx([
-  "урок|дарс|занят|пробн|ознакомит|демо",
-  "рассрочк|по\\s+частям|частями|қисм|кисм",
+  // Именно предложение школы: «бесплатный/пробный урок», «бепул дарс», «дарси ройгон».
+  // «Скиньте уроки бесплатно», «дарсҳоро ройгон диҳед», «занята, пустите так» сюда НЕ входят.
+  "(бесплатн|пробн|ознакомительн)\\p{L}*\\s+(урок|дарс)а?(?!\\p{L})",
+  "(бепул|ройгон|муфт)\\s+дарс(?!\\p{L})|дарси\\s+(бепул|ройгон|пробн\\p{L}*)",
+  "рассрочк|по\\s+частям",
 ]);
 
 function detectFreeloader(trimmed: string): string | null {
@@ -315,9 +318,7 @@ const OTHER_COURSE = rx([
   "маникюр|парикмахер|шить[её]|кулинар(ия|ии)\\s+общ|повар(ск|ом)|англ(ийск|иси)",
 ]);
 
-const COURSE_ASK = rx([
-  "курс|дарс|омӯз|омуз|учит|обуча|мешавад|доред|дорет|есть\\s+ли|ҳаст|хаст",
-]);
+const COURSE_ASK = rx(["курс|дарс|омӯз|омуз|учит|обуча|мешавад|доред|дорет|есть\\s+ли|ҳаст|хаст"]);
 
 function detectNoSuchCourse(trimmed: string): string | null {
   return OTHER_COURSE.test(trimmed) && COURSE_ASK.test(trimmed) ? "спрашивают курс, которого нет" : null;
@@ -527,13 +528,19 @@ const RECIPE_FOR_GUEST: Record<ClientLanguage, string> = {
 /**
  * @param isStudent человек оплатил курс — только ему можно звать в закрытый чат.
  */
-export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStudent = false, deliveryMode: "web" | "telegram" | "both" = "telegram"): string {
+export function guardReply(
+  kind: SpeakingKind,
+  language: ClientLanguage,
+  isStudent = false,
+  deliveryMode: "web" | "telegram" | "both" = "telegram",
+): string {
   if (kind === "recipe_question" && !isStudent) return RECIPE_FOR_GUEST[language];
-  if (kind === "recipe_question" && deliveryMode !== "telegram") return {
-    ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
-    tg: "Дарси худро дар кабинети шахсӣ кушоед ва «Савол»-ро пахш кунед — Ширин мебинад, ки савол дар бораи кадом дастур аст",
-    en: "Open your lesson and choose Question so Shirin can see which recipe you mean",
-  }[language];
+  if (kind === "recipe_question" && deliveryMode !== "telegram")
+    return {
+      ru: "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
+      tg: "Дарси худро дар кабинети шахсӣ кушоед ва «Савол»-ро пахш кунед — Ширин мебинад, ки савол дар бораи кадом дастур аст",
+      en: "Open your lesson and choose Question so Shirin can see which recipe you mean",
+    }[language];
   return REPLIES[kind][language];
 }
 

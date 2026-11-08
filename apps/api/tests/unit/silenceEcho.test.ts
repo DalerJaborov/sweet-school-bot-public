@@ -28,7 +28,10 @@ beforeEach(() => {
   db.model("message").findFirst.mockResolvedValue(null);
   resetOwnSendLedger();
 });
-afterEach(() => { restorePrisma(); vi.useRealTimers(); });
+afterEach(() => {
+  restorePrisma();
+  vi.useRealTimers();
+});
 
 async function finish(task: Promise<unknown>) {
   await vi.advanceTimersByTimeAsync(25_000);
@@ -38,7 +41,14 @@ async function finish(task: Promise<unknown>) {
 describe("эхо своих сообщений не выключает бота", () => {
   it("ГОНКА: эхо прилетело раньше, чем Graph вернул mid — паузы нет", async () => {
     let resolveSend!: (v: { message_id: string }) => void;
-    const sending = trackOwnSend("ig-1", "Салом", () => new Promise((resolve) => { resolveSend = resolve as typeof resolveSend; }));
+    const sending = trackOwnSend(
+      "ig-1",
+      "Салом",
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve as typeof resolveSend;
+        }),
+    );
     const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-race", text: "Салом", is_echo: true } });
     await vi.advanceTimersByTimeAsync(700); // эхо уже ждёт ответа Graph
     resolveSend({ message_id: "mid-race" });
@@ -50,47 +60,90 @@ describe("эхо своих сообщений не выключает бота"
   });
 
   it("Graph не вернул message_id (AMBIGUOUS), сообщение дошло: эхо с тем же текстом — не хозяйка, запись сохраняется", async () => {
-    await trackOwnSend("ig-1", "Ҳа, ин курс 70 сомонӣ", async () => { throw new MetaDeliveryError("AMBIGUOUS", 0); }).catch(() => undefined);
-    const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-amb", text: "Ҳа, ин курс 70 сомонӣ", is_echo: true } });
+    await trackOwnSend("ig-1", "Ҳа, ин курс 70 сомонӣ", async () => {
+      throw new MetaDeliveryError("AMBIGUOUS", 0);
+    }).catch(() => undefined);
+    const echo = handleEcho({
+      recipient: { id: "ig-1" },
+      message: { mid: "mid-amb", text: "Ҳа, ин курс 70 сомонӣ", is_echo: true },
+    });
     await finish(echo);
 
     expect(db.$transaction).not.toHaveBeenCalled();
     expect(db.model("message").create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ mid: "mid-amb", direction: "OUT", byHuman: false }) })
+      expect.objectContaining({ data: expect.objectContaining({ mid: "mid-amb", direction: "OUT", byHuman: false }) }),
     );
   });
 
   it("Graph ответил 200 без message_id: картинка (вложение), эхо без текста — тоже не хозяйка", async () => {
     await trackOwnSend("ig-1", null, async () => ({})); // ни mid, ни исключения
-    const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-img", is_echo: true, attachments: [{ type: "image", payload: { url: "https://x/y.jpg" } }] } });
+    const echo = handleEcho({
+      recipient: { id: "ig-1" },
+      message: { mid: "mid-img", is_echo: true, attachments: [{ type: "image", payload: { url: "https://x/y.jpg" } }] },
+    });
     await finish(echo);
 
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
   it("КОНТРОЛЬ: настоящий ответ хозяйки (другой текст) по-прежнему включает паузу", async () => {
-    await trackOwnSend("ig-1", "Салом", async () => { throw new MetaDeliveryError("AMBIGUOUS", 0); }).catch(() => undefined);
-    const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-owner", text: "Привет, это Ширин, отвечаю сама", is_echo: true } });
+    await trackOwnSend("ig-1", "Салом", async () => {
+      throw new MetaDeliveryError("AMBIGUOUS", 0);
+    }).catch(() => undefined);
+    const echo = handleEcho({
+      recipient: { id: "ig-1" },
+      message: { mid: "mid-owner", text: "Привет, это Ширин, отвечаю сама", is_echo: true },
+    });
     await finish(echo);
 
     expect(db.model("contact").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ humanTakeoverMid: "mid-owner" }) })
+      expect.objectContaining({ data: expect.objectContaining({ humanTakeoverMid: "mid-owner" }) }),
     );
   });
 
   it("окончательный отказ Meta (окно 24 ч) ничего не доставил — такой текст хозяйки не прячем", async () => {
-    await trackOwnSend("ig-1", "Салом", async () => { throw new MetaDeliveryError("WINDOW", 400); }).catch(() => undefined);
-    const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-owner2", text: "Салом", is_echo: true } });
+    await trackOwnSend("ig-1", "Салом", async () => {
+      throw new MetaDeliveryError("WINDOW", 400);
+    }).catch(() => undefined);
+    const echo = handleEcho({
+      recipient: { id: "ig-1" },
+      message: { mid: "mid-owner2", text: "Салом", is_echo: true },
+    });
     await finish(echo);
 
     expect(db.model("contact").updateMany).toHaveBeenCalled();
   });
 
   it("эхо другого получателя не поглощается чужой неоднозначной отправкой", async () => {
-    await trackOwnSend("ig-2", "Салом", async () => { throw new MetaDeliveryError("AMBIGUOUS", 0); }).catch(() => undefined);
+    await trackOwnSend("ig-2", "Салом", async () => {
+      throw new MetaDeliveryError("AMBIGUOUS", 0);
+    }).catch(() => undefined);
     const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-o3", text: "Салом", is_echo: true } });
     await finish(echo);
 
     expect(db.model("contact").updateMany).toHaveBeenCalled();
+  });
+});
+
+describe("ревью 08.11: вложения и долгие отправки", () => {
+  it("фото хозяйки через минуту после нашей неудавшейся картинки НЕ принимается за наше эхо", async () => {
+    await trackOwnSend("ig-1", null, async () => { throw new MetaDeliveryError("AMBIGUOUS", 0); }).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(60_000); // прошло больше 30 с
+    const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-photo", is_echo: true, attachments: [{ type: "image", payload: { url: "https://x/y.jpg" } }] } });
+    await finish(echo);
+
+    expect(db.model("contact").updateMany).toHaveBeenCalled(); // пауза встала
+  });
+
+  it("медленная отправка вложения (40 с) — эхо терпеливо ждёт и не ставит ложную паузу", async () => {
+    let resolveSend!: (v: { message_id: string }) => void;
+    const sending = trackOwnSend("ig-1", null, () => new Promise((resolve) => { resolveSend = resolve as typeof resolveSend; }));
+    const echo = handleEcho({ recipient: { id: "ig-1" }, message: { mid: "mid-slow", is_echo: true, attachments: [{ type: "video", payload: { url: "https://x/v.mp4" } }] } });
+    await vi.advanceTimersByTimeAsync(40_000);
+    resolveSend({ message_id: "mid-slow" });
+    await sending;
+    await finish(echo);
+
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
   });
 });
