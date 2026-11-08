@@ -16,6 +16,18 @@ const handleManualLinkCommand = vi.fn(async () => true);
 vi.mock("../../src/course/manualLink.js", () => ({
   handleManualLinkCommand: (...a: unknown[]) => handleManualLinkCommand(...a),
 }));
+const ANNA = { id: "c1", handle: "@anna", name: "Анна", courses: ["COURSE50"] };
+const BELLA = { id: "c2", handle: "@bella", name: null, courses: ["COURSE70"] };
+const findPeople = vi.fn(async (_q: string): Promise<unknown[]> => [ANNA]);
+const issueOwnerLink = vi.fn(async (_id: string, _k: string): Promise<unknown> => ({
+  ok: true, kind: "web", url: "https://school.test/l/XYZ", courses: ["COURSE50"],
+}));
+vi.mock("../../src/course/ownerLink.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/course/ownerLink.js")>()),
+  findPeople: (q: string) => findPeople(q),
+  getPerson: async (id: string) => [ANNA, BELLA].find((p) => p.id === id) ?? null,
+  issueOwnerLink: (id: string, k: string) => issueOwnerLink(id, k),
+}));
 const createSiteLink = vi.fn(async (i: { label?: string | null }) => ({ code: "abc234", label: i.label ?? null }));
 vi.mock("../../src/links/siteLinks.js", async (orig) => ({
   ...(await orig<typeof import("../../src/links/siteLinks.js")>()),
@@ -44,7 +56,7 @@ beforeEach(() => {
   db.model("receiptCheck").count.mockResolvedValue(0);
   db.model("courseChatMessage").findMany.mockResolvedValue([]);
   db.model("courseChatMessage").count.mockResolvedValue(0);
-  for (const f of [sendTelegramMessage, sendWithMarkup, answerCallback, createOneTimeInviteLink]) f.mockClear();
+  for (const f of [sendTelegramMessage, sendWithMarkup, answerCallback, createOneTimeInviteLink, issueOwnerLink, findPeople]) f.mockClear();
 });
 afterEach(() => restorePrisma());
 
@@ -106,11 +118,57 @@ describe("Меню быстрых действий", () => {
     await handleMenuCommand({ ...msg("@Malika"), reply_to_message: { text: prompt } });
     expect(sendTelegramMessage.mock.calls[0]?.[2]).toContain("21 рецепт");
   });
-  it("«Выдать доступ»: ответ с ником уходит в команду /ссылка", async () => {
+  it("«Выдать доступ»: ник → выбор «В Telegram» / «На сайт» → ссылка с кнопкой «Переслать»", async () => {
     await handleMenuCommand(msg("🔑 Выдать доступ"));
     const prompt = sendWithMarkup.mock.calls[0]?.[2] as string;
-    await handleMenuCommand({ ...msg("@malika"), reply_to_message: { text: prompt } });
-    expect((handleManualLinkCommand.mock.calls[0]?.[0] as { text: string }).text).toBe("/ссылка @malika");
+    sendWithMarkup.mockClear();
+    await handleMenuCommand({ ...msg("anna"), reply_to_message: { text: prompt } });
+    expect(findPeople).toHaveBeenCalledWith("anna");
+    const kb = JSON.stringify(sendWithMarkup.mock.calls[0]?.[3]);
+    expect(kb).toMatch(/mn:ik:[0-9a-f]{12}:t/);
+    const web = /mn:ik:[0-9a-f]{12}:w/.exec(kb)![0];
+    sendWithMarkup.mockClear();
+    await handleMenuCallback("tok", { id: "c", data: web, message: { chat: { id: 111 } } });
+    expect(issueOwnerLink).toHaveBeenCalledWith("c1", "web");
+    expect(sendWithMarkup.mock.calls[0]?.[2]).toContain("https://school.test/l/XYZ");
+    expect(JSON.stringify(sendWithMarkup.mock.calls[0]?.[3])).toContain("t.me/share/url");
+  });
+  it("кнопка карточки одноразовая: второе нажатие ничего не выдаёт", async () => {
+    await handleMenuCommand({ ...msg("anna"), reply_to_message: { text: "Кому выдать доступ? Ответьте на это сообщение ником или именем" } });
+    const tg = /mn:ik:[0-9a-f]{12}:t/.exec(JSON.stringify(sendWithMarkup.mock.calls[0]?.[3]))![0];
+    issueOwnerLink.mockClear();
+    await handleMenuCallback("tok", { id: "c", data: tg, message: { chat: { id: 111 } } });
+    await handleMenuCallback("tok", { id: "c2", data: tg, message: { chat: { id: 111 } } });
+    expect(issueOwnerLink).toHaveBeenCalledTimes(1);
+    expect(answerCallback.mock.calls.at(-1)?.[2]).toContain("устарела");
+  });
+  it("кнопка с выдуманной меткой ничего не выдаёт", async () => {
+    issueOwnerLink.mockClear();
+    await handleMenuCallback("tok", { id: "c", data: "mn:ik:aaaaaaaaaaaa:w", message: { chat: { id: 111 } } });
+    expect(issueOwnerLink).not.toHaveBeenCalled();
+  });
+  it("несколько найденных — список кнопок, выбор открывает карточку канала", async () => {
+    findPeople.mockResolvedValueOnce([ANNA, BELLA]);
+    await handleMenuCommand({ ...msg("a"), reply_to_message: { text: "Кому выдать доступ? Ответьте на это сообщение ником или именем" } });
+    const kb = JSON.stringify(sendWithMarkup.mock.calls[0]?.[3]);
+    const pick = /mn:ip:[0-9a-f]{12}/.exec(kb)![0];
+    sendWithMarkup.mockClear();
+    await handleMenuCallback("tok", { id: "c", data: pick, message: { chat: { id: 111 } } });
+    expect(JSON.stringify(sendWithMarkup.mock.calls[0]?.[3])).toMatch(/mn:ik:[0-9a-f]{12}:w/);
+  });
+  it("никого не нашли — понятный ответ без кнопок", async () => {
+    findPeople.mockResolvedValueOnce([]);
+    sendWithMarkup.mockClear();
+    await handleMenuCommand({ ...msg("zzz"), reply_to_message: { text: "Кому выдать доступ? Ответьте на это сообщение ником или именем" } });
+    expect(sendWithMarkup).not.toHaveBeenCalled();
+    expect(sendTelegramMessage.mock.calls.at(-1)?.[2]).toContain("Не нашла");
+  });
+  it("отказ выдачи показывает причину простыми словами", async () => {
+    issueOwnerLink.mockResolvedValueOnce({ ok: false, reason: "in-group" });
+    await handleMenuCommand({ ...msg("anna"), reply_to_message: { text: "Кому выдать доступ? Ответьте на это сообщение ником или именем" } });
+    const tg = /mn:ik:[0-9a-f]{12}:t/.exec(JSON.stringify(sendWithMarkup.mock.calls.at(-1)?.[3]))![0];
+    await handleMenuCallback("tok", { id: "c", data: tg, message: { chat: { id: 111 } } });
+    expect(sendTelegramMessage.mock.calls.at(-1)?.[2]).toContain("уже в группе");
   });
   it("ответ на чужое сообщение из чужого чата не работает", async () => {
     expect(await handleMenuCommand({ ...msg("@x", 999), reply_to_message: { text: "Кого найти? Ответьте на это сообщение ником" } })).toBe(false);
