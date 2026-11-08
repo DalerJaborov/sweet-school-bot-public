@@ -7,8 +7,8 @@ import { spawn } from "node:child_process";
  * Перекодируем через ffmpeg (он уже стоит на сервере для видео уроков); если ffmpeg
  * недоступен или упал — возвращаем null, и вызывающий оставляет исходный файл.
  */
-/** Только темп 1.30 (1.2 из ElevenLabs x 1.0833) и выравнивание громкости. Никаких шумов и фильтров (решение владельца). */
-export const VOICE_FILTER = "atempo=1.0833,loudnorm=I=-16:TP=-1.5:LRA=9";
+/** Только выравнивание громкости. Без ускорения (владелец 08.11.2026 вечером: 1.3x «тараторит»), без шумов и фильтров. */
+export const VOICE_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=9";
 
 export type VoiceFormat = "ogg" | "aac";
 /** WhatsApp - ogg/opus (настоящее голосовое); Instagram и Messenger принимают aac/m4a/wav/mp4, но не ogg. */

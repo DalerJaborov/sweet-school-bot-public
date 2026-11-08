@@ -118,7 +118,7 @@ describe("кеш и потолок трат озвучки", () => {
   });
 });
 
-describe("decorateForV3 — одна метка в начале, только для eleven_v3", () => {
+describe("decorateForV3 — одна метка в начале; v3 своя, v4 только из ELEVENLABS_TAG", () => {
   it("первый кусок получает ровно одну весёлую метку, остальные и не-v3 без меток", async () => {
     const { decorateForV3 } = await import("../../src/ai/voiceClone.js");
     const out = decorateForV3("Салом!", 0, 3, "eleven_v3");
@@ -126,7 +126,9 @@ describe("decorateForV3 — одна метка в начале, только д
     expect(decorateForV3("Салом!", 0, 3, "eleven_v3")).toBe(out);
     expect(decorateForV3("Середина.", 1, 3, "eleven_v3")).toBe("Середина.");
     expect(decorateForV3("Пишите.", 2, 3, "eleven_v3")).toBe("Пишите.");
-    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo")).toBe("Салом!");
+    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo", "")).toBe("Салом!");
+    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo", "[warm]")).toBe("[warm] Салом!");
+    expect(decorateForV3("Дуюм.", 1, 2, "eleven_v4", "[warm]")).toBe("Дуюм.");
     expect((out.match(/\[/g) ?? []).length).toBe(1);
   });
 });
