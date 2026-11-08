@@ -381,7 +381,7 @@ describe("одна действующая ссылка на человека", (
   it("человек в группе просит сайт: бот СРАЗУ отзывает приглашение, удаляет из группы и выдаёт сайт; карточки владельцу нет", async () => {
     contactRow = inGroupContact();
     purchaseRows = [inGroupPurchase()];
-    const { calls } = stubTelegram();
+    const { calls, fetchMock } = stubTelegram();
 
     expect(await handleSwitchRequest(asContact(), "web", "ru")).toBe("switched");
 
@@ -391,8 +391,12 @@ describe("одна действующая ссылка на человека", (
     expect(calls("unbanChatMember")).toHaveLength(1);
     expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100500", TG_LINK);
     expect(contactRow.courseDeliveryChoice).toBe("web");
-    expect(contactRow.joinedGroupAt).toBeNull();
-    expect(purchaseRows[0].joinedAt).toBeNull();
+    // История входа не стирается (на неё опирается напоминалка и бесплатность перевода).
+    expect(contactRow.joinedGroupAt).not.toBeNull();
+    expect(purchaseRows[0].joinedAt).not.toBeNull();
+    // СНАЧАЛА сайтовая ссылка человеку, ПОТОМ бан.
+    const banIdx = fetchMock.mock.calls.findIndex((c) => String(c[0]).endsWith("/banChatMember"));
+    expect(sendText.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[banIdx]);
     expect(String(sendText.mock.calls[0][1])).toContain("/l/");
     // Журнал: кто, где, когда.
     expect(db.model("accessEvent").create).toHaveBeenCalledWith({
@@ -425,7 +429,8 @@ describe("одна действующая ссылка на человека", (
     expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
 
     expect(calls("banChatMember")).toHaveLength(2); // повтор
-    expect(calls("unbanChatMember")).toHaveLength(0);
+    // Бан мог пройти, а ответ потеряться: разбан пробуем всё равно.
+    expect(calls("unbanChatMember")).toHaveLength(1);
     expect(contactRow.joinedGroupAt).not.toBeNull();
     expect(purchaseRows[0].joinedAt).not.toBeNull();
     expect(db.model("accessEvent").create).not.toHaveBeenCalled();
@@ -455,7 +460,7 @@ describe("одна действующая ссылка на человека", (
     expect(contactRow.joinedGroupAt).not.toBeNull();
   });
 
-  it("не в группе и идентификатора нет — тихо, без тревоги", async () => {
+  it("приглашение выдавали, а идентификатор неизвестен и отметки входа нет — хозяйку предупреждаем, не молчим", async () => {
     contactRow = baseContact({
       courseDeliveryChoice: "telegram",
       inviteLink: TG_LINK,
@@ -466,7 +471,7 @@ describe("одна действующая ссылка на человека", (
     stubTelegram();
 
     expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("switched");
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Telegram-идентификатор неизвестен");
   });
 
   it("администратор или создатель группы не удаляется: бан не вызывается, хозяйка видит причину", async () => {
@@ -503,7 +508,6 @@ describe("одна действующая ссылка на человека", (
     await switchCourseChannel(asContact(), "web", "bot");
 
     expect(calls("banChatMember")).toHaveLength(0);
-    expect(contactRow.joinedGroupAt).toBeNull();
     expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
@@ -535,22 +539,35 @@ describe("одна действующая ссылка на человека", (
     vi.mocked(courses.chatIdFor).mockImplementation(async () => "-100500");
   });
 
-  it("/ссылка владельца для человека в группе: приглашение отозвано, из группы удалён, выбор «сайт»", async () => {
+  it("/ссылка владельца для человека в группе: приглашение отозвано, из группы НЕ убираем, выбор «сайт»", async () => {
     contactRow = inGroupContact();
     purchaseRows = [inGroupPurchase()];
-    const { calls } = stubTelegram();
+    const { calls, fetchMock } = stubTelegram();
 
     const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
     expect(await closeTelegramDoor("c-1")).toBe(true);
 
-    expect(calls("banChatMember")).toHaveLength(1);
     expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100500", TG_LINK);
+    expect(calls("banChatMember")).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(contactRow.courseDeliveryChoice).toBe("web");
     expect(contactRow.inviteLink).toBeNull();
-    expect(db.model("accessEvent").create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ action: "removed", actor: "owner" }),
-    });
+    expect(db.model("accessEvent").create).not.toHaveBeenCalled();
     expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("closeTelegramDoor: уроки курса ещё не готовы на сайте — приглашение не трогаем", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    stubTelegram();
+    const delivery = await import("../../src/course/delivery.js");
+    vi.mocked(delivery.coursePlatformReady).mockResolvedValueOnce(false);
+
+    const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
+    expect(await closeTelegramDoor("c-1")).toBe(false);
+
+    expect(revokeInviteLink).not.toHaveBeenCalled();
+    expect(contactRow.courseDeliveryChoice).toBe("telegram");
   });
 
   it("у человека на сайте и без группы closeTelegramDoor ничего не делает", async () => {
@@ -558,6 +575,60 @@ describe("одна действующая ссылка на человека", (
     const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
     expect(await closeTelegramDoor("c-1")).toBe(false);
     expect(revokeInviteLink).not.toHaveBeenCalled();
+  });
+
+  it("перевод на сайт, курс не готов на сайте: ничего не отправляем и из группы не убираем", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    const { fetchMock } = stubTelegram();
+    const delivery = await import("../../src/course/delivery.js");
+    vi.mocked(delivery.coursePlatformReady).mockResolvedValueOnce(false);
+
+    expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("unavailable");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("сайтовая ссылка не доставилась — из группы не убираем", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase()];
+    sendText.mockResolvedValue(null);
+    const { fetchMock } = stubTelegram();
+
+    expect(await switchCourseChannel(asContact(), "web", "bot")).toBe("failed");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("повторное нажатие кнопки владельца, когда перевод уже сделан: «готово», а не «не получилось»", async () => {
+    expect(await approveSwitchByOwner("c-1", "web")).toBe(true); // уже на сайте -> already
+  });
+
+  it("два «да» подряд: второе ничего не повторяет (ни «Передала Ширин», ни карточки)", async () => {
+    contactRow = baseContact({ courseDeliveryChoice: "telegram", inviteLink: TG_LINK, accessTokenId: null, accessIssuedAt: null });
+    purchaseRows = [purchase({ inviteLink: TG_LINK, firstOpenedAt: null })];
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    stubTelegram();
+    await maybeRestoreAccess(asContact(), "у меня нет телеграма, хочу на сайте");
+    sendText.mockClear();
+    sendTelegramMessage.mockClear();
+
+    const [a, b] = await Promise.all([maybeRestoreAccess(asContact(), "да"), maybeRestoreAccess(asContact(), "да")]);
+
+    const handled = [a, b].filter((r) => r.handled);
+    expect(handled).toHaveLength(1);
+    expect(sendText.mock.calls.filter((c) => String(c[1]).includes("Передала Ширин"))).toHaveLength(0);
+    expect(JSON.stringify(sendTelegramMessage.mock.calls)).not.toContain("mn:sw");
+  });
+
+  it("две покупки: вопрос «перевести на сайт?» говорит о группах во множественном числе", async () => {
+    contactRow = inGroupContact();
+    purchaseRows = [inGroupPurchase({ firstOpenedAt: null }), inGroupPurchase({ id: "p-2", course: "COURSE70", firstOpenedAt: null })];
+    db.model("receiptCheck").count.mockResolvedValue(1);
+
+    await maybeRestoreAccess(asContact(), "у меня нет телеграма, хочу на сайте");
+
+    expect(String(sendText.mock.calls[0][1])).toContain("обеих группах");
   });
 
   it("подтверждение «перевести?» не обещает «пришлю сразу», когда просьба уйдёт Ширин (лимит), и без цифр", async () => {

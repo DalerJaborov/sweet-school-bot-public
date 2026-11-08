@@ -2,7 +2,7 @@ import type { Contact, Purchase } from "@prisma/client";
 import { prisma, getSetting, logError, logInfo } from "./db.js";
 import { techChatIds, sendTelegramMessage } from "./telegram.js";
 import { shouldSendAlert } from "./alertGate.js";
-import { chatIdFor, type Course } from "./courses.js";
+import { chatIdFor, COURSE_50, COURSE_70, type Course } from "./courses.js";
 
 /**
  * ЕДИНСТВЕННАЯ ДВЕРЬ «УДАЛИТЬ ЧЕЛОВЕКА ИЗ TELEGRAM-ГРУППЫ» (08.11.2026).
@@ -85,11 +85,18 @@ export async function removeFromGroupChat(
   for (let i = 0; i < BAN_ATTEMPTS && !ban.ok; i++) {
     ban = await api(botToken, "banChatMember", { chat_id: chatId, user_id: userId });
   }
-  if (!ban.ok) return { chatId, state: "ban_failed", detail: ban.description };
-
+  // Бан мог пройти, а ответ не дойти (таймаут): разбан пробуем в любом случае,
+  // он безопасен, если бана нет (only_if_banned). Иначе человек остался бы в бане навсегда.
   let unban: Reply = { ok: false };
   for (let i = 0; i < UNBAN_ATTEMPTS && !unban.ok; i++) {
     unban = await api(botToken, "unbanChatMember", { chat_id: chatId, user_id: userId, only_if_banned: true });
+  }
+  if (!ban.ok) {
+    return {
+      chatId,
+      state: "ban_failed",
+      detail: unban.ok ? ban.description : `${ban.description ?? "бан не подтверждён"}; разбан тоже не прошёл, проверьте вручную`,
+    };
   }
   if (!unban.ok) {
     logError("groupExit:unban", new Error(`${chatId}/${telegramUserId}: ${unban.description}`));
@@ -127,15 +134,22 @@ async function courseChatIds(purchases: Pick<Purchase, "course">[]): Promise<str
  * (одно на весь случай), через alertOwnerProblem.
  */
 export async function removeContactFromGroups(
-  contact: Pick<Contact, "id" | "telegramUserId" | "joinedGroupAt">,
+  contact: Pick<Contact, "id" | "telegramUserId" | "joinedGroupAt" | "inviteLink">,
   purchases: Purchase[],
   actor: "owner" | "bot",
+  opts: { allChatsIfNoPurchases?: boolean } = {},
 ): Promise<GroupExitReport> {
   const report: GroupExitReport = { results: [], problems: [] };
+  const hadInvite = Boolean(contact.inviteLink) || purchases.some((p) => /^https?:\/\/t\.me\//i.test(p.inviteLink ?? ""));
   const wasIn = isInGroup(contact, purchases);
   const telegramUserId = contact.telegramUserId?.trim();
   if (!telegramUserId) {
-    if (wasIn) report.problems.push("из группы не удалена: Telegram-идентификатор неизвестен, уберите её вручную");
+    // Приглашение было выдано, а кто вошёл — неизвестно: молчать нельзя.
+    if (wasIn || hadInvite) {
+      report.problems.push(
+        "из группы не удалена: Telegram-идентификатор неизвестен, проверьте группу и уберите её вручную, если она там",
+      );
+    }
     return report;
   }
   const botToken = (await getSetting("telegramBotToken"))?.trim();
@@ -151,7 +165,13 @@ export async function removeContactFromGroups(
   });
   const keep = new Set(await courseChatIds(others ?? []));
 
-  for (const chatId of await courseChatIds(purchases)) {
+  // Старые оплаты (до таблицы покупок) без записей: при отзыве доступа убираем из обеих групп.
+  const chats =
+    purchases.length === 0 && opts.allChatsIfNoPurchases
+      ? await courseChatIds([{ course: COURSE_50 }, { course: COURSE_70 }])
+      : await courseChatIds(purchases);
+
+  for (const chatId of chats) {
     if (keep.has(chatId)) {
       logInfo("groupExit", `контакт ${contact.id}: чат ${chatId} оставлен, у того же Telegram есть другая покупка`);
       continue;
@@ -165,17 +185,8 @@ export async function removeContactFromGroups(
     else if (result.state === "unban_failed")
       report.problems.push("её удалили, но снять бан не вышло: вернуться она не сможет, разбаньте вручную");
   }
-
-  // Отметки «в группе» сбрасываем, только если ни одна группа не осталась с ней.
-  const stillIn = report.results.some((r) => r.state === "protected" || r.state === "ban_failed");
-  if (!stillIn) {
-    await prisma.contact
-      .update({ where: { id: contact.id }, data: { joinedGroupAt: null } })
-      .catch((err) => logError("groupExit:resetContact", err));
-    await prisma.purchase
-      .updateMany({ where: { id: { in: purchases.map((p) => p.id) } }, data: { joinedAt: null } })
-      .catch((err) => logError("groupExit:resetPurchase", err));
-  }
+  // История входа (joinedGroupAt, Purchase.joinedAt) НЕ стирается: на неё опираются
+  // напоминалка и бесплатность перевода (isFreeSwitch). Факт удаления лежит в журнале.
   return report;
 }
 

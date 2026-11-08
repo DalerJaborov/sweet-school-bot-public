@@ -270,11 +270,20 @@ export async function revokeAccess(
   let exitProblems: string[] = [];
   if (contact.telegramUserId) {
     const allPurchases = await prisma.purchase.findMany({ where: { contactId } });
-    const exit = await removeContactFromGroups(contact, allPurchases ?? [], "owner");
-    if (exit.results.some((r) => r.state === "removed")) results.push("удалён из группы");
+    // Старые оплаты (до таблицы покупок) записей не имеют: тогда убираем из обеих групп.
+    const exit = await removeContactFromGroups(contact, allPurchases ?? [], "owner", { allChatsIfNoPurchases: true });
+    const removed = exit.results.some((r) => r.state === "removed" || r.state === "absent");
+    if (removed) results.push("удалён из группы");
     exitProblems = exit.problems;
+    // Был в группе, а ни одно удаление не прошло и причины нет — молчать нельзя.
+    if (!removed && exit.problems.length === 0 && contact.joinedGroupAt) {
+      exitProblems = ["он был в группе, но удалить его не удалось: уберите вручную"];
+    }
   } else {
     results.push("в группу он не входил — отозвана только ссылка");
+    if (contact.joinedGroupAt) {
+      exitProblems = ["по записям он входил в группу, но Telegram-идентификатор неизвестен: уберите его вручную"];
+    }
   }
 
   await prisma.contact.update({

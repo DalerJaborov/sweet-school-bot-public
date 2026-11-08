@@ -7,7 +7,7 @@ import { chatIdFor, COURSE_TITLE, type Course } from "../courses.js";
 import { canTransferNow, issueMagicLink, recentTransfers, releaseAllDevices, shortCode } from "./access.js";
 import { coursePlatformReady } from "./delivery.js";
 import { revokeInvitesForContact } from "../links/telegramInvites.js";
-import { alertOwnerProblem, isInGroup, removeContactFromGroups } from "../groupExit.js";
+import { alertOwnerProblem, removeContactFromGroups } from "../groupExit.js";
 
 /**
  * ОДНА ДЕЙСТВУЮЩАЯ ССЫЛКА НА ЧЕЛОВЕКА (владелец 08.11.2026).
@@ -33,7 +33,9 @@ import { alertOwnerProblem, isInGroup, removeContactFromGroups } from "../groupE
  *    курса ЭТОЙ покупки, его убирают из группы (groupExit.ts, единственная дверь
  *    удаления), сайт выдаётся сразу. Карточка владельцу — только при сбое.
  *  - Закрывать Telegram-дверь, когда сайт выдан, везде один путь:
- *    closeTelegramAccess (бот, кнопка владельца, /ссылка, «Новая ссылка» в панели).
+ *    closeTelegramAccess. Удаляет из группы только перевод «человек просит сайт»
+ *    (бот или кнопка владельца) и только ПОСЛЕ доставки сайтовой ссылки; ручная
+ *    выдача ссылки владельцем (/ссылка, «Новая ссылка») лишь отзывает приглашение.
  */
 
 export type SwitchTarget = "web" | "telegram";
@@ -83,10 +85,13 @@ export function parseSwitchRequest(text: string): SwitchTarget | null {
 
 // -- Тексты ------------------------------------------------------------------
 
-const CONFIRM: Record<Lang, { web: string; telegram: string; viaOwner: string }> = {
+const CONFIRM: Record<Lang, { web: string; webMany: string; telegram: string; viaOwner: string }> = {
   ru: {
     web:
       "Перевести вас на сайт? Приглашение в группу Telegram перестанет действовать, а место в группе закроется. " +
+      "Ссылку на сайт я пришлю сразу. Если согласны, ответьте «да».",
+    webMany:
+      "Перевести вас на сайт? Приглашения в группы Telegram перестанут действовать, а ваши места в обеих группах закроются. " +
       "Ссылку на сайт я пришлю сразу. Если согласны, ответьте «да».",
     telegram:
       "Перевести вас в Telegram? Ссылка на сайт перестанет открывать уроки, а приглашение в группу я пришлю сразу. " +
@@ -99,6 +104,9 @@ const CONFIRM: Record<Lang, { web: string; telegram: string; viaOwner: string }>
     web:
       "Шуморо ба сайт гузаронам? Даъвати гурӯҳи Telegram дигар амал намекунад ва ҷои шумо дар гурӯҳ баста мешавад. " +
       "Линки сайтро фавран мефиристам. Агар розӣ бошед, «ҳа» нависед.",
+    webMany:
+      "Шуморо ба сайт гузаронам? Даъватҳои гурӯҳҳои Telegram дигар амал намекунанд ва ҷойҳои шумо дар ҳарду гурӯҳ баста мешаванд. " +
+      "Линки сайтро фавран мефиристам. Агар розӣ бошед, «ҳа» нависед.",
     telegram:
       "Шуморо ба Telegram гузаронам? Линки сайт дигар дарсҳоро намекушояд, даъват ба гурӯҳро фавран мефиристам. " +
       "Агар розӣ бошед, «ҳа» нависед.",
@@ -108,6 +116,7 @@ const CONFIRM: Record<Lang, { web: string; telegram: string; viaOwner: string }>
   },
   en: {
     web: "Move you to the website? The Telegram invitation will stop working and your place in the group will be closed. Reply yes to confirm.",
+    webMany: "Move you to the website? The Telegram invitations will stop working and your places in the groups will be closed. Reply yes to confirm.",
     telegram: "Move you to Telegram? The website link will stop working. Reply yes to confirm.",
     viaOwner: "Changing the way you log in needs Shirin's permission. Pass your request to her? Reply yes to confirm.",
   },
@@ -138,7 +147,12 @@ export async function askSwitchConfirmation(contact: Contact, target: SwitchTarg
   // Обещать «пришлю сразу» можно, только если бот переведёт сам; иначе просьба уйдёт Ширин.
   const purchases = await prisma.purchase.findMany({ where: { contactId: contact.id, revokedAt: null } });
   const direct = purchases.length > 0 && (isFreeSwitch(purchases) || canTransferNow(contact));
-  await deliver(contact, direct ? CONFIRM[language][target] : CONFIRM[language].viaOwner, false);
+  const many = target === "web" && purchases.length > 1;
+  await deliver(
+    contact,
+    !direct ? CONFIRM[language].viaOwner : many ? CONFIRM[language].webMany : CONFIRM[language][target],
+    false,
+  );
 }
 
 const TEXT: Record<
@@ -263,6 +277,7 @@ export async function closeTelegramAccess(
   contact: Contact,
   purchases: Purchase[],
   actor: "owner" | "bot",
+  opts: { removeFromGroup: boolean },
 ): Promise<string[]> {
   const problems: string[] = [];
   const botToken = (await getSetting("telegramBotToken"))?.trim();
@@ -280,8 +295,12 @@ export async function closeTelegramAccess(
     return -1;
   });
   if (panelFailed !== 0 && panelFailed !== undefined) problems.push("ссылку из раздела «Ссылки» отозвать не удалось, отзовите её там");
-  const exit = await removeContactFromGroups(contact, purchases, actor);
-  problems.push(...exit.problems);
+  // Из группы убираем ТОЛЬКО в переводе «человек просит сайт» (после доставки сайтовой
+  // ссылки). Ручная выдача ссылки владельцем приглашение отзывает, но не выгоняет.
+  if (opts.removeFromGroup) {
+    const exit = await removeContactFromGroups(contact, purchases, actor);
+    problems.push(...exit.problems);
+  }
   return problems;
 }
 
@@ -377,7 +396,7 @@ async function toWeb(
 
   // Сайт у человека есть — сразу закрываем вторую дверь: приглашения (в чате курса
   // каждой покупки), ссылки панели и место в группе. Одна функция на все пути.
-  const problems = await closeTelegramAccess(fresh, purchases, kind);
+  const problems = await closeTelegramAccess(fresh, purchases, kind, { removeFromGroup: true });
 
   // Запись одним куском: либо выбор и ссылки записаны целиком, либо ничего.
   await prisma.$transaction(async (tx) => {
@@ -535,15 +554,15 @@ export async function approveSwitchByOwner(contactId: string, target: SwitchTarg
   if (!contact) return false;
   const outcome = await switchCourseChannel(contact, target, "owner");
   logInfo("course:channelSwitch", `контакт ${contactId}: владелец разрешил переход на ${target}, итог ${outcome}`);
-  return outcome === "switched";
+  return outcome === "switched" || outcome === "already";
 }
 
 /**
- * Владелец сам выдал сайтовую ссылку (/ссылка, «Новая ссылка» в панели) человеку,
- * у которого был Telegram: вторую дверь закрываем тем же путём, что и при
- * переводе (closeTelegramAccess), иначе у человека два способа (инвариант).
- * Вызывается из delivery.issueCourseLink только для явной выдачи владельцем.
- * Возвращает true, если Telegram-дверь была и закрыта (панель предупреждает).
+ * Владелец сам выдал сайтовую ссылку (/ссылка, «Новая ссылка» в панели, возврат
+ * доступа) человеку, у которого был Telegram: приглашение в группу отзываем
+ * (иначе у человека два способа), но из группы НЕ убираем: Ширин всего лишь
+ * обновила ссылку, и ученицу выгонять не за что. Не трогаем и тогда, когда уроки
+ * курса ещё не готовы на сайте. Возвращает true, если приглашение закрыто.
  */
 export async function closeTelegramDoor(contactId: string): Promise<boolean> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
@@ -551,13 +570,14 @@ export async function closeTelegramDoor(contactId: string): Promise<boolean> {
   const purchases = await prisma.purchase.findMany({ where: { contactId, revokedAt: null } });
   const hasDoor =
     contact.courseDeliveryChoice === "telegram" ||
-    isInGroup(contact, purchases) ||
     isTelegramLink(contact.inviteLink) ||
     purchases.some((p) => isTelegramLink(p.inviteLink));
   if (!hasDoor) return false;
-  const problems = await closeTelegramAccess(contact, purchases, "owner");
+  const ready = await Promise.all(purchases.map((p) => coursePlatformReady(p.course as Course)));
+  if (!ready.every(Boolean)) return false;
+  const problems = await closeTelegramAccess(contact, purchases, "owner", { removeFromGroup: false });
   await prisma.contact.update({ where: { id: contactId }, data: { courseDeliveryChoice: "web", inviteLink: null } });
-  logInfo("course:channelSwitch", `контакт ${contactId}: владелец выдал сайт, Telegram-доступ закрыт`);
-  await reportProblems(contact, "сайт выдан", problems);
+  logInfo("course:channelSwitch", `контакт ${contactId}: владелец выдал сайт, приглашение в группу закрыто`);
+  await reportProblems(contact, "сайт выдан, приглашение закрыто", problems);
   return true;
 }

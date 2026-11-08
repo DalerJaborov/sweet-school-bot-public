@@ -123,7 +123,8 @@ export async function maybeRestoreAccess(
   // Ответ «да» на вопрос «перевести вас?» — продолжение просьбы о переключении; любое другое сообщение вопрос снимает.
   const confirmTarget = pendingSwitchTarget(contact.id);
   const confirming = confirmTarget !== null && isYes(text);
-  if (confirmTarget && !confirming) clearPendingSwitch(contact.id);
+  // Ожидание снимаем СРАЗУ (до любых await): «да» его расходует, другой ответ отменяет; второе «да» ничего не повторит.
+  if (confirmTarget) clearPendingSwitch(contact.id);
   const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
   if (!confirming && !waiting && !looksLikeAccessRequest(text)) return { handled: false };
   // Ждём доказательство, а пришло просто фото (домашка) или чужой код: это не наш случай.
@@ -163,7 +164,6 @@ export async function maybeRestoreAccess(
       await askSwitchConfirmation(contact, switchTarget, language);
       return { handled: true, outcome: "escalated" };
     }
-    clearPendingSwitch(contact.id);
     const switched = await handleSwitchRequest(contact, switchTarget, language);
     if (switched !== "already") return { handled: true, outcome: switched === "switched" ? "reissued" : "escalated" };
   }

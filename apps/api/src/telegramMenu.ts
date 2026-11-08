@@ -320,7 +320,7 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
       logError("telegramMenu:approveSwitch", err);
       return false;
     });
-    await answerCallback(botToken, query.id, done ? "Переведена, ей написали" : "Не получилось");
+    await answerCallback(botToken, query.id, done ? "Готово, переведена" : "Не получилось");
     return;
   }
   const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");

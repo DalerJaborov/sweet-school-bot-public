@@ -9,7 +9,13 @@ vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
+vi.mock("../../src/courses.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/courses.js")>()),
+  chatIdFor: vi.fn(async (c: string) => (c === "COURSE70" ? "-1002" : "-1001")),
+}));
+
 import { removeInviteJoiner, InviteError } from "../../src/links/telegramInvites.js";
+import { removeContactFromGroups } from "../../src/groupExit.js";
 
 /**
  * ОДНА ДВЕРЬ «УДАЛИТЬ ИЗ TELEGRAM-ГРУППЫ» (08.11.2026, ревью PR 64).
@@ -88,6 +94,37 @@ describe("«Удалить» у вошедшего по ссылке из пан
     expect(calls("unbanChatMember")).toHaveLength(3);
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("снять бан не вышло");
     expect(db.model("telegramInviteJoin").updateMany).toHaveBeenCalled();
+  });
+});
+
+describe("removeContactFromGroups: старые оплаты без записей о покупке", () => {
+  it("покупок нет и это отзыв доступа — убираем из обеих групп, историю входа не трогаем", async () => {
+    const calls = stubTelegram();
+    const contact = { id: "c-1", telegramUserId: "777", joinedGroupAt: new Date(), inviteLink: null };
+
+    const report = await removeContactFromGroups(contact, [], "owner", { allChatsIfNoPurchases: true });
+
+    expect(calls("banChatMember")).toHaveLength(2);
+    expect(report.problems).toEqual([]);
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(db.model("purchase").updateMany).not.toHaveBeenCalled();
+  });
+
+  it("без отзыва доступа и без покупок — никого не баним", async () => {
+    const calls = stubTelegram();
+    const contact = { id: "c-1", telegramUserId: "777", joinedGroupAt: null, inviteLink: null };
+    await removeContactFromGroups(contact, [], "bot");
+    expect(calls("banChatMember")).toHaveLength(0);
+  });
+
+  it("бан прошёл, а ответ не дошёл (сеть): разбан всё равно пробуется", async () => {
+    const calls = stubTelegram({ banChatMember: { ok: false, description: "timeout" } });
+    const contact = { id: "c-1", telegramUserId: "777", joinedGroupAt: new Date(), inviteLink: null };
+
+    const report = await removeContactFromGroups(contact, [], "owner", { allChatsIfNoPurchases: true });
+
+    expect(calls("unbanChatMember").length).toBeGreaterThan(0);
+    expect(report.problems.length).toBeGreaterThan(0);
   });
 });
 
