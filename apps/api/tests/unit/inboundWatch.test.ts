@@ -38,8 +38,8 @@ describe("Сторож входящих — «бот замолчал» стан
 
     await checkInboundSilence(now);
 
-    expect(notifyOwnerDirect).toHaveBeenCalledTimes(1);
-    expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("Входящих сообщений нет");
+    // Тишина видна в панели, но в Telegram не уходит никому (решение владельца 08.11.2026).
+    expect(notifyOwnerDirect).not.toHaveBeenCalled();
     expect(inboundSilenceState()).toMatchObject({ alerting: true, silentHours: 5 });
   });
 
@@ -70,18 +70,6 @@ describe("Сторож входящих — «бот замолчал» стан
     await checkInboundSilence(now);
 
     expect(notifyOwnerDirect).not.toHaveBeenCalled();
-  });
-
-  it("повторная тревога не раньше чем через 6 часов", async () => {
-    const now = atDushanbe(12);
-    db.model("message").findFirst.mockResolvedValue({ createdAt: new Date(now.getTime() - 6 * 3_600_000) });
-
-    await checkInboundSilence(now);
-    await checkInboundSilence(new Date(now.getTime() + 3_600_000));
-    expect(notifyOwnerDirect).toHaveBeenCalledTimes(1);
-
-    await checkInboundSilence(new Date(now.getTime() + 7 * 3_600_000));
-    expect(notifyOwnerDirect).toHaveBeenCalledTimes(2);
   });
 
   it("пустая база — не поломка", async () => {
