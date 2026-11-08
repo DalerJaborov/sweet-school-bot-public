@@ -14,7 +14,8 @@ export async function sendTelegramMessage(
   botToken: string,
   chatId: string,
   text: string,
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  replyMarkup?: { inline_keyboard: { text: string; callback_data: string }[][] }
 ): Promise<number | null> {
   const res = await fetch(`${API}/bot${botToken}/sendMessage`, {
     method: "POST",
@@ -22,6 +23,7 @@ export async function sendTelegramMessage(
     body: JSON.stringify({
       chat_id: chatId,
       text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } } : {}),
     }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -95,8 +97,10 @@ export async function sendReceiptForReview(
      *  выбор курса явно (решение владельца 25.08.2026: не угадывать 70 сомони
      *  по умолчанию). См. c50/c70/cboth в telegramWebhook.ts handleDecision. */
     needsCourseChoice?: boolean;
+    /** Курс по сумме у клиентки уже есть: вместо "Подтвердить" - "Закрыть как дубль". */
+    closeAsDuplicate?: boolean;
   }
-): Promise<boolean> {
+): Promise<{ chatId: string; messageId: number } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const inline_keyboard = input.needsCourseChoice
@@ -113,7 +117,7 @@ export async function sendReceiptForReview(
       ]
     : [
         [
-          { text: "✅ Подтвердить", callback_data: `ok:${input.receiptId}` },
+          { text: input.closeAsDuplicate ? "Закрыть как дубль" : "✅ Подтвердить", callback_data: `ok:${input.receiptId}` },
           { text: "❌ Отклонить", callback_data: `no:${input.receiptId}` },
         ],
       ];
@@ -129,12 +133,13 @@ export async function sendReceiptForReview(
       }),
       signal: controller.signal,
     });
-    const data = (await res.json()) as { ok?: boolean; description?: string };
+    const data = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
-    return true;
+    // id сообщения нужен, чтобы позже закрыть карточку (receiptAlerts.ts).
+    return typeof data.result?.message_id === "number" ? { chatId: ownerChatId, messageId: data.result.message_id } : null;
   } catch (err) {
     logError("telegram:review", err);
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -178,7 +183,8 @@ export async function answerCallback(botToken: string, callbackId: string, text:
     const res = await fetch(`${API}/bot${botToken}/answerCallbackQuery`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: callbackId, text }),
+      // Лимит Telegram на всплывающую подсказку — 200 символов; длиннее — ошибка и «кнопка не работает».
+      body: JSON.stringify({ callback_query_id: callbackId, text: text.length > 190 ? `${text.slice(0, 187)}...` : text }),
     });
     const data = (await res.json()) as { ok?: boolean; description?: string };
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);

@@ -32,6 +32,8 @@ type Draft = {
   course50: string;
   course70: string;
   bundle: string;
+  tolDown: string;
+  tolUp: string;
   price: string;
   startDate: string;
   timeFrom: string;
@@ -47,6 +49,8 @@ function toDraft(o: Offer): Draft {
     course50: String(o.prices.course50),
     course70: String(o.prices.course70),
     bundle: String(o.prices.bundle),
+    tolDown: o.payment ? String(o.payment.toleranceDown) : "6",
+    tolUp: o.payment ? String(o.payment.toleranceUp) : "30",
     price: String(o.offline.price),
     startDate: o.offline.startDate,
     timeFrom: o.offline.timeFrom,
@@ -64,6 +68,7 @@ const num = (v: string): number | null => (v.trim() === "" ? null : Number(v));
 function toOffer(d: Draft) {
   return {
     prices: { course50: num(d.course50), course70: num(d.course70), bundle: num(d.bundle) },
+    payment: { toleranceDown: num(d.tolDown), toleranceUp: num(d.tolUp) },
     offline: {
       price: num(d.price),
       startDate: d.startDate,
@@ -275,6 +280,35 @@ export function OfferPage() {
           <BotLine says={preview?.bundle} />
         </section>
       </div>
+
+      <section className="card offer-card" aria-labelledby="offer-tolerance">
+        <h2 id="offer-tolerance">Проверка чека: допуск по сумме</h2>
+        <p className="hint">
+          Банк берёт комиссию, поэтому сумма на чеке редко равна цене ровно. Курс открывается, если сумма попала в
+          «коридор» вокруг цены: например, чек чуть больше цены курса проходит сам.
+        </p>
+        <div className="offer-fields">
+          <Count
+            label="Можно меньше цены на, сомони"
+            value={draft.tolDown}
+            onChange={set("tolDown")}
+            error={fieldErrors["payment.toleranceDown"]}
+            placeholder="6"
+          />
+          <Count
+            label="Можно больше цены на, сомони"
+            value={draft.tolUp}
+            onChange={set("tolUp")}
+            error={fieldErrors["payment.toleranceUp"]}
+            placeholder="30"
+          />
+        </div>
+        <p className="hint">
+          Меньше цены — это комиссия, которая «съела» часть перевода (до 15). Больше — комиссия сверху или пересчёт
+          из рублей (до 60). По реальным чекам школы: переплата была от 0 до 3 сомони, из рублей — до 8. Всё,
+          что вне коридора, уходит Ширин на проверку.
+        </p>
+      </section>
 
       <section className="card offer-card" aria-labelledby="offer-offline">
         <h2 id="offer-offline">Очный курс в Душанбе</h2>

@@ -981,6 +981,8 @@ adminRouter.get("/admin/contacts", async (req, res) => {
       personal: c.personal,
       spamBlockedAt: c.spamBlockedAt,
       spamReason: c.spamReason,
+      // «Офлайн: передано Ширин» — бот молчит, пока человек не напишет про онлайн.
+      offlineHandoffAt: c.offlineHandoffAt,
       // Дошёл ли человек до уроков и не отобран ли доступ — по этим полям
       // владелец видит, за кем идти, и кого выгонять за фальшивый чек.
       joinedGroupAt: c.joinedGroupAt,

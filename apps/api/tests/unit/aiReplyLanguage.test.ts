@@ -166,7 +166,7 @@ describe("Язык ответа проверяет код", () => {
   it("правило про личную ссылку и 2 устройства — в промте всегда", async () => {
     generateWithFallback.mockResolvedValue(said("Два устройства — да, но только свои."));
     await aiReply(web, "Можно с двух телефонов, моего и сестры?", [], []);
-    expect(systemPromptOfCall(0)).toContain("на 2 его устройствах");
+    expect(systemPromptOfCall(0)).toContain("открывает уроки на одном его телефоне");
     expect(systemPromptOfCall(0)).toContain("ссылка личная");
   });
 });

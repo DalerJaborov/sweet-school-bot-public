@@ -22,6 +22,7 @@ import { freeLessonRouter } from "./site/freeLesson.js";
 import { goRouter } from "./links/siteLinks.js";
 import { maybeSendDailyReport } from "./dailyReport.js";
 import { retryUncheckedReceipts } from "./receiptRetry.js";
+import { closeSettledReceiptAlerts } from "./receiptAlerts.js";
 import { retryPendingAiReplies } from "./aiReplyRetry.js";
 import { runJoinReminders } from "./joinReminder.js";
 import { runOfflineReminders } from "./offlineReminder.js";
@@ -39,6 +40,7 @@ import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
 import { runDiskMaintenance } from "./diskInfo.js";
 import { checkIgToken } from "./igTokenWatch.js";
+import { checkWhatsappConnection } from "./whatsapp/watch.js";
 import { checkFbToken } from "./fbTokenWatch.js";
 import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
@@ -227,6 +229,7 @@ setInterval(() => {
     if (!frozen) {
       tasks.push(
         withTimeout("receiptRetry", retryUncheckedReceipts().catch((err) => logError("receiptRetry", err))),
+        withTimeout("receiptAlertsSweep", closeSettledReceiptAlerts().then(() => undefined).catch((err) => logError("receiptAlertsSweep", err))),
         withTimeout("aiReplyRetry", retryPendingAiReplies().catch((err) => logError("aiReplyRetry", err))),
         withTimeout("followUp", runDueFollowUps().catch((err) => logError("followUp", err))),
         withTimeout("joinReminder", runJoinReminders().catch((err) => logError("joinReminder", err))),
@@ -290,6 +293,11 @@ const secretTick = () =>
 setTimeout(secretTick, 3 * 60_000);
 setInterval(secretTick, 60 * 60_000);
 setInterval(() => pollMissedComments().catch((err) => logError("commentBackfill", err)), 10 * 60_000);
+
+// СВЯЗЬ С WHATSAPP (whatsapp/watch.ts): раз в минуту спрашиваем мост; плохо дольше 10 минут —
+// строка в панели и одно сообщение владельцу.
+setTimeout(() => void checkWhatsappConnection().catch((err) => logError("whatsappWatch", err)), 3 * 60_000);
+setInterval(() => void checkWhatsappConnection().catch((err) => logError("whatsappWatch", err)), 60_000);
 
 // СТОРОЖ ВХОДЯЩИХ (inboundWatch.ts): Instagram перестал присылать сообщения —
 // внутри всё зелёное, а школа молча теряет заявки. Раз в час, в рабочее время.

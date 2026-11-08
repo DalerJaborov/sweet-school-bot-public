@@ -80,7 +80,7 @@ describe("decideReceipt", () => {
     const result = await decideReceipt("receipt-1", "approve");
 
     expect(result).toMatchObject({ ok: true, status: "approved" });
-    expect(allocate).toHaveBeenCalledWith("contact-1", 70);
+    expect(allocate).not.toHaveBeenCalled(); // выдаём только курсы самой суммы (coursesForAmount)
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(db.model("contact").updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "contact-1", paid: false } })

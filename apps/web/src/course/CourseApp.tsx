@@ -9,6 +9,7 @@ import { CourseLessons } from "./screens/CourseLessons";
 import { DeviceLimitScreen } from "./screens/DeviceLimitScreen";
 import { EscapeInAppScreen } from "./screens/EscapeInAppScreen";
 import { ErrorScreen } from "./screens/ErrorScreen";
+import { LinkExpiredScreen } from "./screens/LinkExpiredScreen";
 import { environment } from "./install/detect";
 import { Home } from "./screens/Home";
 import { Lesson } from "./screens/Lesson";
@@ -50,8 +51,11 @@ function CourseScreens({ state }: { state: CourseState }) {
   // Раньше входа (дизайн доступа 03.09.2026): встроенный браузер выводим в
   // настоящий, лимит устройств — даём заменить старое, и только потом ошибки.
   if (state.inAppTrap) return <EscapeInAppScreen t={t} env={environment()} />;
+  if (state.linkExpired) {
+    return <LinkExpiredScreen t={t} state={state.linkExpired} onRequest={() => void state.requestLink()} />;
+  }
   if (state.deviceLimit) {
-    return <DeviceLimitScreen t={t} limit={state.deviceLimit} onReplace={() => void state.replaceOldestDevice()} />;
+    return <DeviceLimitScreen t={t} limit={state.deviceLimit} />;
   }
   if (error) return <ErrorScreen t={t} error={error} onRetry={state.retry} school={view?.school} />;
   if (!view) return <Splash t={t} />;

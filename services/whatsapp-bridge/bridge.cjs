@@ -29,7 +29,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 class Bridge {
-  constructor({ stateDir, createClient, makeQr, mediaFromUrl, testNumbers = [], now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+  constructor({ stateDir, authDir = null, createClient, makeQr, mediaFromUrl, testNumbers = [], now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
     // Номера владельца для проверки бота: даже если они сохранены в телефоне Ширин, бот им отвечает (SCHOOL_WHATSAPP_TEST_NUMBERS).
     this.testNumbers = new Set(testNumbers.map(n => String(n).replace(/\D/g, '')).filter(Boolean));
     this.pacing = pacing ? { ...DEFAULT_PACING, ...pacing } : null;
@@ -38,6 +38,7 @@ class Bridge {
     this.lastSendAt = 0;
     this.paceChain = Promise.resolve();
     this.stateDir = stateDir;
+    this.authDir = authDir;
     this.createClient = createClient;
     this.makeQr = makeQr;
     this.mediaFromUrl = mediaFromUrl;
@@ -47,6 +48,7 @@ class Bridge {
     this.state = 'disconnected';
     this.contactsReady = false;
     this.qrDataUrl = null;
+    this.pairingCode = null; // код привязки «по номеру телефона» (вместо QR), живёт ~3 минуты
     this.lastError = null;
     this.accountId = null;
     this.liveSince = this.now();
@@ -87,7 +89,7 @@ class Bridge {
     const account = this.accountId ? this.data.accounts[this.accountId] : null;
     const digits = this.accountId?.split('@')[0] ?? '';
     return {
-      state: this.state, qrDataUrl: this.qrDataUrl, accountId: this.accountId,
+      state: this.state, qrDataUrl: this.qrDataUrl, pairingCode: this.pairingCode, accountId: this.accountId,
       accountMasked: digits ? `••••${digits.slice(-4)}` : null,
       contactsReady: this.contactsReady, blockedCount: account ? new Set(Object.keys(account.blocked).map(alias => (account.aliases[alias] || [alias]).find(id => id.endsWith('@c.us')) || alias)).size : 0,
       enabled: !!account?.enabled && this.state === 'ready' && this.contactsReady,
@@ -99,22 +101,44 @@ class Bridge {
     this.lastError = String(error?.message || error).slice(0, 180);
   }
 
+  /**
+   * Chromium leaves Singleton* lock files in the profile after an unclean stop; the next
+   * launch then refuses to start ("profile in use") and the account looks disconnected.
+   * Safe to remove here: start() runs only when no client of ours is alive. Only Singleton*
+   * entries are touched - never the session data itself.
+   */
+  clearBrowserLocks() {
+    if (!this.authDir) return 0;
+    const dir = path.join(this.authDir, 'session-school');
+    let removed = 0;
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { return 0; }
+    for (const name of names) {
+      if (!name.startsWith('Singleton')) continue;
+      try { fs.rmSync(path.join(dir, name), { force: true, recursive: false }); removed++; } catch {}
+    }
+    return removed;
+  }
+
   async start() {
     if (this.starting) return this.starting;
     if (this.client && ['pairing', 'starting', 'synchronizing', 'ready', 'paused'].includes(this.state)) return this.status();
     if (this.client) { await this.client.destroy().catch(() => {}); this.client = null; }
     this.state = 'starting'; this.contactsReady = false; this.lastError = null;
+    this.clearBrowserLocks();
     const client = this.createClient();
     this.client = client;
+    client.on('code', code => { if (this.client === client) { this.pairingCode = String(code); this.state = 'pairing'; this.contactsReady = false; } });
     client.on('qr', qr => { void this.makeQr(qr).then(data => {
       if (this.client === client) { this.qrDataUrl = data; this.state = 'pairing'; this.contactsReady = false; }
     }).catch(e => this.report(e)); });
     client.on('ready', () => { void this.onReady(client).catch(e => { this.report(e); this.state = 'paused'; this.contactsReady = false; }); });
     client.on('auth_failure', () => { this.state = 'auth_failure'; this.contactsReady = false; this.qrDataUrl = null; this.lastError = 'WhatsApp authorization failed'; });
-    client.on('disconnected', () => { this.state = 'disconnected'; this.contactsReady = false; this.qrDataUrl = null; });
+    client.on('disconnected', () => { this.state = 'disconnected'; this.contactsReady = false; this.qrDataUrl = null; this.pairingCode = null; });
     // message_create also includes outgoing phone messages; a single handler avoids duplicate events.
     client.on('message_create', message => {
       if (this.client !== client) return;
+      this.trace('message_create', message);
       void this.onMessage(message).catch(error => { this.report(error); this.contactsReady = false; this.state = 'paused'; });
     });
     this.starting = client.initialize().catch(error => { this.report(error); this.state = 'disconnected'; }).finally(() => { this.starting = null; });
@@ -244,6 +268,16 @@ class Bridge {
     return this.status();
   }
 
+  /** Диагностика без личных данных: тип, направление, последние 4 цифры чата и причина отбрасывания (08.11.2026, «сообщение не доходит»). */
+  trace(reason, message) {
+    try {
+      const chat = String((message.fromMe ? message.to : message.from) || '');
+      const ageS = Math.round((this.now() - Number(message.timestamp) * 1000) / 1000);
+      const sinceLiveS = Math.round((Number(message.timestamp) * 1000 - this.liveSince) / 1000);
+      console.log(`[wa-trace] ${reason} type=${message.type} fromMe=${!!message.fromMe} chat=*${chat.replace(/@.*$/, '').slice(-4)}${chat.endsWith('@lid') ? '(lid)' : ''} ageS=${ageS} afterLiveS=${sinceLiveS} status=${!!message.isStatus} broadcast=${!!message.broadcast} ready=${this.contactsReady} state=${this.state} enabled=${this.accountId ? !!this.account().enabled : 'n/a'}`);
+    } catch { /* диагностика не должна ломать приём */ }
+  }
+
   async onMessage(message) {
     const accountId = this.accountId;
     const messageId = idOf(message.id);
@@ -251,7 +285,10 @@ class Bridge {
     const timestamp = Number(message.timestamp) * 1000;
     if (!messageId || !directId(chatId) || !Number.isFinite(timestamp)
       || timestamp < Math.floor(this.liveSince / 1000) * 1000 || timestamp > this.now() + 60_000
-      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) return;
+      || message.isStatus || message.broadcast || !this.contactsReady || !this.accountId) {
+      this.trace(`drop:early noId=${!messageId} badChat=${!directId(chatId)} badTs=${!Number.isFinite(timestamp)} old=${timestamp < Math.floor(this.liveSince / 1000) * 1000} future=${timestamp > this.now() + 60_000} contacts=${!this.contactsReady} noAccount=${!this.accountId} chatLen=${String(chatId).replace(/@.*$/, '').length} chatSuffix=${String(chatId).replace(/^[^@]*/, '')}`, message);
+      return;
+    }
     if (message.fromMe) {
       // A library send emits its own echo before its promise returns on some versions.
       const active = this.sending.get(chatId);
@@ -260,13 +297,13 @@ class Bridge {
     }
     const status = await this.contactStatus(chatId);
     if (this.accountId !== accountId) return;
-    if (status.blocked || !status.identityResolved) return; // Do not retain personal conversations.
+    if (status.blocked || !status.identityResolved) { this.trace(`drop:blocked=${status.blocked} resolved=${status.identityResolved}`, message); return; } // Do not retain personal conversations.
     const account = this.account();
     if (account.events[messageId]) return;
     if (message.fromMe) {
       for (const alias of status.aliases) account.takeovers[alias] = this.now();
       this.save();
-    } else if (!account.enabled || this.state !== 'ready') return;
+    } else if (!account.enabled || this.state !== 'ready') { this.trace('drop:paused', message); return; }
     if (!message.fromMe && !['chat', 'image', 'audio', 'ptt', 'document', 'video'].includes(message.type)) return;
     const event = {
       id: messageId, messageId, accountId: this.accountId,
@@ -277,6 +314,7 @@ class Bridge {
     if (!message.fromMe && message.hasMedia) event.mediaPending = true;
     // Persist the incoming envelope before any network download. A restart keeps
     // the question and marks interrupted media explicitly instead of losing it.
+    this.trace('accepted', message);
     this.appendEvent(event);
     if (!message.fromMe && message.hasMedia) {
       const advertisedSize = Number(message._data?.size ?? message._data?.fileSize);

@@ -38,6 +38,7 @@ import { queuePendingAiReply } from "./aiReplyRetry.js";
 import { logAiCall } from "./ai/aiLog.js";
 import { registerOfflineSignup } from "./ai/offlineSignup.js";
 import { maybeSendOfflineCard, offlineFactsForModel } from "./ai/offlineCourse.js";
+import { offlineHandoffGate, offlineHandoffEnabled, asksOnlineNotOffline, enterOfflineHandoff } from "./ai/offlineHandoff.js";
 import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
@@ -209,6 +210,12 @@ export async function aiReply(
 
   if (text && (await handleDeliveryChoiceReply(contact, text))) return;
 
+  // «ОФЛАЙН: ПЕРЕДАНО ШИРИН» (владелец 08.11.2026, ai/offlineHandoff.ts): после
+  // карточки офлайн-курса бот с этим человеком молчит — ни текста, ни голоса —
+  // пока тот не напишет про онлайн. Воронка и запись номера на офлайн живут в
+  // webhook.ts выше и сюда не доходят, их это не трогает.
+  if ((await offlineHandoffGate(contact, text)) === "silent") return;
+
   // Побочный эффект, не влияющий на сам ответ: если человеку уже уходило
   // проверочное «как первый урок» (learningCheckIn.ts) и она хоть что-то
   // написала после этого — считаем, что учиться начала. Fire-and-forget: сбой
@@ -232,8 +239,8 @@ export async function aiReply(
   // ни от настроения модели, ни от того, включён ли консультант вообще.
   // Выдача идёт по данным (покупка + чек в базе), а не по словам — см.
   // course/recovery.ts.
-  if (text) {
-    const recovery = await maybeRestoreAccess(contact, text).catch((err) => {
+  if (text || images.length > 0) {
+    const recovery = await maybeRestoreAccess(contact, text ?? "", images.map((i) => i.hash)).catch((err) => {
       logError("ai:recovery", err);
       return { handled: false as const };
     });
@@ -339,6 +346,14 @@ export async function aiReply(
     const reply = BUDGET_FALLBACK[language];
     const mid = await sendToContact(contact, reply);
     await recordOutgoingMessage(contact.id, reply, mid);
+    notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+    return;
+  }
+
+  // Интерес к ОФЛАЙН-курсу: карточка с условиями уходит одна, без хода модели,
+  // и дальше разговор ведёт Ширин (ai/offlineHandoff.ts). Стоит после меню и
+  // архива, чтобы «что готовим на офлайне?» по-прежнему отвечала картинка меню.
+  if (text && (await sendOfflineCardAndHandOff(contact, text))) {
     notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
     return;
   }
@@ -518,14 +533,15 @@ export async function aiReply(
         const parts = splitHumanLike(replyText, splitOpts);
         // Короткий тёплый ответ может уйти голосом (рубильник voiceReplyEnabled, по
         // умолчанию выключен; правило и границы - ai/voiceReply.ts). Любая ошибка до отправки - текстом.
-        const sentAsVoice =
-          parts.length === 1 &&
-          (await trySendVoiceReply(
-            contact,
-            parts[0],
-            attachments.some((a) => a.kind === "audio"),
-          ));
-        for (const part of sentAsVoice ? [] : parts) {
+        // Голос решает по ВСЕМУ ответу, а не по одной части: короткий ответ, разбитый на несколько сообщений,
+        // тоже может уйти голосом (владелец 08.11.2026: «не отправил голос»).
+        const textRest = await trySendVoiceReply(
+          contact,
+          replyText,
+          attachments.some((a) => a.kind === "audio"),
+        );
+        const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
+        for (const part of toSend) {
           const mid = await sendToContact(contact, part);
           await recordOutgoingMessage(contact.id, part, mid);
         }
@@ -580,6 +596,7 @@ export async function aiReply(
         receiptAt: verdict.receiptAt,
         tamperingSuspected: verdict.tamperingSuspected,
         recipientMatches: verdict.recipientMatches,
+        transactionId: verdict.transactionId,
         reason: verdict.reason,
         imageHash: firstImage.hash,
         imageUrl: firstImage.url,
@@ -869,8 +886,28 @@ export async function registerOfflineIfAsked(contact: Contact, text: string | nu
   return registerOfflineSignup(contact, text);
 }
 
+/**
+ * Ход «карточка — и всё» (владелец 08.11.2026). Условие то же, что у карточки в
+ * offlineSignupBlock: офлайн в этом сообщении или в недавней переписке. Если
+ * карточка реально ушла — ставим отметку «передано Ширин» и возвращаем true:
+ * модель в этот ход не зовём. Уже слали в этом наборе (или рубильник выключен,
+ * или человек купил онлайн) — false, и дальше прежний порядок. Слово «онлайн» в
+ * сообщении — не офлайн-интерес, даже если рядом «запишите».
+ */
+async function sendOfflineCardAndHandOff(contact: Contact, text: string): Promise<boolean> {
+  if (contact.paid || !(await offlineHandoffEnabled())) return false;
+  if (asksOnlineNotOffline(text)) return false;
+  if (!WANTS_OFFLINE_RE.test(text) && !(await recentIncomingWantsOffline(contact.id))) return false;
+  if (!(await maybeSendOfflineCard(contact, text))) return false;
+  await enterOfflineHandoff(contact.id);
+  return true;
+}
+
 async function offlineSignupBlock(contact: Contact, text: string): Promise<string> {
   if (!text) return "";
+  // «Запишите на онлайн курс» совпадает с «запиш…», но это не очный курс:
+  // карточку офлайна такому человеку не шлём (см. ai/offlineHandoff.ts).
+  if (asksOnlineNotOffline(text)) return "";
   if (!WANTS_OFFLINE_RE.test(text)) {
     // Человек мог написать номер отдельным сообщением, уже после просьбы записать.
     const asked = await recentIncomingWantsOffline(contact.id);
