@@ -235,3 +235,13 @@ test('react: a reaction counts in the anti-ban limits', async t => {
   await bridge.react({ operationId: 'r-a', chatId: USER, replyToId: 'in-1', emoji: '❤️' });
   await assert.rejects(bridge.send(request({ operationId: 'op-after' })), error => error.status === 429);
 });
+
+test('owner test number: saved contact is answered, any other saved contact stays blocked', async t => {
+  const { bridge, client } = await fixture(t, { testNumbers: ['+992 900 000 002'] });
+  await prepare(bridge); client.mappings = [];
+  const status = await bridge.contactStatus(SAVED);
+  assert.equal(status.blocked, false); assert.equal(status.isMyContact, false);
+  client.contacts.set('992900000009@c.us', { id: { _serialized: '992900000009@c.us' }, number: '992900000009', isMyContact: true });
+  const other = await bridge.contactStatus('992900000009@c.us');
+  assert.equal(other.blocked, true); assert.equal(other.isMyContact, true);
+});

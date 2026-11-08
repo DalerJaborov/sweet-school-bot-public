@@ -29,7 +29,9 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 class Bridge {
-  constructor({ stateDir, createClient, makeQr, mediaFromUrl, now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+  constructor({ stateDir, createClient, makeQr, mediaFromUrl, testNumbers = [], now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+    // Номера владельца для проверки бота: даже если они сохранены в телефоне Ширин, бот им отвечает (SCHOOL_WHATSAPP_TEST_NUMBERS).
+    this.testNumbers = new Set(testNumbers.map(n => String(n).replace(/\D/g, '')).filter(Boolean));
     this.pacing = pacing ? { ...DEFAULT_PACING, ...pacing } : null;
     this.sleep = sleep;
     this.random = random;
@@ -172,12 +174,17 @@ class Bridge {
         const aliases = await this.aliasesFor(id, contact);
         if (this.accountId !== accountId) throw failure('Account changed during contact synchronization');
         this.rememberAliases(aliases);
+        if (this.isTestNumber(aliases)) { for (const alias of aliases) if (this.account().blocked[alias] === 'saved_contact') delete this.account().blocked[alias]; continue; }
         for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
       }
       this.save(); this.contactsReady = true;
     } catch (error) {
       this.contactsReady = false; this.report(error); throw error;
     }
+  }
+
+  isTestNumber(aliases) {
+    return aliases.some(id => this.testNumbers.has(String(id).replace(/@.*$/, '')));
   }
 
   async contactStatus(chatId) {
@@ -192,11 +199,13 @@ class Bridge {
       const identityResolved = aliases.some(id => /^\d{7,15}@c\.us$/.test(id));
       if (!identityResolved) return { ...denied, aliases };
       this.rememberAliases(aliases);
-      if (contact.isMyContact) for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
-      const blocked = contact.isMyContact || aliases.some(id => !!this.account().blocked[id]);
+      const testNumber = this.isTestNumber(aliases);
+      if (testNumber) { for (const alias of aliases) if (this.account().blocked[alias] === 'saved_contact') delete this.account().blocked[alias]; }
+      else if (contact.isMyContact) for (const alias of aliases) this.account().blocked[alias] = 'saved_contact';
+      const blocked = (!testNumber && contact.isMyContact) || aliases.some(id => !!this.account().blocked[id]);
       const takenOver = aliases.some(id => !!this.account().takeovers[id]);
       this.save();
-      return { blocked, isMyContact: contact.isMyContact, aliases, takenOver, identityResolved };
+      return { blocked, isMyContact: testNumber ? false : contact.isMyContact, aliases, takenOver, identityResolved };
     } catch (error) { this.report(error); return denied; }
   }
 
