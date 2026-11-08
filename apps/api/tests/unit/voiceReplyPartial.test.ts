@@ -36,3 +36,18 @@ describe("частичная отправка голосовых", () => {
     expect(record).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Meta отказала в аудио до первой отправки", () => {
+  it("чёткий отказ 400 - ответ уходит текстом (false), без исключения", async () => {
+    const { MetaDeliveryError } = await import("../../src/messaging/metaErrors.js");
+    send.mockReset().mockRejectedValueOnce(new MetaDeliveryError("PERMANENT" as never, 400));
+    record.mockClear();
+    expect(await trySendVoiceReply({ id: "c1", igUserId: "u", channel: "INSTAGRAM" }, "Здравствуйте, рада вас видеть", false)).toBe(false);
+    expect(record).not.toHaveBeenCalled();
+  });
+  it("неопределённый исход - ошибка наружу, текстом не дублируем", async () => {
+    const { MetaDeliveryError } = await import("../../src/messaging/metaErrors.js");
+    send.mockReset().mockRejectedValueOnce(new MetaDeliveryError("AMBIGUOUS", 0));
+    await expect(trySendVoiceReply({ id: "c1", igUserId: "u", channel: "INSTAGRAM" }, "Здравствуйте, рада вас видеть", false)).rejects.toThrow();
+  });
+});
