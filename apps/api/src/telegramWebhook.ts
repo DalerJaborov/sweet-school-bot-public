@@ -205,7 +205,10 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
 
   const receipt = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, include: { contact: true } });
   if (!receipt) {
-    await answerCallback(botToken, query.id as string, "Чек не найден");
+    // Чек удалён (не чек / очистка) — карточка осталась. Убираем кнопки, чтобы
+    // не нажимали второй раз.
+    await answerCallback(botToken, query.id as string, "Этот чек уже убран из списка");
+    await finishCard(botToken, query, "ℹ️ Чек уже обработан или удалён — кнопки больше не нужны");
     return;
   }
   const who = receipt.contact.username ? `@${receipt.contact.username}` : receipt.contact.igUserId;
@@ -216,7 +219,17 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
   // finishCard (подпись под уже отправленной картинкой чека).
   const result = await decideReceipt(receiptId, action === "no" ? "reject" : "approve", courseChoice);
   await answerCallback(botToken, query.id as string, result.message);
-  if (!result.ok) return; // «не найден» / «уже принято» / «нет группы» — карточка не меняется
+  if (!result.ok) {
+    // Устаревшая кнопка: решение уже принято (в панели, второй кнопкой, чек
+    // закрыт автоматически или человек получил доступ другим путём). Раньше
+    // карточка оставалась с живыми кнопками, и они «не работали» (08.11.2026) —
+    // теперь переписываем её без кнопок. Остальные отказы («нет группы»,
+    // «выберите курс») карточку не меняют: нажать можно ещё раз.
+    if (result.reason === "already_decided") {
+      await finishCard(botToken, query, `ℹ️ ${who}: уже обработано — ${describeDecision(receipt)}`);
+    }
+    return;
+  }
 
   const icon = result.status === "rejected" ? "❌" : result.status === "approved" ? "✅" : "⚠️";
   const verb =
@@ -225,7 +238,18 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
       : result.status === "approved"
         ? "получил ссылку на курс"
         : result.message;
-  await finishCard(botToken, query, `${icon} ${who}: ${verb}`);
+  const caption = `${icon} ${who}: ${verb}`;
+  await finishCard(botToken, query, caption);
+  // Остальные карточки чека закрывает decideReceipt (общий путь с панелью).
+}
+
+/** Как был закрыт чек — коротко, для подписи под карточкой. */
+function describeDecision(receipt: { ownerDecision: string | null; linkSent: boolean; kind: string }): string {
+  if (receipt.ownerDecision === "HANDLED") return "доступ выдан другим способом";
+  if (receipt.ownerDecision === "REJECTED") return "чек отклонён";
+  if (receipt.ownerDecision === "APPROVED" || receipt.linkSent) return "ссылка уже отправлена";
+  if (receipt.kind === "duplicate") return "повторный скриншот того же перевода";
+  return "решение уже принято";
 }
 
 async function finishCard(botToken: string, query: CallbackQuery, caption: string): Promise<void> {

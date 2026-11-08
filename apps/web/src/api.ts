@@ -185,11 +185,11 @@ export type Delivery = {
 };
 export type ReceiptCheck = {
   id: string;
-  kind: "valid" | "suspicious" | "unchecked";
+  kind: "valid" | "suspicious" | "unchecked" | "duplicate";
   confidence: number;
   reason: string;
   linkSent: boolean;
-  ownerDecision?: "PENDING" | "APPROVED" | "REJECTED" | null;
+  ownerDecision?: "PENDING" | "APPROVED" | "REJECTED" | "HANDLED" | null;
   imageUrl?: string | null;
   /** null — сумма на чеке не прочиталась: подтверждение требует явного выбора курса. */
   amount?: number | null;
@@ -336,6 +336,8 @@ export type TextsResponse = TextsForm & { defaults: TextsForm; preview: TextsPre
 /** Раздел «Цены и даты» (GET/PUT /admin/v1/offer, POST /admin/v1/offer/preview). */
 export type Offer = {
   prices: { course50: number; course70: number; bundle: number };
+  /** Допуск по сумме чека, сомони (сервер всегда присылает, старому экрану не обязателен). */
+  payment?: { toleranceDown: number; toleranceUp: number };
   offline: {
     price: number;
     /** ГГГГ-ММ-ДД или "" — «дата уточняется». */

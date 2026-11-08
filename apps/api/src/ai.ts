@@ -587,6 +587,7 @@ export async function aiReply(
         receiptAt: verdict.receiptAt,
         tamperingSuspected: verdict.tamperingSuspected,
         recipientMatches: verdict.recipientMatches,
+        transactionId: verdict.transactionId,
         reason: verdict.reason,
         imageHash: firstImage.hash,
         imageUrl: firstImage.url,
