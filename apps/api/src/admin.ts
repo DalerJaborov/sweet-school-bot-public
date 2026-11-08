@@ -964,6 +964,7 @@ adminRouter.get("/admin/contacts", async (req, res) => {
     include: {
       deliveries: { include: { funnel: { select: { name: true } } }, orderBy: { updatedAt: "desc" }, take: 1 },
       _count: { select: { messages: true } },
+      accessEvents: { where: { action: "removed" }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
   const { rows, hasMore } = paginate(contacts, take);
@@ -985,7 +986,10 @@ adminRouter.get("/admin/contacts", async (req, res) => {
       // владелец видит, за кем идти, и кого выгонять за фальшивый чек.
       joinedGroupAt: c.joinedGroupAt,
       accessRevokedAt: c.accessRevokedAt,
-      inGroup: Boolean(c.telegramUserId),
+      // После удаления из группы (журнал «removed») отметка гаснет, пока человек не войдёт снова.
+      inGroup:
+        Boolean(c.telegramUserId) &&
+        !(c.accessEvents?.[0] && (!c.joinedGroupAt || c.accessEvents[0].createdAt >= c.joinedGroupAt)),
       tags: parseStringArray(c.tags),
       messages: c._count.messages,
       updatedAt: c.updatedAt,

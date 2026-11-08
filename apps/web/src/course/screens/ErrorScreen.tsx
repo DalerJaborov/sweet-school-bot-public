@@ -46,6 +46,12 @@ export function ErrorScreen({
   }, [school]);
 
   const contacts = withPrefilledWhatsapp(school ?? fetched, error.reason === "not_found" ? brokenLinkMessage(t) : null);
+  // Одна ссылка на человека: сайт не открывается, а Telegram есть — просим бота
+  // перевести в группу (старая сайтовая ссылка тогда аннулируется).
+  const telegramSwitch =
+    error.reason === "not_found" || error.reason === "no_session"
+      ? withPrefilledWhatsapp(school ?? fetched, switchToTelegramMessage(t))?.whatsapp
+      : null;
 
   return (
     <div className="center" role="alert">
@@ -58,6 +64,11 @@ export function ErrorScreen({
       <a className="btn ghost" href={t.buyCourseUrl}>
         {t.buyCourse}
       </a>
+      {telegramSwitch && (
+        <a className="btn ghost" href={telegramSwitch}>
+          {t.switchToTelegram}
+        </a>
+      )}
       {contacts && <ContactsBlock t={t} school={contacts} />}
     </div>
   );
@@ -69,6 +80,12 @@ function withPrefilledWhatsapp(school: SchoolContacts | null, text: string | nul
   if (!text || !school.whatsapp) return school;
   const joiner = school.whatsapp.includes("?") ? "&" : "?";
   return { ...school, whatsapp: `${school.whatsapp}${joiner}text=${encodeURIComponent(text)}` };
+}
+
+/** Просьба «хочу в Telegram» для бота, с кодом покупательницы, если он известен. */
+export function switchToTelegramMessage(t: Dict): string {
+  const code = storedRecoveryCode();
+  return code ? `${t.switchToTelegramWa}. ${t.linkBrokenCode}: ${code}` : t.switchToTelegramWa;
 }
 
 /**

@@ -431,6 +431,19 @@ export async function releaseDevice(device: Device, actor: DeviceActor): Promise
   logInfo("course:deviceRelease", `контакт ${device.contactId}: место освобождено (${actor}), устройство ${device.id}`);
 }
 
+/**
+ * Освободить ВСЕ места человека (переключение на Telegram: сайт больше не
+ * действует, сессии и офлайн-ключи гаснут). Заблокированные владельцем не
+ * трогаем. Каждое место попадает в журнал, как в releaseDevice.
+ */
+export async function releaseAllDevices(contactId: string, actor: DeviceActor): Promise<number> {
+  const old = await prisma.device.findMany({ where: { contactId, blockedAt: null } });
+  if (!old || old.length === 0) return 0;
+  await prisma.device.deleteMany({ where: { id: { in: old.map((d) => d.id) } } });
+  for (const d of old) await recordAccessEvent(d, "released", actor);
+  return old.length;
+}
+
 /** Освобождать заблокированное устройство нельзя — см. releaseDevice. */
 export class DeviceBlockedError extends Error {
   constructor() {

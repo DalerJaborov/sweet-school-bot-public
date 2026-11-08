@@ -95,3 +95,30 @@ describe("ErrorScreen: публичный код покупательницы", 
     expect(decodeURIComponent(String(wa.getAttribute("href")))).not.toContain("Ab3kQ9xZpm");
   });
 });
+
+describe("ErrorScreen: переключение на Telegram (одна ссылка на человека)", () => {
+  afterEach(() => localStorage.clear());
+
+  it("ссылка на сайт не действует — кнопка ведёт в WhatsApp с просьбой «хочу в Telegram» и кодом", async () => {
+    localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+    render(<ErrorScreen t={t} error={{ message: "Ссылка не действует", reason: "not_found" }} onRetry={() => undefined} />);
+
+    const link = await screen.findByRole("link", { name: t.switchToTelegram });
+    const text = decodeURIComponent(String(link.getAttribute("href")).split("text=")[1]);
+    expect(text).toBe(`${t.switchToTelegramWa}. ${t.linkBrokenCode}: 7F3A-91C2`);
+    expect(String(link.getAttribute("href")).startsWith("https://wa.me/992905355355?text=")).toBe(true);
+  });
+
+  it("при отказе по другой причине (доступ закрыт, нет сети) кнопки Telegram нет", async () => {
+    render(<ErrorScreen t={t} error={{ message: "x", reason: "revoked" }} onRetry={() => undefined} school={contacts} />);
+    expect(screen.queryByRole("link", { name: t.switchToTelegram })).toBeNull();
+  });
+
+  it("по-таджикски — тексты таджикские, «шумо»-стиль", async () => {
+    const tg = dict("tg");
+    render(<ErrorScreen t={tg} error={{ message: "x", reason: "no_session" }} onRetry={() => undefined} />);
+    const link = await screen.findByRole("link", { name: tg.switchToTelegram });
+    expect(decodeURIComponent(String(link.getAttribute("href")))).toContain(tg.switchToTelegramWa);
+  });
+});
+

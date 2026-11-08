@@ -5,6 +5,7 @@ import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryModeFor, issueCourseLink } from "./course/delivery.js";
 import { recordPanelInviteJoin, revokeInvitesForContact } from "./links/telegramInvites.js";
+import { removeContactFromGroups } from "./groupExit.js";
 
 /**
  * ДОСТУП В ЗАКРЫТЫЕ ГРУППЫ: кто вошёл и как отобрать.
@@ -224,7 +225,7 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
 /**
  * Отобрать доступ: выгнать из обеих групп и снять отметку об оплате.
  *
- * `banChatMember` с немедленной разблокировкой — выгоняет, но не оставляет
+ * Бан с немедленной разблокировкой (groupExit.ts) — выгоняет, но не оставляет
  * человека в чёрном списке навсегда: если окажется, что чек был настоящий,
  * достаточно выдать ссылку заново.
  */
@@ -258,22 +259,31 @@ export async function revokeAccess(
     return -1;
   });
   // Молча «готово» нельзя: по неотозванной ссылке можно войти и после отзыва.
-  const warning =
+  const warningBase =
     notRevoked !== 0
       ? "Ссылка из раздела «Ссылки» не отозвана — отзовите её там вручную."
       : undefined;
 
+  // Удаление из групп — через единственную дверь groupExit.ts (проверка админа,
+  // повтор разбана, журнал, сброс отметок «в группе»).
   const results: string[] = [];
+  let exitProblems: string[] = [];
   if (contact.telegramUserId) {
-    for (const chatId of await courseChats()) {
-      const kicked = await call(botToken, "banChatMember", { chat_id: chatId, user_id: Number(contact.telegramUserId) });
-      if (kicked.ok) {
-        await call(botToken, "unbanChatMember", { chat_id: chatId, user_id: Number(contact.telegramUserId), only_if_banned: true });
-        results.push("удалён из группы");
-      }
+    const allPurchases = await prisma.purchase.findMany({ where: { contactId } });
+    // Старые оплаты (до таблицы покупок) записей не имеют: тогда убираем из обеих групп.
+    const exit = await removeContactFromGroups(contact, allPurchases ?? [], "owner", { allChatsIfNoPurchases: true });
+    const removed = exit.results.some((r) => r.state === "removed" || r.state === "absent");
+    if (removed) results.push("удалён из группы");
+    exitProblems = exit.problems;
+    // Был в группе, а ни одно удаление не прошло и причины нет — молчать нельзя.
+    if (!removed && exit.problems.length === 0 && contact.joinedGroupAt) {
+      exitProblems = ["он был в группе, но удалить его не удалось: уберите вручную"];
     }
   } else {
     results.push("в группу он не входил — отозвана только ссылка");
+    if (contact.joinedGroupAt) {
+      exitProblems = ["по записям он входил в группу, но Telegram-идентификатор неизвестен: уберите его вручную"];
+    }
   }
 
   await prisma.contact.update({
@@ -314,6 +324,7 @@ export async function revokeAccess(
       });
   }
 
+  const warning = [warningBase, ...exitProblems].filter(Boolean).join(". ") || undefined;
   const details = [results.length > 0 ? results.join("; ") : "ссылка отозвана", warning].filter(Boolean).join(". ");
   await notifyOwner(botToken, contact.username ?? contact.igUserId, reason, details);
   return { ok: true, details, ...(warning ? { warning } : {}) };

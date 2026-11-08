@@ -40,9 +40,10 @@ export async function deliveryModeFor(contact: {
   channel: string;
   courseDeliveryChoice?: string | null;
 }): Promise<DeliveryMode> {
-  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
+  // Явный выбор человека (в том числе переключение канала, channelSwitch.ts) сильнее канала.
   if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web")
     return contact.courseDeliveryChoice;
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
   return deliveryMode();
 }
 
@@ -99,6 +100,9 @@ export async function issueCourseLink(
     where: { id: contactId },
     data: { accessTokenId: jti, accessIssuedAt: new Date() },
   });
+  // Одна действующая ссылка на человека: явная выдача сайта владельцем закрывает Telegram-приглашение.
+  const { closeTelegramDoor } = await import("./channelSwitch.js");
+  await closeTelegramDoor(contactId).catch((err) => logError("delivery:closeTelegramDoor", err));
   return url;
 }
 

@@ -51,6 +51,9 @@ const RU = {
   /** Предзаполненный текст в WhatsApp, когда ссылка на уроки не открылась. */
   linkBrokenWa: "Здравствуйте! Моя ссылка на уроки не открывается",
   linkBrokenCode: "Мой код",
+  /** Одна действующая ссылка на человека: с сайта в Telegram просит бот в чате (channelSwitch.ts). */
+  switchToTelegram: "Открыть уроки в Telegram",
+  switchToTelegramWa: "Здравствуйте! Хочу в Telegram, пришлите приглашение в группу",
 
   // Просроченная ссылка (аудит 08.11.2026): не тупик, а новая ссылка в переписку.
   linkExpiredTitle: "Ссылка устарела",
@@ -283,6 +286,8 @@ const TG: typeof RU = {
   buyCourseUrl: "https://shirinsweets.online/tg/online-kurs",
   linkBrokenCode: "Рамзи ман",
   linkBrokenWa: "Ассалому алейкум! Ссылкаи дарсҳои ман кушода намешавад",
+  switchToTelegram: "Дарсҳоро дар Telegram кушоед",
+  switchToTelegramWa: "Ассалому алейкум! Дар Telegram мехоҳам, линк ба гурӯҳ диҳед",
 
   linkExpiredTitle: "Мӯҳлати ссылка гузашт",
   linkExpiredText: "Ссылкаи дарсҳо як ҳафта амал мекунад. Ссылкаи навро ба мукотибаи шумо мефиристем — ройгон.",
