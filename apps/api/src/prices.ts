@@ -51,12 +51,45 @@ export function priceTable(course50: number, course70: number, bundle: number): 
   };
 }
 
+/** Таджикские названия — те же, что на витрине сайта (site/catalogFragment.ts
+ *  берёт их отсюда). Раньше жили только в разметке сайта. */
+export const COURSE_TITLE_TG: Record<Course, string> = {
+  [COURSE_50]: "Арт-десертҳо",
+  [COURSE_70]: "21 навъи ширинӣ",
+};
+
+export type PriceLang = "ru" | "tg";
+export type OfferItem = Course | "BUNDLE";
+
+const CURRENCY: Record<PriceLang, string> = { ru: "сомони", tg: "сомонӣ" };
+
+/**
+ * ОДНА ФРАЗА О ЦЕНЕ ОДНОГО ПРЕДЛОЖЕНИЯ — кирпич, из которого собраны и правило
+ * 17 промта (priceLineRu), и предпросмотр «Так скажет бот клиенту» в разделе
+ * «Цены и даты». Экран и бот не могут разойтись: другого места, где цена
+ * превращается в слова, нет (сторож — tests/unit/offerSingleSource.test.ts).
+ */
+export function offerPricePhrase(item: OfferItem, p: PriceTable, lang: PriceLang): string {
+  const cur = CURRENCY[lang];
+  if (item === "BUNDLE") {
+    return lang === "tg" ? `ҳар ду курс якҷоя — ${p.bundle} ${cur}` : `оба курса вместе — ${p.bundle} ${cur}`;
+  }
+  const title = lang === "tg" ? COURSE_TITLE_TG[item] : COURSE_TITLE[item];
+  return `${title} — ${p.price[item]} ${cur}`;
+}
+
+/** Все цены одной строкой на нужном языке. */
+export function priceLine(p: PriceTable, lang: PriceLang): string {
+  return [
+    offerPricePhrase(COURSE_50, p, lang),
+    offerPricePhrase(COURSE_70, p, lang),
+    offerPricePhrase("BUNDLE", p, lang),
+  ].join(", ");
+}
+
 /** Одна фраза о ценах для модели — чтобы промт и правила не разошлись с кодом. */
 export function priceLineRu(p: PriceTable = DEFAULT_PRICES): string {
-  return (
-    `${COURSE_TITLE[COURSE_50]} — ${p.price[COURSE_50]} сомони, ${COURSE_TITLE[COURSE_70]} — ${p.price[COURSE_70]} сомони, ` +
-    `оба курса вместе — ${p.bundle} сомони`
-  );
+  return priceLine(p, "ru");
 }
 
 export const PRICE_LINE_RU = priceLineRu(DEFAULT_PRICES);

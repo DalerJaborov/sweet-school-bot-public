@@ -19,24 +19,40 @@ import type { ClientLanguage } from "./clientLanguage.js";
  */
 
 const MONTHS_RU = [
-  "января", "февраля", "марта", "апреля", "мая", "июня",
-  "июля", "августа", "сентября", "октября", "ноября", "декабря",
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
 ];
 
 const MONTHS_TG = [
-  "январ", "феврал", "март", "апрел", "май", "июн",
-  "июл", "август", "сентябр", "октябр", "ноябр", "декабр",
+  "январ",
+  "феврал",
+  "март",
+  "апрел",
+  "май",
+  "июн",
+  "июл",
+  "август",
+  "сентябр",
+  "октябр",
+  "ноябр",
+  "декабр",
 ];
 
 /** Дата начала как календарный день, или null — не задана либо задана мусором. */
 export async function offlineStartDate(): Promise<CalendarDay | null> {
   const raw = (await getSetting("offlineCourseStartDate"))?.trim();
   if (!raw) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (!m) return null;
-  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return { year, month, day };
+  return parseIsoDay(raw);
 }
 
 export type CalendarDay = { year: number; month: number; day: number };
@@ -55,9 +71,23 @@ export type CalendarDay = { year: number; month: number; day: number };
 export async function upcomingOfflineStartDate(): Promise<CalendarDay | null> {
   const date = await offlineStartDate();
   if (!date) return null;
+  return toIsoDay(date) >= (await localTodayIso()) ? date : null;
+}
+
+/** Сегодня по Душанбе, ГГГГ-ММ-ДД — для «впереди ли дата» и проверки в панели. */
+export async function localTodayIso(): Promise<string> {
   const local = new Date(Date.now() + (await offsetMs()));
-  const today = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
-  return Date.UTC(date.year, date.month - 1, date.day) >= today ? date : null;
+  return toIsoDay({ year: local.getUTCFullYear(), month: local.getUTCMonth() + 1, day: local.getUTCDate() });
+}
+
+/** ГГГГ-ММ-ДД → календарный день; мусор и несуществующие даты (31 февраля) → null. */
+export function parseIsoDay(iso: string): CalendarDay | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return null;
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return null;
+  return { year, month, day };
 }
 
 /** ГГГГ-ММ-ДД — формат настройки и API сайта. */
@@ -66,24 +96,30 @@ export function toIsoDay(date: CalendarDay): string {
 }
 
 /** «3 октября» / «3 октябр» — надпись для людей, выведенная из той же даты. */
-export function formatCourseDate(
-  date: { month: number; day: number },
-  language: ClientLanguage = "ru"
-): string {
+export function formatCourseDate(date: { month: number; day: number }, language: ClientLanguage = "ru"): string {
   const months = language === "tg" ? MONTHS_TG : MONTHS_RU;
   return `${date.day} ${months[date.month - 1]}`;
 }
 
+export const DATE_TBD_LABEL: Record<"ru" | "tg", string> = {
+  ru: "дата следующего набора уточняется",
+  tg: "санаи қабули оянда аниқ мешавад",
+};
+
 /**
- * Дата словами для сообщений. Порядок: ручное переопределение из настроек,
- * иначе вывод из календарной даты, иначе честное «не задана» — чтобы владелец
- * увидел пустое место, а не устаревшую дату прошлого набора.
+ * Дата словами для сообщений (воронка {дата}, промт, уведомления о записи).
+ *
+ * 08.11.2026: только БУДУЩАЯ дата, иначе честное «уточняется». Раньше здесь
+ * брались ручная надпись `offlineCourseDate` и сырая дата без проверки «не
+ * прошла ли» — и та, и другая доживали до следующего набора: воронка и модель
+ * звали людей на курс, который уже прошёл, хотя сайт и карточка уже писали
+ * «уточняется». Ручная надпись больше не читается: второй источник даты рядом
+ * с календарной — ровно та ошибка, от которой этот файл заводился.
  */
 export async function courseDateLabel(language: ClientLanguage = "ru"): Promise<string> {
-  const manual = (await getSetting("offlineCourseDate"))?.trim();
-  if (manual) return manual;
-  const date = await offlineStartDate();
-  return date ? formatCourseDate(date, language) : "дата не задана в настройках";
+  const date = await upcomingOfflineStartDate();
+  const lang = language === "tg" ? "tg" : "ru";
+  return date ? formatCourseDate(date, lang) : DATE_TBD_LABEL[lang];
 }
 
 /**

@@ -8,7 +8,7 @@ vi.mock("../../src/instagram.js", () => ({
   channelOf: () => "INSTAGRAM",
 }));
 
-import { maybeSendOfflineCard, offlineCourseCard, offlineCardDefault, OFFLINE_DATE_TBD } from "../../src/ai/offlineCourse.js";
+import { maybeSendOfflineCard, offlineCourseCard, offlineCardDefault, offlineFactsLine, OFFLINE_DATE_TBD, DEFAULT_OFFLINE_FACTS } from "../../src/ai/offlineCourse.js";
 import type { Contact } from "@prisma/client";
 
 function settings(values: Record<string, string>) {
@@ -19,16 +19,34 @@ function settings(values: Record<string, string>) {
 const OCT_3 = { year: 2026, month: 10, day: 3 };
 
 describe("текст карточки", () => {
-  it("в заготовке факты сайта: цена, дни, 14:00–17:00, 20 десертов, Рудаки 156а", () => {
+  it("в заготовке факты сайта: 700, 13:40–16:30, 21 десерт, Водонасос (08.11.2026)", () => {
     for (const lang of ["ru", "tg"] as const) {
       const text = offlineCardDefault(lang, OCT_3);
       expect(text).toContain("700");
-      expect(text).toContain("14:00");
-      expect(text).toContain("17:00");
-      expect(text).toContain("156а");
-      expect(text).toContain("20");
-      expect(text).not.toMatch(/Dodo|Воданасос|13:40|16:30/);
+      expect(text).toContain("13:40");
+      expect(text).toContain("16:30");
+      expect(text).toContain("Водонасос");
+      expect(text).toMatch(/21 (вид десертов|намуд)/);
+      expect(text).not.toMatch(/14:00|17:00|Рудаки|156а|20 (видов|намуд)/);
     }
+    expect(offlineCardDefault("ru", OCT_3)).toContain("Каждый день с 13:40 до 16:30");
+    expect(offlineCardDefault("tg", OCT_3)).toContain("Ҳар рӯз аз 13:40 то 16:30");
+  });
+
+  it("мест в группе — строка только когда число задано", () => {
+    const base = offlineCardDefault("ru", OCT_3);
+    expect(base).not.toMatch(/мест/);
+    const withSeats = offlineCardDefault("ru", OCT_3, { ...DEFAULT_OFFLINE_FACTS, seats: 8 });
+    expect(withSeats).toContain("В группе всего 8 мест");
+    expect(offlineCardDefault("tg", OCT_3, { ...DEFAULT_OFFLINE_FACTS, seats: 8 })).toContain("ҳамагӣ 8 ҷой");
+  });
+
+  it("строка фактов для модели: прошедшей даты нет — прямой запрет её называть", () => {
+    expect(offlineFactsLine(null, DEFAULT_OFFLINE_FACTS)).toMatch(/уточняется — дату НЕ называй/);
+    const line = offlineFactsLine(OCT_3, { ...DEFAULT_OFFLINE_FACTS, price: 800, hours: "10:00–13:00" });
+    expect(line).toContain("начало 3 октября");
+    expect(line).toContain("800 сомони");
+    expect(line).toContain("с 10:00 до 13:00");
   });
 
   it("дата задана и впереди — «Начало: 3 октября» / «Оғоз: 3 октябр»", () => {

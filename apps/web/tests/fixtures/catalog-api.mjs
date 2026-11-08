@@ -19,6 +19,15 @@ http.createServer((req, res) => {
     mode = url.searchParams.get("mode") || "ready";
     return res.end("ok");
   }
+  if (url.pathname === "/api/site/offer-fact") {
+    if (req.headers.cookie || req.headers.authorization) { res.statusCode = 500; return res.end("credentials must not reach the SSI request"); }
+    if (mode === "error") { res.statusCode = 503; return res.end(""); }
+    const facts = { "offline.price": "777", "offline.days": "9", "offline.daysRu": "9 дней", "offline.desserts": "23", "offline.dessertsRu": "23 десерта", "offline.timeFrom": "09:15", "offline.timeTo": "12:45", "offline.hours": "09:15–12:45" };
+    const value = facts[url.searchParams.get("key")];
+    if (!value) { res.statusCode = 400; return res.end(""); }
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    return res.end(value);
+  }
   if (url.pathname === "/api/site/catalog-fragment") {
     if (req.headers.cookie || req.headers.authorization) {
       res.statusCode = 500;

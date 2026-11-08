@@ -9,7 +9,6 @@ afterEach(() => {
 });
 
 const form: TextsForm = {
-  prices: { course50: 50, course70: 70, bundle: 100 },
   texts: {
     paymentPhone: "905 355 355",
     paymentRecipient: "Чаборова Фарангис",
@@ -23,7 +22,7 @@ const form: TextsForm = {
     afterPaymentRu: "Пришлите чек",
     afterPaymentTg: "Чекро фиристед",
   },
-  offline: { price: 700, days: 8, hours: "14:00 до 17:00", desserts: 20, address: "Рудаки 156а", startDate: "", infoRu: "", infoTg: "" },
+  offline: { infoRu: "", infoTg: "" },
 };
 
 const preview: TextsPreview = {
@@ -49,35 +48,44 @@ function mockApi() {
         return new Response(JSON.stringify({ ...form, defaults: form, preview }), { status: 200 });
       }
       if (url === "/admin/texts/preview") {
-        return new Response(JSON.stringify({ ...preview, priceLine: `оба курса вместе — ${body?.prices.bundle} сомони` }), { status: 200 });
+        return new Response(
+          JSON.stringify({ ...preview, payment: { ru: `Перевод на ${body?.texts.paymentPhone}`, tg: "" } }),
+          { status: 200 },
+        );
       }
       if (url === "/admin/texts" && method === "PUT") {
         return new Response(
-          JSON.stringify({ ok: true, ...body, preview: { ...preview, priceLine: `сохранено: комплект ${body?.prices.bundle}` } }),
-          { status: 200 }
+          JSON.stringify({
+            ok: true,
+            ...body,
+            preview: { ...preview, payment: { ru: `сохранено: ${body?.texts.paymentPhone}`, tg: "" } },
+          }),
+          {
+            status: 200,
+          },
         );
       }
       return new Response("{}", { status: 404 });
-    })
+    }),
   );
   return calls;
 }
 
-describe("TextsPage «Тексты и цены»", () => {
-  it("грузит форму с RU/TG рядом и предпросмотром; кнопка неактивна, пока ничего не менялось", async () => {
+describe("TextsPage «Тексты» — без цен и дат (они в «Цены и даты»)", () => {
+  it("грузит форму с RU/TG рядом; полей цен и даты нет — только подсказка, куда идти", async () => {
     mockApi();
     render(<TextsPage />);
-    const bundle = (await screen.findByLabelText("Оба курса вместе")) as HTMLInputElement;
-    expect(bundle.value).toBe("100");
-    expect(screen.getByLabelText("Номер для перевода")).toBeTruthy();
+    expect(await screen.findByLabelText("Номер для перевода")).toBeTruthy();
     expect(screen.getAllByLabelText("По-русски").length).toBe(4);
     expect(screen.getAllByLabelText("Бо тоҷикӣ").length).toBe(4);
-    expect(screen.getByText(preview.priceLine)).toBeTruthy();
+    expect(screen.queryByLabelText("Оба курса вместе")).toBeNull();
+    expect(screen.queryByLabelText("Дата начала")).toBeNull();
+    expect(screen.getByText(/Цены курсов и дата набора — в разделе «Цены и даты»/)).toBeTruthy();
     expect(screen.getByText(/Стоимость: 700 сомони/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "Всё сохранено" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("правка цены → живой предпросмотр с сервера; «Сохранить» шлёт PUT со всей формой", async () => {
+  it("правка реквизитов → живой предпросмотр; «Сохранить» шлёт PUT без цен", async () => {
     vi.useFakeTimers();
     try {
       const calls = mockApi();
@@ -85,26 +93,21 @@ describe("TextsPage «Тексты и цены»", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      fireEvent.change(screen.getByLabelText("Оба курса вместе"), { target: { value: "110" } });
+      fireEvent.change(screen.getByLabelText("Номер для перевода"), { target: { value: "900 111 222" } });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500);
       });
-      expect(calls.find((c) => c.url === "/admin/texts/preview")?.body?.prices.bundle).toBe(110);
-      expect(screen.getByText("оба курса вместе — 110 сомони")).toBeTruthy();
-
-      fireEvent.change(screen.getByLabelText("Адрес"), { target: { value: "Айни 10" } });
+      expect(screen.getByText(/Перевод на 900 111 222/)).toBeTruthy();
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
         await vi.advanceTimersByTimeAsync(0);
       });
       const put = calls.find((c) => c.method === "PUT");
-      expect(put?.body).toMatchObject({
-        prices: { course50: 50, course70: 70, bundle: 110 },
-        texts: { paymentPhone: "905 355 355" },
-        offline: { address: "Айни 10", price: 700 },
+      expect(put?.body).toEqual({
+        texts: { ...form.texts, paymentPhone: "900 111 222" },
+        offline: { infoRu: "", infoTg: "" },
       });
-      expect(screen.getByText("сохранено: комплект 110")).toBeTruthy();
-      expect((screen.getByRole("button", { name: "Всё сохранено" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByText(/сохранено: 900 111 222/)).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

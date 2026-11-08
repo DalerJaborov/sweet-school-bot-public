@@ -1,5 +1,6 @@
-import { getSetting } from "./db.js";
 import { courseDateLabel } from "./ai/courseDate.js";
+import { hoursValue, parseHours } from "./ai/offlineFacts.js";
+import { getOfflineFacts } from "./services/salesTextsService.js";
 import { detectClientLanguage } from "./ai/clientLanguage.js";
 
 /**
@@ -10,8 +11,8 @@ import { detectClientLanguage } from "./ai/clientLanguage.js";
  * день, и никакой экран этого не показывал (случай 13.10.2026: правили вручную
  * в базе, и правка не пережила переезд на новый сервер). Теперь в шаге пишут
  * `{дата}` и `{время}`, а значения берутся из тех же настроек, что и у сайта
- * и карточки бота: `offlineCourseStartDate` / `offlineCourseDate` и
- * `offlineCourseHours`. Перенесли курс в панели — воронка обновилась сама.
+ * и карточки бота (раздел «Цены и даты»): дата — только будущая, иначе
+ * «дата следующего набора уточняется». Перенесли курс — воронка обновилась сама.
  *
  * Язык даты («20 ноябр» / «20 ноября») определяется по самому тексту шага.
  * Тексты без подстановок возвращаются как есть, без обращений к базе.
@@ -32,8 +33,11 @@ export async function renderFunnelText(text: string): Promise<string> {
     out = out.replace(DATE_TOKEN, await courseDateLabel(language));
   }
   if (needsTime) {
-    const hours = (await getSetting("offlineCourseHours"))?.trim() || "время уточняется";
-    out = out.replace(TIME_TOKEN, hours);
+    // Те же часы, что в карточке бота и на сайте (раздел «Цены и даты»),
+    // а не сырая настройка: пустая давала «время уточняется», хотя часы известны.
+    const facts = await getOfflineFacts();
+    const range = parseHours(facts.hours);
+    out = out.replace(TIME_TOKEN, range ? hoursValue(range) : facts.hours.trim() || "время уточняется");
   }
   return out;
 }

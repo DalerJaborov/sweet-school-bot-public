@@ -87,8 +87,8 @@ type Status = {
 };
 
 const COURSES = [
-  { code: "COURSE50", label: "Курс за 50 сомони — Арт-десерты" },
-  { code: "COURSE70", label: "Курс за 70 сомони — 21 рецепт" },
+  { code: "COURSE50", label: "Арт-десерты" },
+  { code: "COURSE70", label: "21 рецепт" },
 ] as const;
 
 const TITLE_SOURCE: Record<Candidate["titleSource"], string> = {

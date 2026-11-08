@@ -37,6 +37,7 @@ export const OFFLINE_FACT_KEYS = {
   hours: "offlineCourseHours",
   desserts: "offlineCourseDesserts",
   address: "offlineCourseAddress",
+  seats: "offlineCourseSeats",
 } as const satisfies Record<keyof OfflineFacts, string>;
 
 const CACHE_TTL_MS = 30_000;
@@ -64,10 +65,14 @@ export async function getSalesTexts(): Promise<SalesTexts> {
   const prices = await getPrices();
   const entries = await Promise.all(
     (Object.keys(SALES_TEXT_KEYS) as (keyof typeof SALES_TEXT_KEYS)[]).map(
-      async (field) => [field, str(await getSetting(SALES_TEXT_KEYS[field]), DEFAULT_SALES_TEXTS[field])] as const
-    )
+      async (field) => [field, str(await getSetting(SALES_TEXT_KEYS[field]), DEFAULT_SALES_TEXTS[field])] as const,
+    ),
   );
-  const value: SalesTexts = { ...DEFAULT_SALES_TEXTS, ...Object.fromEntries(entries), priceLineRu: priceLineRu(prices) };
+  const value: SalesTexts = {
+    ...DEFAULT_SALES_TEXTS,
+    ...Object.fromEntries(entries),
+    priceLineRu: priceLineRu(prices),
+  };
   textsCache = { at: Date.now(), value };
   return value;
 }
@@ -75,19 +80,22 @@ export async function getSalesTexts(): Promise<SalesTexts> {
 /** Факты офлайн-курса для карточки бота и витрины сайта. */
 export async function getOfflineFacts(): Promise<OfflineFacts> {
   if (factsCache && Date.now() - factsCache.at < CACHE_TTL_MS) return factsCache.value;
-  const [price, days, hours, desserts, address] = await Promise.all([
+  const [price, days, hours, desserts, address, seats] = await Promise.all([
     getSetting(OFFLINE_FACT_KEYS.price),
     getSetting(OFFLINE_FACT_KEYS.days),
     getSetting(OFFLINE_FACT_KEYS.hours),
     getSetting(OFFLINE_FACT_KEYS.desserts),
     getSetting(OFFLINE_FACT_KEYS.address),
+    getSetting(OFFLINE_FACT_KEYS.seats),
   ]);
+  const seatsN = positiveInt(seats, 0);
   const value: OfflineFacts = {
     price: positiveInt(price, DEFAULT_OFFLINE_FACTS.price),
     days: positiveInt(days, DEFAULT_OFFLINE_FACTS.days),
     hours: str(hours, DEFAULT_OFFLINE_FACTS.hours),
     desserts: positiveInt(desserts, DEFAULT_OFFLINE_FACTS.desserts),
     address: str(address, DEFAULT_OFFLINE_FACTS.address),
+    seats: seatsN > 0 ? seatsN : null,
   };
   factsCache = { at: Date.now(), value };
   return value;

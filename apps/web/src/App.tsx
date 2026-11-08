@@ -23,6 +23,7 @@ import { MediaExamplesPage } from "./pages/MediaExamplesPage";
 import { CoursesPage } from "./pages/CoursesPage";
 import { ImportPage } from "./pages/ImportPage";
 import { TextsPage } from "./pages/TextsPage";
+import { OfferPage } from "./pages/OfferPage";
 import { StudentPage } from "./pages/StudentPage";
 import { RecipeReviewPage } from "./pages/RecipeReviewPage";
 
@@ -34,6 +35,7 @@ type Tab =
   | "clients"
   | "money"
   | "texts"
+  | "offer"
   | "courses"
   | "funnels"
   | "journal"
@@ -60,7 +62,8 @@ const PRIMARY: NavItem[] = [
 
 const SECONDARY: NavItem[] = [
   { id: "money", label: "Деньги", icon: Icons.money },
-  { id: "texts", label: "Тексты и цены", icon: Icons.journal },
+  { id: "offer", label: "Цены и даты", icon: Icons.money },
+  { id: "texts", label: "Тексты", icon: Icons.journal },
   { id: "courses", label: "Курсы", icon: Icons.media },
   { id: "funnels", label: "Воронки", icon: Icons.funnels },
   { id: "journal", label: "Журнал", icon: Icons.journal },
@@ -235,6 +238,7 @@ export function App() {
         {tab === "clients" && !studentId && <ClientsPage onOpenStudent={openStudent} />}
         {tab === "money" && <MoneyPage />}
         {tab === "texts" && <TextsPage />}
+        {tab === "offer" && <OfferPage />}
         {tab === "courses" && <CoursesPage onReview={openReview} />}
         {tab === "recipes" && <RecipeReviewPage lessonId={reviewLessonId} onOpen={openReview} onBack={() => void goTo("courses")} />}
         {tab === "funnels" && <FunnelsPage />}

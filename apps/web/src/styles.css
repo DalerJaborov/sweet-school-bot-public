@@ -1585,3 +1585,32 @@ a.btn { text-decoration: none; }
   .toggle input[type="radio"], .toggle input[type="checkbox"] { width: 20px; height: 20px; }
   .status-dot { min-height: 40px; }
 }
+
+/* ---- «Цены и даты» (OfferPage): крупные поля, предпросмотр бота RU/TG ---- */
+.offer-head h1 { font-size: 26px; margin: 4px 0 4px; }
+.offer-head .hint { font-size: 15px; }
+.offer-grid { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
+@media (min-width: 1100px) { .offer-grid { grid-template-columns: repeat(3, 1fr); } .offer-grid .pair { grid-template-columns: 1fr; } }
+.offer-card h2 { font-size: 18px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.offer-tag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--bg-soft); color: var(--muted); }
+.offer-field input { font-size: 17px; min-height: 48px; }
+.offer-field input.offer-money { font-size: 22px; font-weight: 700; }
+.offer-field small { display: block; margin-top: 5px; font-size: 13px; line-height: 1.4; }
+.offer-fields { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
+@media (min-width: 720px) { .offer-fields { grid-template-columns: 1fr 1fr; } .offer-span { grid-column: 1 / -1; } }
+@media (min-width: 1100px) { .offer-fields { grid-template-columns: repeat(3, 1fr); } }
+.offer-time { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.offer-time .offer-span { grid-column: 1 / -1; margin: -6px 0 12px; }
+.offer-error { color: var(--err); font-weight: 600; }
+.offer-warn { color: var(--warn); font-weight: 600; }
+.offer-note { color: var(--muted); }
+.offer-clear { margin-top: 8px; }
+.offer-block { margin: 4px 0 0; font-size: 14px; }
+.offer-warn-box { background: var(--warn-soft); color: var(--warn); }
+.offer-lang { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
+.offer-preview .preview-text { font-size: 15px; }
+.offer-history summary { cursor: pointer; font-weight: 600; min-height: 32px; display: flex; align-items: center; }
+.offer-history ul { margin: 10px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.6; }
+.offer-history-when, .offer-history-who { color: var(--muted); }
+.offer-save { min-height: 52px; font-size: 17px; }.offer-label { display: block; font-size: 14px; color: var(--ink-2); margin-bottom: 6px; font-weight: 600; }
+.offer-after { margin: 8px 0 0; text-align: center; font-size: 13px; color: var(--muted); }

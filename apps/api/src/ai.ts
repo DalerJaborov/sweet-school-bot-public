@@ -20,7 +20,8 @@ import { queueUncheckedReceipt } from "./receiptRetry.js";
 import { queuePendingAiReply } from "./aiReplyRetry.js";
 import { logAiCall } from "./ai/aiLog.js";
 import { registerOfflineSignup } from "./ai/offlineSignup.js";
-import { maybeSendOfflineCard } from "./ai/offlineCourse.js";
+import { maybeSendOfflineCard, offlineFactsForModel } from "./ai/offlineCourse.js";
+import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { buildStyleBlock } from "./ai/styleLearning.js";
@@ -797,6 +798,10 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   }
 
   const date = await courseDateLabel();
+  // Факты очного курса — из раздела «Цены и даты», та же строка, что видит
+  // владелец в предпросмотре. Без неё модель на «во сколько?» после карточки
+  // отвечала по памяти промта.
+  const facts = await offlineFactsForModel();
 
   const registered = await registerOfflineSignup(contact, text);
   if (registered) {
@@ -809,8 +814,8 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   // просто не читают.
   const cardSent = await maybeSendOfflineCard(contact, text);
   return cardSent
-    ? `\n\nВАЖНО СЕЙЧАС: человеку УЖЕ отправлено отдельное сообщение со всеми условиями офлайн-курса — цена, даты, адрес. Не повторяй их. Одной короткой фразой попроси имя и номер телефона для записи.`
-    : `\n\nВАЖНО СЕЙЧАС: человек хочет на ОФЛАЙН-курс (${date}). Попроси у него имя и номер телефона одним коротким сообщением. Предоплаты нет — про оплату не заговаривай.`;
+    ? `\n\nВАЖНО СЕЙЧАС: человеку УЖЕ отправлено отдельное сообщение со всеми условиями офлайн-курса — цена, даты, адрес. Не повторяй их. Одной короткой фразой попроси имя и номер телефона для записи.\n${facts}`
+    : `\n\nВАЖНО СЕЙЧАС: человек хочет на ОФЛАЙН-курс (${date}). Попроси у него имя и номер телефона одним коротким сообщением. Предоплаты нет — про оплату не заговаривай.\n${facts}`;
 }
 
 /**
@@ -931,7 +936,10 @@ import { confirmRequisitesToCustomer, handleReceiptVerdict } from "./ai/receiptV
 export { handleReceiptVerdict };
 
 
-async function trustedSalesFacts(): Promise<string> {
-  const [texts, offline] = await Promise.all([getSalesTexts(), getOfflineFacts()]);
-  return `${texts.priceLineRu}. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони`;
+/** Суммы, которые боту разрешено назвать (replyPolicy держит ответ с любой
+ *  другой). Сумма двух курсов по отдельности — тоже правда («100 вместо 120»),
+ *  без неё такой честный ответ задерживался как «неподтверждённая сумма». */
+export async function trustedSalesFacts(): Promise<string> {
+  const [texts, offline, prices] = await Promise.all([getSalesTexts(), getOfflineFacts(), getPrices()]);
+  return `${texts.priceLineRu}. По отдельности оба — ${prices.bundleFull} сомони. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони`;
 }
