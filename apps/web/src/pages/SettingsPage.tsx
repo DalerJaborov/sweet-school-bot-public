@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FreeLessonSettings } from "../components/FreeLessonSettings";
 import { WhatsAppSettings } from "../components/WhatsAppSettings";
+import { VideoLibrarySettings } from "../components/VideoLibrarySettings";
 import { KnowledgeReview } from "../components/KnowledgeReview";
 
 /** Ответ живой проверки модели (POST /admin/gemini-test). */
@@ -317,6 +318,7 @@ export function SettingsPage() {
     <div className="card">
       <h2>{Icons.settings} Настройки</h2>
       <FreeLessonSettings />
+      <VideoLibrarySettings />
       <WhatsAppSettings />
       <KnowledgeReview />
       <p className="hint">Подключения и подсказки для помощника. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>

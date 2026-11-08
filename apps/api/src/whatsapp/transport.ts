@@ -54,10 +54,10 @@ export async function sendWhatsAppText(contact: Recipient, text: string, buttons
   const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, text: plain, markSeen });
   return whatsappMessageId(auth.accountId, sent.messageId);
 }
-export async function sendWhatsAppAttachment(contact: Recipient, mediaUrl: string, mediaType: string, purpose: Purpose = "reply"): Promise<string> {
+export async function sendWhatsAppAttachment(contact: Recipient, mediaUrl: string, mediaType: string, purpose: Purpose = "reply", caption?: string): Promise<string> {
   const auth = await authorization(contact, purpose);
   await assertMessagingAllowed();
-  const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, mediaUrl, mediaType });
+  const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, mediaUrl, mediaType, ...(caption ? { text: caption } : {}) });
   return whatsappMessageId(auth.accountId, sent.messageId);
 }
 
