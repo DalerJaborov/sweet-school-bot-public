@@ -626,6 +626,23 @@ function paginate<T>(rows: T[], take: number): { rows: T[]; hasMore: boolean } {
   return rows.length > take ? { rows: rows.slice(0, take), hasMore: true } : { rows, hasMore: false };
 }
 
+/**
+ * Журнал фильтра «не по делу — молчать» (ai/relevanceGate.ts): кому не ответили и почему.
+ * ?action=silent|clarify|attention|reply — отбор по решению. Хозяйка видит причину по каждому.
+ */
+adminRouter.get("/admin/reply-gate", async (req, res) => {
+  const take = takeParam(req.query.take, 50, 200);
+  const skip = skipParam(req.query.skip);
+  const action = typeof req.query.action === "string" && ["silent", "clarify", "attention", "reply"].includes(req.query.action) ? req.query.action : undefined;
+  const rows = await prisma.replyGate.findMany({
+    where: action ? { action } : undefined,
+    orderBy: { createdAt: "desc" },
+    take: take + 1,
+    skip,
+  });
+  res.json(paginate(rows, take));
+});
+
 adminRouter.get("/admin/journal", async (req, res) => {
   const take = takeParam(req.query.take, 40, 200);
   const skip = skipParam(req.query.skip);
