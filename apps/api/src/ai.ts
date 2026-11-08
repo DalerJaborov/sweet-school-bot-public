@@ -24,7 +24,7 @@ import { maybeSendOfflineCard } from "./ai/offlineCourse.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { buildStyleBlock } from "./ai/styleLearning.js";
-import { ownerAlertChatIds, sendMessageWithButtons } from "./telegram.js";
+import { techChatIds, sendMessageWithButtons } from "./telegram.js";
 import { getQuickReplies } from "./quickReplies.js";
 import { saveReceiptImage } from "./upload.js";
 import { generateWithFallback, thinkingConfigFor } from "./gemini.js";
@@ -671,7 +671,7 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
     });
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await ownerAlertChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
+  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!botToken || !chatId) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   // Кнопки быстрых ответов под уведомлением — чтобы не набирать с телефона,

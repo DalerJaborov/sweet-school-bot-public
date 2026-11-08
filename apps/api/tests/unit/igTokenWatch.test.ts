@@ -28,7 +28,7 @@ vi.mock("../../src/ai/igGet.js", () => ({ igGet: (...a: unknown[]) => igGet(...a
 
 const sendTelegramMessage = vi.fn(async () => 1);
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]),
+  techChatIds: vi.fn(async () => ["owner-1"]),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 

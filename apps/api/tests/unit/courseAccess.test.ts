@@ -4,7 +4,7 @@ import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
 const sendTelegramMessage = vi.fn(async () => undefined);
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
+  techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
 
 import { issueMagicLink, verifyMagicLink, openByLink, currentAccess, statusFor } from "../../src/course/access.js";
 import { courseTokenSecret } from "../../src/course/tokenSecret.js";

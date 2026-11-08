@@ -20,7 +20,8 @@ import { notifyOwnerDirect } from "./systemAlerts.js";
  * перезапускается при каждом деплое, и из памяти она бы обнулялась.
  */
 
-export const REMINDER_EVERY_MS = 2 * 3_600_000;
+/** Раз в сутки (раньше каждые 2 часа; 08.11.2026). Получатель — только владелец. */
+export const REMINDER_EVERY_MS = 24 * 3_600_000;
 /** Чек/вопрос младше часа ещё не «висит» — карточка только что ушла. */
 export const PENDING_AFTER_MS = 3_600_000;
 const WORK_START_HOUR = 9;

@@ -202,14 +202,9 @@ async function giveUp(id: string, contactId: string, why: string): Promise<void>
   // Та же пара получателей, что и у обычной карточки сомнительного чека
   // (ai.ts::askOwner) — сестра могла пропустить сообщение, владелец теперь
   // видит его тоже.
-  const recipients = [
-    ...new Set(
-      [
-        (await getSetting("telegramOwnerChatId"))?.trim(),
-        (await getSetting("telegramReportChatId"))?.trim(),
-      ].filter((id): id is string => Boolean(id))
-    ),
-  ];
+  // Чек остаётся в панели («Чеки»), а это сообщение техническое: только владельцу.
+  const { techChatIds } = await import("./telegram.js");
+  const recipients = await techChatIds();
   if (recipients.length === 0) return;
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const { sendTelegramMessage } = await import("./telegram.js");
