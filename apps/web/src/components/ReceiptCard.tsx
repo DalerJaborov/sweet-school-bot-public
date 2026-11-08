@@ -136,7 +136,7 @@ export function ReceiptCard(props: {
           {amount ? <div className="receipt-amount">{amount}</div> : <div className="receipt-amount unknown">сумма не прочиталась</div>}
           <div className="list-chips">
             {receipt.courseGuess && <span className="chip chip-accent">{receipt.courseGuess}</span>}
-            {receipt.confidence != null && <span className="chip">ИИ уверен на {receipt.confidence}%</span>}
+            {receipt.confidence != null && <span className="chip">Помощник уверен на {receipt.confidence}%</span>}
           </div>
           {receipt.reason && <div className="receipt-reason">{receipt.reason}</div>}
           <div className="receipt-actions">

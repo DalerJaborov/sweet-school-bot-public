@@ -13,6 +13,7 @@ interface CheckResult {
   ms: number;
 }
 import { api } from "../api";
+import { Switch } from "../components/Switch";
 import { toast } from "../components/Toast";
 import { Icons } from "../components/Brand";
 import { useUnsavedGuard } from "../components/UnsavedGuard";
@@ -272,6 +273,18 @@ export function SettingsPage() {
     }
   }
 
+  /** Тумблер меняется сразу; если сервер не принял — возвращаем и говорим об этом. */
+  async function flip(key: "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled", next: boolean, set: (v: boolean) => void) {
+    set(next);
+    try {
+      await api("/admin/settings", { method: "PUT", body: { [key]: String(next) } });
+      if (original.current) original.current[key] = next;
+    } catch (e) {
+      set(!next);
+      toast(e instanceof Error ? e.message : "Не удалось сохранить", "error");
+    }
+  }
+
   async function save() {
     if (saving) return; // защита от двойного тапа
     setSaving(true);
@@ -299,7 +312,7 @@ export function SettingsPage() {
       <FreeLessonSettings />
       <WhatsAppSettings />
       <KnowledgeReview />
-      <p className="hint">Ключи и промт ИИ. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
+      <p className="hint">Подключения и подсказки для помощника. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}
       {values.botFrozen === "true" && (
         <div className="msg" role="status">
@@ -363,33 +376,32 @@ export function SettingsPage() {
           )}
         </label>
       ))}
-      <div className="row" style={{ marginBottom: 14 }}>
-        <label className="toggle">
-          <input type="checkbox" checked={aiEnabled} disabled={values.botFrozen === "true"} onChange={(e) => setAiEnabled(e.target.checked)} />
-          ИИ-консультант отвечает на свободные вопросы
-        </label>
-      </div>
-      <div className="row" style={{ marginBottom: 14 }}>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={stuckAlertEnabled}
-            onChange={(e) => setStuckAlertEnabled(e.target.checked)}
-          />
-          Живая тревога «застрял разговор» в Telegram (те же случаи всё равно видны в вечерней сводке)
-        </label>
-      </div>
-      <div className="row" style={{ marginBottom: 14 }}>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={qaAutoReplyEnabled}
-            disabled={values.botFrozen === "true"}
-            onChange={(e) => setQaAutoReplyEnabled(e.target.checked)}
-          />
-          Автоответ в учебной группе — бот повторяет её же прошлый ответ на близко совпавший повторный вопрос
-          (новый вопрос без совпадения — молчит, отвечает Ширин как обычно; нужны обе настройки группы выше)
-        </label>
+      {/* Тумблеры сохраняются сразу, одним касанием: раньше человек щёлкал,
+          забывал нажать «Сохранить» внизу — и помощник работал по-старому. */}
+      <div className="switch-group">
+        <Switch
+          checked={aiEnabled}
+          disabled={values.botFrozen === "true"}
+          onChange={(next) => void flip("aiEnabled", next, setAiEnabled)}
+          label="Помощник отвечает на вопросы клиентов"
+          hint="Выключите, если хотите отвечать всем сами."
+          testId="switch-aiEnabled"
+        />
+        <Switch
+          checked={stuckAlertEnabled}
+          onChange={(next) => void flip("stuckAlertEnabled", next, setStuckAlertEnabled)}
+          label="Сообщать в Telegram, если разговор зашёл в тупик"
+          hint="Те же случаи всё равно будут в вечерней сводке."
+          testId="switch-stuckAlertEnabled"
+        />
+        <Switch
+          checked={qaAutoReplyEnabled}
+          disabled={values.botFrozen === "true"}
+          onChange={(next) => void flip("qaAutoReplyEnabled", next, setQaAutoReplyEnabled)}
+          label="Повторять ваш прошлый ответ в учебной группе"
+          hint="Если вопрос почти такой же, как был раньше. На новые вопросы помощник молчит — отвечаете вы."
+          testId="switch-qaAutoReplyEnabled"
+        />
       </div>
       <button className="btn" onClick={save} disabled={saving}>
         {saving ? "Сохраняю…" : "Сохранить"}
