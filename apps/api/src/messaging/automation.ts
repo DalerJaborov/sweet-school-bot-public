@@ -7,6 +7,20 @@ const permission = new AsyncLocalStorage<"funnel" | "human">();
 export type MessagePurpose = "reply" | "verified_receipt_access" | "human";
 const contactPermission = new AsyncLocalStorage<{ contactId: string; purpose: MessagePurpose }>();
 const receiptEvidence = new AsyncLocalStorage<{ contactId: string; imageHash: string }>();
+// Разовое исключение из «хозяйка ведёт разговор»: безопасный запрос (вернуть доступ,
+// «не открывается») обслуживается сразу, но перехват не снимается — Ширин по-прежнему
+// на связи. Привязано к одному контакту и одной операции, как и остальные разрешения.
+const takeoverOverride = new AsyncLocalStorage<string>();
+
+/** Действует ли разовое разрешение для этого контакта (проверка перед повторным решением внутри цепочки). */
+export function takeoverOverrideActive(contactId: string): boolean {
+  return takeoverOverride.getStore() === contactId;
+}
+
+/** Выполнить `run`, пока бот имеет право ответить этому контакту вопреки паузе хозяйки. */
+export function withTakeoverOverride<T>(contactId: string, run: () => Promise<T>): Promise<T> {
+  return takeoverOverride.run(contactId, run);
+}
 
 export function currentReceiptEvidence(): { contactId: string; imageHash: string } | undefined {
   return receiptEvidence.getStore();
@@ -25,6 +39,7 @@ export class ContactMessagingBlocked extends Error {
 }
 
 type ContactPolicy = {
+  id?: string;
   personal?: boolean;
   spamBlockedAt?: Date | null;
   whatsappSavedContact?: boolean;
@@ -35,6 +50,7 @@ type ContactPolicy = {
 export function contactAutomationBlocked(contact: ContactPolicy, purpose: MessagePurpose = "reply"): boolean {
   if (purpose === "human") return false;
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return true;
+  if (contact.id && takeoverOverride.getStore() === contact.id) return false;
   return purpose !== "verified_receipt_access" && Boolean(contact.humanTakenOverAt ||
     (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now()));
 }

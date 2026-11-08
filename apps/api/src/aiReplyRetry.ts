@@ -6,6 +6,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
 import { isBotFrozen } from "./messaging/automation.js";
+import { resolveTakeover } from "./ai/ownerTakeover.js";
 
 /**
  * Очередь ответов, которые ИИ НИ РАЗУ не дал — все ключи/модели Gemini отказали.
@@ -84,7 +85,7 @@ async function runQueue(): Promise<void> {
   for (const row of due) {
     if (await isBotFrozen()) return;
     // WhatsApp retries belong to its durable inbox and require the original incoming turn.
-    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || row.contact.humanTakenOverAt)) {
+    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact)) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } });
       continue;
     }
@@ -119,8 +120,20 @@ async function runQueue(): Promise<void> {
       continue;
     }
 
+    // Умный перехват: ответ отложен, пока Ширин на связи; ушла — отвечаем сами.
+    let contactNow = row.contact;
+    if (contactNow.humanTakenOverAt) {
+      const verdict = await resolveTakeover(contactNow, { text: row.text, at: row.snapshotAt });
+      if (verdict.action === "hold") {
+        if (verdict.until) await prisma.pendingAiReply.update({ where: { id: row.id }, data: { nextAttemptAt: verdict.until } }).catch(() => null);
+        else await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
+        continue;
+      }
+      if (verdict.why !== "safe_intent") contactNow = { ...contactNow, humanTakenOverAt: null, humanTakeoverMid: null };
+    }
+
     try {
-      await aiReply(row.contact, row.text, [], []);
+      await aiReply(contactNow, row.text, [], []);
     } catch (err) {
       logError("aiReplyRetry:attempt", err);
       if (!canRetryMetaFailure(err)) {

@@ -1,6 +1,7 @@
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
+import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
 import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
@@ -19,6 +20,8 @@ import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
 import { classifyUnknownEcho } from "./ai/ownSendLedger.js";
+import { resolveTakeover, scheduleHeldReply } from "./ai/ownerTakeover.js";
+import { withTakeoverOverride, takeoverOverrideActive } from "./messaging/automation.js";
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
  *  Instagram, а не наш код: написала текстом, ответила голосом или просто
@@ -605,8 +608,56 @@ export async function handleMessage(
 
   // Хозяйка сама ведёт разговор — бот не встревает, даже если пришли кнопка или
   // ключевое слово воронки. Постоянную паузу снимает только владелец.
-  if (isHumanSilenced(contact)) return;
+  // Умный перехват (ai/ownerTakeover.ts): пока Ширин на связи — молчим и откладываем ответ
+  // на случай, если она не успеет; безопасные запросы и «ушла» обслуживаются сразу.
+  let safeOverride = false;
+  if (isHumanSilenced(contact)) {
+    const gate = await gateHumanTakeover(contact, textOrVoice);
+    if (gate === "hold") return;
+    safeOverride = gate === "safe";
+    if (gate === "free") {
+      const refreshed = await prisma.contact.findUnique({ where: { id: contact.id } });
+      if (!refreshed || isHumanSilenced(refreshed)) return; // реакция/просьба позвать человека всё ещё действуют
+      Object.assign(contact, refreshed);
+    }
+  }
+  return safeOverride
+    ? withTakeoverOverride(contact.id, () =>
+        replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint),
+      )
+    : replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint);
+}
 
+/**
+ * Решение о паузе хозяйки на одно входящее. "hold" — молчим (ответ при необходимости
+ * отложен в очередь), "safe" — отвечаем разово, перехват остаётся, "free" — перехват
+ * снят (в базе), отвечаем как обычно.
+ */
+async function gateHumanTakeover(contact: Contact, text: string | null): Promise<"hold" | "safe" | "free"> {
+  // Пауза по таймеру (реакция хозяйки, просьба «позови человека») не из этой цепочки.
+  if (!contact.humanTakenOverAt) return "hold";
+  const lastIn = await prisma.message.findFirst({
+    where: { contactId: contact.id, direction: "IN" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  const at = lastIn?.createdAt ?? new Date();
+  const decision = await resolveTakeover(contact, { text, at });
+  if (decision.action === "hold") {
+    if (decision.until && text) await scheduleHeldReply(contact.id, text, decision.until, at);
+    return "hold";
+  }
+  return decision.why === "safe_intent" ? "safe" : "free";
+}
+
+async function replyToClient(
+  contact: Contact,
+  textOrVoice: string | null,
+  payload: string | null,
+  attachments: Attachment[],
+  rescuedImages: RescuedImage[],
+  ownMediaHint: string | undefined,
+): Promise<void> {
   const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload);
   if (handledByFunnel || (!textOrVoice && attachments.length === 0)) return;
 
@@ -623,7 +674,10 @@ export async function handleMessage(
     rescuedImages,
     async (mergedText, mergedAttachments, mergedRescued) => {
       const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-      if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
+      if (!fresh) return;
+      // За время ожидания подключилась хозяйка — картинки уже спасены выше. Безопасный
+      // запрос (разовое разрешение выше) под её паузу не подпадает.
+      if (isHumanSilenced(fresh) && !takeoverOverrideActive(fresh.id)) return;
       await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
     },
   );
