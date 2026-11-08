@@ -307,7 +307,7 @@ describe("после просьбы «пришлите другой скринш
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => {
       const pendingNeedsCard = JSON.stringify(where.OR ?? []).includes('"ownerAlerts":{"not":null}');
       // ожидающий чек без карточки в «тот же перевод» не засчитывается
-      return where.createdAt && where.OR && !pendingNeedsCard ? { amount: 71, linkSent: false, ownerDecision: "PENDING" } : null;
+      return where.kind && where.OR && !pendingNeedsCard ? { amount: 71, linkSent: false, ownerDecision: "PENDING" } : null;
     });
     await handleReceiptVerdict(contact, verdict({ imageHash: "second" }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
@@ -359,7 +359,7 @@ describe("мошеннические сценарии (ревью)", () => {
 
   it("повтор с суммой 71.45 против прежних 70 спустя часы: запас 5 сомони, владельцу", async () => {
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.linkSent === true && typeof where.amount === "object" ? { createdAt: new Date() } : null
+      Array.isArray(where.OR) && typeof where.amount === "object" ? { createdAt: new Date() } : null
     );
     await handleReceiptVerdict(contact, verdict({ amount: 71.45, receiptAt: new Date(), imageHash: "again" }));
     expect(grantCourses).not.toHaveBeenCalled();

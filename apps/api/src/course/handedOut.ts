@@ -86,7 +86,8 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
   if (settled.length === waiting.length) {
     await prisma.receiptCheck.updateMany({
       where: { contactId, awaitingDeliveryChoice: true },
-      data: { awaitingDeliveryChoice: false },
+      // linkSent: платёж принят и обслужен вручную - проверки повторов и отчёт видят его
+      data: { awaitingDeliveryChoice: false, linkSent: true },
     });
     return true;
   }

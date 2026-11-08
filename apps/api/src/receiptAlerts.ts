@@ -53,12 +53,12 @@ export async function rememberAlert(receiptId: string, alert: OwnerAlert): Promi
 }
 
 /** Переписать подпись всех карточек чека и убрать кнопки. */
-export async function closeCards(receipt: { ownerAlerts: string | null }, caption: string): Promise<void> {
+export async function closeCards(receipt: { ownerAlerts: string | null }, caption: string, exceptMessageId?: number): Promise<void> {
   const alerts = parseAlerts(receipt.ownerAlerts);
   if (alerts.length === 0) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
-  for (const a of alerts) await editCaption(botToken, a.chatId, a.messageId, caption);
+  for (const a of alerts.filter((x) => x.messageId !== exceptMessageId)) await editCaption(botToken, a.chatId, a.messageId, caption);
 }
 
 function whoOf(contact: { username: string | null; igUserId: string }): string {
@@ -70,10 +70,6 @@ function whoOf(contact: { username: string | null; igUserId: string }): string {
  * чеков закрыто. Атомарно (условие в WHERE): нажатие кнопки владельцем и
  * автозакрытие одновременно не выдадут решение дважды.
  */
-export async function closeReceiptAlerts(contactId: string, how: string): Promise<number> {
-  return closeRows({ contactId, ownerDecision: "PENDING" }, how);
-}
-
 export async function closeReceiptById(id: string, how: string): Promise<number> {
   return closeRows({ id, ownerDecision: "PENDING" }, how);
 }
@@ -128,6 +124,17 @@ export async function closeSettledReceiptAlerts(now = Date.now()): Promise<numbe
   for (const r of pending) {
     // Покупки именно на те курсы, которые даёт сумма ЭТОГО чека; одна покупка
     // закрывает только один чек (чек за 50 не закрывается выдачей курса за 70).
+    // Если этот человек уже получил другой принятый чек рядом по времени, покупка
+    // могла появиться от него - не закрываем, решает владелец.
+    const neighbours = await prisma.receiptCheck.count({
+      where: {
+        contactId: r.contactId,
+        id: { not: r.id },
+        createdAt: { gte: new Date(r.createdAt.getTime() - 2 * 3_600_000), lte: new Date(r.createdAt.getTime() + 2 * 3_600_000) },
+        OR: [{ linkSent: true }, { ownerDecision: "APPROVED" }, { ownerDecision: "HANDLED" }],
+      },
+    });
+    if (neighbours > 0) continue;
     const courses = await coursesForAmount(r.amount ?? 0);
     if (courses.length === 0) continue;
     const delivered = await deliveredCoursesSince(r.contactId, r.createdAt);

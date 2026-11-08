@@ -29,7 +29,7 @@ vi.mock("../../src/courses.js", async (importOriginal) => ({
 import { handleTelegramUpdate } from "../../src/telegramWebhook.js";
 import { decideReceipt } from "../../src/receiptDecision.js";
 import {
-  closeReceiptAlerts,
+  closeReceiptById,
   closeSettledReceiptAlerts,
   parseAlerts,
   resetSweepClock,
@@ -129,10 +129,10 @@ describe("decideReceipt", () => {
 });
 
 describe("автозакрытие тревоги", () => {
-  it("closeReceiptAlerts: чек закрыт как HANDLED, карточка переписана", async () => {
+  it("closeReceiptById: чек закрыт как HANDLED, карточка переписана", async () => {
     db.model("receiptCheck").findMany.mockResolvedValue([row()]);
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
-    expect(await closeReceiptAlerts(contact.id, "Ширин уже отправила ссылку сама")).toBe(1);
+    expect(await closeReceiptById("r1", "Ширин уже отправила ссылку сама")).toBe(1);
     expect(db.model("receiptCheck").updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "r1", ownerDecision: "PENDING" } }),
     );
