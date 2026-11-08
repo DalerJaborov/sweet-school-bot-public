@@ -1,3 +1,4 @@
+import { recoveryCodeForToken } from "./linkCode.js";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { env } from "../env.js";
@@ -125,6 +126,10 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
     return;
   }
   const result = await openByLink(req, res, parsed.data.token, parsed.data.fingerprint, parsed.data.replaceOldest ?? false);
+  // Публичный код для готового сообщения в WhatsApp (linkCode.ts): производный,
+  // сам код ссылки из него не восстановить. Отдаём и при отказе — он нужен как
+  // раз на экране ошибки.
+  const recoveryCode = recoveryCodeForToken(parsed.data.token);
   if (!result.ok) {
     // При упоре в лимит показываем, какие устройства заняли места, — экран
     // «заменить самое старое?» строится из этого.
@@ -141,12 +146,13 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
               (contact.deviceSwapAt && contact.deviceSwapAt.getTime() > Date.now() - 30 * 86_400_000 ? contact.deviceSwaps : 0)
           )
         : 0;
-      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, swapsLeft });
+      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, swapsLeft, recoveryCode });
       return;
     }
-    return deny(res, result);
+    res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, recoveryCode });
+    return;
   }
-  res.json({ ok: true, contactId: result.contact.id });
+  res.json({ ok: true, contactId: result.contact.id, recoveryCode });
 });
 
 /** Установленное приложение обменивает pair-токен на сессию (см. access.ts). */

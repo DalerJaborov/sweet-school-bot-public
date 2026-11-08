@@ -311,7 +311,43 @@ export function browserFingerprint(): string {
  * устройство. Без подтверждения на 429 прилетает CourseError c `data`:
  * список устройств и сколько замен осталось (см. CourseError.deviceLimit).
  */
-export function openWithToken(token: string, replaceOldest = false): Promise<{ ok: boolean; contactId: string }> {
+const RECOVERY_KEY = "course.recoveryCode";
+
+/**
+ * Публичный код покупательницы (его выводит сервер из ссылки; сам код ссылки
+ * из него не восстановить). Нужен экрану ошибки: ссылка к тому времени уже
+ * убрана из адреса. Хранилища может не быть (приватный режим) — тогда без кода.
+ */
+function rememberRecoveryCode(code: unknown): void {
+  if (typeof code !== "string" || !/^[0-9A-F]{4}-[0-9A-F]{4}$/.test(code)) return;
+  try {
+    localStorage.setItem(RECOVERY_KEY, code);
+  } catch {
+    // нет хранилища — не страшно
+  }
+}
+
+export function storedRecoveryCode(): string | null {
+  try {
+    const code = localStorage.getItem(RECOVERY_KEY);
+    return code && /^[0-9A-F]{4}-[0-9A-F]{4}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function openWithToken(token: string, replaceOldest = false): Promise<{ ok: boolean; contactId: string }> {
+  try {
+    const res = await openRequest(token, replaceOldest);
+    rememberRecoveryCode((res as { recoveryCode?: unknown }).recoveryCode);
+    return res;
+  } catch (err) {
+    if (err instanceof CourseError) rememberRecoveryCode(err.data?.recoveryCode);
+    throw err;
+  }
+}
+
+function openRequest(token: string, replaceOldest: boolean): Promise<{ ok: boolean; contactId: string }> {
   return request("/open", {
     method: "POST",
     body: JSON.stringify({

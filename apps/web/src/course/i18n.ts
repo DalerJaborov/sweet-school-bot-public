@@ -50,6 +50,7 @@ const RU = {
   buyCourseUrl: "https://shirinsweets.online/online-kurs",
   /** Предзаполненный текст в WhatsApp, когда ссылка на уроки не открылась. */
   linkBrokenWa: "Здравствуйте! Моя ссылка на уроки не открывается",
+  linkBrokenCode: "Мой код",
 
   // Главная
   greeting: (name: string) => `Здравствуйте, ${name}`,
@@ -260,6 +261,7 @@ const TG: typeof RU = {
   buyCourse: "Курсро харидан",
   buyCourseUrl: "https://shirinsweets.online/tg/online-kurs",
   linkBrokenWa: "Ассалому алейкум! Пайванди дарсҳои ман кушода намешавад",
+  linkBrokenCode: "Рамзи ман",
 
   greeting: (name: string) => `Ассалому алайкум, ${name}`,
   greetingNoName: "Ассалому алайкум",
