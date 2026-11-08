@@ -23,6 +23,7 @@ import {
 } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
+import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
 import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
@@ -346,9 +347,8 @@ export async function aiReply(
     (await alreadyOwnedBlock(contact, text)) +
     (await coldLeadNudge(contact, text)) +
     (await offlineSignupBlock(contact, text)) +
-    webChannelBlock(contact) +
-    (await deliveryPrompt(contact)) +
-    REPLY_POLICY_INSTRUCTION;
+    (await freeLessonBlock()) +
+    webChannelBlock(contact) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).
   let model = (await getSetting("aiModel")) || "gemini-3.6-flash";

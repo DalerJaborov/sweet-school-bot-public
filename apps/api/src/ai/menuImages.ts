@@ -1,72 +1,94 @@
 import { prisma, recordOutgoingMessage } from "../db.js";
+import { env } from "../env.js";
 import { sendToContact, sendImageToContact } from "../messaging/send.js";
 import { getPrices } from "../services/priceService.js";
 import type { PriceTable } from "../prices.js";
+import { detectClientLanguage } from "./clientLanguage.js";
 import type { Contact } from "@prisma/client";
 
 /**
  * КАРТИНКИ МЕНЮ ВМЕСТО ТЕКСТА МОДЕЛИ.
  *
- * Те же изображения, что уже уходят на шаге 11/21 обеих приветственных воронок
- * (см. FunnelStep.mediaUrl) — здесь просто переиспользуются по прямой ссылке,
- * без похода в базу за шагом воронки: это разные вещи (там — заготовленная
- * последовательность для новых людей, тут — ответ на вопрос посреди разговора).
+ * Три меню — онлайн «21 рецепт», онлайн «арт-десерты» и офлайн-курс в Душанбе — на двух
+ * языках. Картинки рисует `apps/web/scripts/render-menu-cards.mjs` из тех же файлов, что
+ * собирают сайт, и лежат на сайте (`/img/menus/…`), откуда их забирает Meta. Цен и дат на
+ * них нет нарочно: они меняются в «Текстах и ценах», картинка устарела бы молча.
+ *
+ * Названия десертов на таджикском остаются русскими — правило владельца 08.11.2026.
  */
-type CourseKey = "COURSE50" | "COURSE70";
+export type CourseKey = "online70" | "online50" | "offline";
 
-const MENU_IMAGE: Record<CourseKey, string> = {
-  COURSE50:
-    "https://manybot-thumbnails.s3.eu-central-1.amazonaws.com/fb4433534/ca/big_69c2e6c900233215cc5859be98a8dfac.png",
-  COURSE70:
-    "https://manybot-thumbnails.s3.eu-central-1.amazonaws.com/fb4433534/ca/big_520f0415e6e8186f74549581ec462c91.jpg",
+const FILE: Record<CourseKey, string> = {
+  online70: "menu-online-70",
+  online50: "menu-online-50",
+  offline: "menu-offline",
 };
 
-/** Подпись к меню — цена из раздела «Цены и даты». Раньше «50/70 сомона» были
- *  вписаны сюда: смена цены в панели не доходила до этой подписи. */
-export function menuCaption(course: CourseKey, prices: PriceTable): string {
-  return `Дар курси ${prices.price[course]} сомона инхо дохил мешаванд`;
+export function menuImageUrl(course: CourseKey, lang: "ru" | "tg"): string {
+  const base = (env.publicBaseUrl || "https://shirinsweets.online").replace(/\/+$/, "");
+  return `${base}/img/menus/${FILE[course]}-${lang}.jpg`;
 }
 
-/** Признаки, по которым разговор уже понятно про какой курс — цена курса
- *  («70 сомони») по ТЕКУЩЕЙ таблице и названия («21 намуд», «арт-десерт», «9 намуд»). */
-function mentions(prices: PriceTable): Record<CourseKey, RegExp> {
+const CAPTION: Record<CourseKey, Record<"ru" | "tg", string>> = {
+  online70: { ru: "Вот что входит в онлайн-курс «21 рецепт»", tg: "Инҳо ба курси онлайн «21 рецепт» дохил мешаванд" },
+  online50: { ru: "Вот программа курса «Арт-десерты»", tg: "Ин барномаи курси «Арт-десерты» аст" },
+  offline: { ru: "Вот как проходит офлайн-курс в Душанбе", tg: "Курси офлайн дар Душанбе ингуна мегузарад" },
+};
+
+/** Признаки, по которым понятно, про какой курс речь. Цена курса («70 сомони») берётся
+ *  из ТЕКУЩЕЙ таблицы «Цены и даты», а не вписана сюда. */
+const MENTIONS_OFFLINE = /офлайн|оффлайн|offline|душанбе|очно|на\s+месте/iu;
+function priceMentions(prices?: PriceTable): { online70: RegExp; online50: RegExp } {
+  const p70 = prices?.price.COURSE70 ?? 70;
+  const p50 = prices?.price.COURSE50 ?? 50;
   return {
-    COURSE70: new RegExp(`(?<!\\d)${prices.price.COURSE70}\\s*сомон|21\\s*(намуд|рецепт|видео|дарс)`, "iu"),
-    COURSE50: new RegExp(`(?<!\\d)${prices.price.COURSE50}\\s*сомон|арт[\\s-]?десерт|9\\s*намуд`, "iu"),
+    online70: new RegExp(String.raw`(?<!\d)${p70}\s*сомон|21\s*(намуд|рецепт|видео|дарс|десерт|ширин)`, "iu"),
+    online50: new RegExp(String.raw`(?<!\d)${p50}\s*сомон|арт[\s-]?десерт|9\s*намуд|10\s*(дарс|урок)`, "iu"),
   };
 }
 
+function mentioned(blob: string, prices?: PriceTable): CourseKey[] {
+  const re = priceMentions(prices);
+  const found: CourseKey[] = [];
+  if (MENTIONS_OFFLINE.test(blob)) found.push("offline");
+  if (re.online70.test(blob)) found.push("online70");
+  if (re.online50.test(blob)) found.push("online50");
+  return found;
+}
+
 /**
- * Какой курс имеется в виду — смотрим на текущее сообщение и последние
- * несколько реплик разговора (в обе стороны: бот мог сам назвать курс раньше).
- * Не поняли, какой именно, — шлём ОБА меню: дороже смолчать про один из них,
- * чем прислать лишнюю картинку.
+ * Какой курс имеется в виду. Текущее сообщение главнее: назвал курс сам — историю не
+ * слушаем. Иначе смотрим последние реплики (бот мог назвать курс раньше). Не поняли —
+ * оба онлайн-меню: дороже смолчать про курс, чем прислать лишнюю картинку. Офлайн без
+ * упоминания не шлём: тому, кто про него не спрашивал, это лишнее.
  */
-async function inferCourses(contactId: string, currentText: string, prices: PriceTable): Promise<CourseKey[]> {
-  const recent = await prisma.message.findMany({
-    where: { contactId, text: { not: null } },
-    orderBy: { createdAt: "desc" },
-    take: 8,
-    select: { text: true },
-  });
-  const blob = [currentText, ...recent.map((m) => m.text ?? "")].join("\n");
-  const re = mentions(prices);
-  const has70 = re.COURSE70.test(blob);
-  const has50 = re.COURSE50.test(blob);
-  if (has70 && !has50) return ["COURSE70"];
-  if (has50 && !has70) return ["COURSE50"];
-  return ["COURSE70", "COURSE50"];
+export function inferCourses(currentText: string, recentTexts: string[], prices?: PriceTable): CourseKey[] {
+  const now = mentioned(currentText, prices);
+  if (now.length) return now;
+  const before = mentioned(recentTexts.join("\n"), prices);
+  if (before.length === 1) return before;
+  if (before.length > 1) {
+    const online = before.filter((c) => c !== "offline");
+    return online.length ? online : before;
+  }
+  return ["online70", "online50"];
 }
 
 /** Вызывается из ai.ts вместо хода модели, когда detectMenuQuestion() узнал
  *  вопрос про список десертов курса (см. offTopicGuard.ts). */
 export async function sendMenuImages(contact: Contact, text: string): Promise<void> {
-  const prices = await getPrices();
-  const courses = await inferCourses(contact.id, text, prices);
+  const recent = await prisma.message.findMany({
+    where: { contactId: contact.id, text: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 8,
+    select: { text: true },
+  });
+  const courses = inferCourses(text, recent.map((m) => m.text ?? ""), await getPrices());
+  const lang = detectClientLanguage(text) === "tg" ? "tg" : "ru";
   for (const course of courses) {
-    const caption = menuCaption(course, prices);
+    const caption = CAPTION[course][lang];
     const mid = await sendToContact(contact, caption);
     await recordOutgoingMessage(contact.id, caption, mid);
-    await sendImageToContact(contact, MENU_IMAGE[course]);
+    await sendImageToContact(contact, menuImageUrl(course, lang));
   }
 }
