@@ -1,4 +1,5 @@
 import { Icons } from "../components/Brand";
+import { BehaviorSwitches } from "../components/BehaviorSwitches";
 import { InstallApp } from "../components/InstallApp";
 import { Switch } from "../components/Switch";
 import { MORE_SECTIONS, type Tab } from "../panel/nav";
@@ -67,6 +68,7 @@ export function MorePage(props: { onGo: (tab: Tab) => void; onLogout: () => void
           <details className="more-expert">
             <summary>Для опытных</summary>
             <p className="hint">Редкие и настроечные разделы. Если не уверены — сюда можно не заходить.</p>
+            <BehaviorSwitches />
             <div className="more-list">
               {expert.map((s) => (
                 <MoreItem key={s.id} label={s.label} about={s.about} onClick={() => onGo(s.id)} />

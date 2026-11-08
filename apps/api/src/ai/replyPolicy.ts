@@ -89,4 +89,18 @@ export function cleanAutomatedReply(text: string): string {
   return text.replace(/\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu, "").trim();
 }
 
+/** Разрешённые тёплые завершающие смайлики (voice.ts::maybeWarmEmoji, ai/reactions.ts). */
+const WARM_TAIL = /\s(❤️|🌸|💚|🤍|🥰|😊|✨|🌷)$/u;
+
+/**
+ * Общая чистка от смайликов, но ОДИН тёплый смайлик в самом конце остаётся: без этого
+ * решение владельца «редко ставить ❤️ или 🌸, как Ширин» не доходило до клиента (send.ts
+ * срезал всё), а в историю писалось не то, что ушло (ревью 08.11.2026).
+ */
+export function cleanKeepingWarmTail(text: string): string {
+  const tail = WARM_TAIL.exec(text.trim());
+  const cleaned = cleanAutomatedReply(text);
+  return tail && cleaned ? `${cleaned} ${tail[1]}` : cleaned;
+}
+
 export const REPLY_POLICY_INSTRUCTION = "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Без эмодзи. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ.";

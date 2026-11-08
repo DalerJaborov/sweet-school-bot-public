@@ -326,7 +326,7 @@ class Bridge {
   }
 
   async send(input) {
-    const { operationId, chatId, replyToId, purpose, text, mediaUrl, mediaType } = input || {};
+    const { operationId, chatId, replyToId, purpose, text, mediaUrl, mediaType, markSeen } = input || {};
     if (typeof operationId !== 'string' || !/^[a-zA-Z0-9:_-]{1,180}$/.test(operationId)
       || !directId(chatId) || typeof replyToId !== 'string' || !['reply', 'verified_receipt_access'].includes(purpose)
       || (typeof text !== 'string' && typeof mediaUrl !== 'string') || (text && text.length > 12000)) throw failure('Invalid send request', 400);
@@ -351,7 +351,8 @@ class Bridge {
         || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
       await this.assertSendAllowed(chatId, purpose);
       this.assertWithinLimits(chatId);
-      await this.pace(chatId, (text || '').length, mediaType === 'audio' && Boolean(mediaUrl));
+      // «Прочитано» только для обычного ответа (не для выдачи доступа по чеку) и если рубильник не выключен
+      await this.pace(chatId, (text || '').length, purpose === 'reply' && markSeen !== false, mediaType === 'audio' && Boolean(mediaUrl));
       const content = mediaUrl ? await this.mediaFromUrl(mediaUrl, mediaType) : text;
       // Network/media work may take time. Recheck immediately before dispatch.
       await this.assertSendAllowed(chatId, purpose);
@@ -398,13 +399,16 @@ class Bridge {
     if (!inbound || inbound.type !== 'incoming' || inbound.chatId !== chatId || inbound.accountId !== this.accountId
       || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
     await this.assertSendAllowed(chatId, 'reply');
+    this.assertWithinLimits(chatId); // реакция тоже считается в антибан-лимитах
     account.operations[operationId] = { status: 'sending', chatId, replyToId, purpose: 'reaction', createdAt: this.now() };
     this.save();
     try {
       const message = await this.client.getMessageById(inbound.messageId || replyToId);
       if (!message) throw new Error('Message not found');
       await message.react(emoji);
-      account.operations[operationId].status = 'sent'; this.save();
+      account.operations[operationId].status = 'sent';
+      if (this.pacing) (account.sendLog ||= []).push({ t: this.now(), chatId });
+      this.save();
       return { operationId, status: 'sent' };
     } catch (error) {
       account.operations[operationId].status = 'uncertain'; this.save(); this.report(error);
@@ -422,7 +426,7 @@ class Bridge {
   }
 
   /** Serialises all sends: random gap since the previous send, then a typing indicator sized to the text. */
-  pace(chatId, textLength, voice = false) {
+  pace(chatId, textLength, seen = true, voice = false) {
     const p = this.pacing; if (!p) return Promise.resolve();
     const run = this.paceChain.catch(() => {}).then(async () => {
       const gap = p.minGapMs + this.random() * (p.maxGapMs - p.minGapMs);
@@ -434,8 +438,8 @@ class Bridge {
         : Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
       try {
         const chat = await this.client.getChatById?.(chatId);
-        // Прочитала → набирает (или записывает голосовое): так делает человек (owner 08.11.2026).
-        try { await chat?.sendSeen?.(); } catch { /* отметка прочтения не должна ломать «печатает» */ }
+        // Прочитала → набирает (или записывает голосовое): так делает человек (owner 08.11.2026). Только когда мы отвечаем.
+        if (seen) { try { await chat?.sendSeen?.(); } catch { /* отметка прочтения не должна ломать «печатает» */ } }
         await (voice ? chat?.sendStateRecording?.() : chat?.sendStateTyping?.());
         await this.sleep(typingMs);
         await chat?.clearState?.();

@@ -34,6 +34,17 @@ export const SETTING_KEYS = [
   // Голосовая модель читалась кодом (ai.ts), но в этом списке её не было — то есть
   // настройка существовала только на бумаге: сменить её через админку было нельзя.
   "aiModelVoice",
+  // Рубильники поведения помощника (по умолчанию включены; "false" выключает) — панель «Ещё → Для опытных».
+  "replyGateEnabled",
+  "reactionsEnabled",
+  "readReceiptsEnabled",
+  "warmEmojiEnabled",
+  "replySplitInstagram",
+  "replySplitWhatsapp",
+  "replySplitWeb",
+  "replySplitMaxParts",
+  "aiModelGate",
+  "aiModelGateStt",
   "courseAccessLink",
   "telegramBotToken",
   "telegramChatId50",
