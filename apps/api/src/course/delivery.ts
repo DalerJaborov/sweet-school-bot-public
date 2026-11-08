@@ -34,13 +34,15 @@ export async function deliveryMode(): Promise<DeliveryMode> {
  * Режим доставки ДЛЯ КОНКРЕТНОГО ЧЕЛОВЕКА. Пришедшей с сайта Telegram-группа
  * не нужна вовсе (у неё и Telegram может не быть — ради этого сайт и делался),
  * поэтому канал WEB всегда получает ссылку на платформу, какой бы режим ни
- * стоял в настройках. Для Instagram/Messenger — как настроил владелец.
+ * стоял в настройках. Для Instagram/Messenger/WhatsApp — как настроил владелец.
  */
 export async function deliveryModeFor(contact: {
   channel: string;
   courseDeliveryChoice?: string | null;
 }): Promise<DeliveryMode> {
-  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
+  // WhatsApp идёт по общей настройке, как Instagram (владелец 08.11.2026: «как только получаем деньги —
+  // пусть бот отправит ссылку на Телеграм, и всё»). Раньше WhatsApp был жёстко «только платформа».
+  if (["WEB", "MANUAL"].includes(contact.channel)) return "web";
   if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web")
     return contact.courseDeliveryChoice;
   return deliveryMode();
