@@ -36,6 +36,8 @@ const DEFAULT_PACING = {
   perChatWindowMs: 10 * 60 * 1000, perChatMax: 8, hourMax: 40, dayMax: 200,
 };
 const REACTION_EMOJI = new Set(['❤️', '🌸', '💚', '🤍', '🥰', '😊', '✨', '🌷']);
+/** Сколько ждать эхо своей отправки, когда библиотека не вернула id (WA Web 2.3000.105x). */
+const ECHO_WAIT_MS = 25_000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -323,6 +325,8 @@ class Bridge {
     if (!message.hasMedia) return undefined;
     const msgId = idOf(message.id);
     if (!msgId) throw failure('Message has no id for media download');
+    // Без страницы браузера (тесты, заглушки) — обычный путь библиотеки.
+    if (!this.client?.pupPage) return (await message.downloadMedia?.()) || undefined;
     const result = await this.client.pupPage.evaluate(async (msgId) => {
       const collections = window.require('WAWebCollections');
       const msg = collections.Msg.get(msgId) || (await collections.Msg.getMessagesById([msgId]))?.messages?.[0];
@@ -485,9 +489,10 @@ class Bridge {
       const ownSend = new Promise(resolve => { settle = resolve; });
       this.sending.set(chatId, ownSend);
       const echo = (() => {
-        let resolve, timer; const promise = new Promise((res, rej) => { resolve = res; timer = setTimeout(() => rej(failure('No echo for own send')), 25_000); });
+        // Ждём эхо через this.sleep (подменяется в тестах), а не через голый setTimeout.
+        let resolve, done = false; const promise = new Promise((res, rej) => { resolve = res; this.sleep(ECHO_WAIT_MS).then(() => { if (!done) rej(failure('No echo for own send')); }); });
         const matches = m => mediaUrl ? Boolean(m.hasMedia) : (typeof m.body === 'string' && m.body === content);
-        const waiter = { matches, resolve: id => { clearTimeout(timer); resolve(id); } };
+        const waiter = { matches, resolve: id => { done = true; resolve(id); } };
         (this.echoWaiters ||= new Map()).set(chatId, waiter);
         promise.finally(() => { if (this.echoWaiters.get(chatId) === waiter) this.echoWaiters.delete(chatId); }).catch(() => {});
         return { promise };
