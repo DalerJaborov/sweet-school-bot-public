@@ -73,7 +73,19 @@ export async function trySendVoiceReply(
   // ошибку отдаём вызывающему (мост запрещает автоповтор при неопределённом исходе).
   // Паузы между кусками (4-9 с) держит мост: это его антибан-темп, он же показывает «записывает аудио».
   let mid: string | null = null;
-  for (const url of urls) mid = await sendAttachmentToContact(contact, url, "audio");
+  let sent = 0;
+  try {
+    for (const url of urls) {
+      mid = await sendAttachmentToContact(contact, url, "audio");
+      sent += 1;
+    }
+  } catch (err) {
+    // Часть голосовых уже у клиента: запоминаем, что ушло, чтобы история и панель не считали, что бот молчал.
+    if (sent > 0) {
+      await recordOutgoingMessage(contact.id, `${VOICE_MARK}(ушло ${sent} из ${urls.length}) ${text.trim()}`, mid).catch((e) => logError("voiceReply:record", e));
+    }
+    throw err;
+  }
   await recordOutgoingMessage(contact.id, `${VOICE_MARK}${text.trim()}`, mid);
   return true;
 }

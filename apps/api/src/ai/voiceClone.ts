@@ -162,11 +162,14 @@ export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
   await chargeOrRefuse(text.length);
   const mp3 = await synthesizeSpeech(text);
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
-  const opus = await toOpusOgg(mp3, 30_000, true);
-  const name = `tts-${key}.${opus ? "ogg" : "mp3"}`;
+  // Сложный фильтр не вышел - пробуем перекодировать без него. mp3 как голосовое НЕ отдаём и не кешируем:
+  // на iPhone он не играет (ревью 08.11.2026), лучше честная ошибка и ответ текстом.
+  const opus = (await toOpusOgg(mp3, 30_000, true)) ?? (await toOpusOgg(mp3, 30_000, false));
+  if (!opus) throw new VoiceCloneError("Не удалось подготовить голосовое (ffmpeg)", 503);
+  const name = `tts-${key}.ogg`;
   // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».
   const target = path.join(MEDIA_DIR, name);
-  fs.writeFileSync(`${target}.tmp`, opus ?? mp3);
+  fs.writeFileSync(`${target}.tmp`, opus);
   fs.renameSync(`${target}.tmp`, target);
   return { url: `${env.publicBaseUrl}/media/${name}`, cached: false };
 }
