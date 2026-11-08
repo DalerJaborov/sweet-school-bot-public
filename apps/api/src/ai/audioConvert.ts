@@ -12,10 +12,10 @@ import { spawn } from "node:child_process";
  * громкость и подмешиваем очень тихий фон. Чем студийнее голос, тем быстрее он выдаёт бота.
  */
 export const HUMANIZE_FILTER =
-  "[0:a]adelay=350|350,highpass=f=140,lowpass=f=6200,equalizer=f=2800:t=q:w=1:g=2," +
-  "acompressor=threshold=-20dB:ratio=4:attack=10:release=200,aecho=0.8:0.7:30|55:0.18|0.1[v];" +
-  "anoisesrc=color=pink:amplitude=0.012:sample_rate=48000[n1];anoisesrc=color=brown:amplitude=0.02:sample_rate=48000[n2];" +
-  "[v][n1][n2]amix=inputs=3:duration=first:normalize=0[o]";
+  "[0:a]adelay=250|250,highpass=f=100,lowpass=f=7500,acompressor=threshold=-20dB:ratio=3:attack=15:release=250," +
+  "aecho=0.85:0.6:25:0.10[v];" +
+  "anoisesrc=color=pink:amplitude=0.0025:sample_rate=48000[n];" +
+  "[v][n]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=9[o]";
 
 export function toOpusOgg(input: Buffer, timeoutMs = 30_000, humanize = false): Promise<Buffer | null> {
   return new Promise((resolve) => {

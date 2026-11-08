@@ -38,7 +38,7 @@ export async function voiceEnabled(): Promise<boolean> {
 }
 
 /** Версия пост-обработки звука: меняем при смене фильтра, чтобы кеш не отдавал старое звучание. */
-const VOICE_POST = "phone-v2";
+const VOICE_POST = "phone-v3";
 const VOICE_SETTINGS = { stability: 0.45, similarity_boost: 0.85, style: 0.3, use_speaker_boost: true };
 const MEDIA_DIR = "/data/uploads";
 export const DEFAULT_MONTHLY_CAP_USD = 20;
