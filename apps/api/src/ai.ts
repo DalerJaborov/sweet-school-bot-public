@@ -37,6 +37,7 @@ import { buildInsightsBlock } from "./nightlyLearning.js";
 import { buildObjectionsBlock } from "./ai/objectionLibrary.js";
 import { maybeRestoreAccess } from "./course/recovery.js";
 import { maybeWarmEmoji } from "./voice.js";
+import { splitHumanLike, splitOptionsFor } from "./ai/replySplit.js";
 import { passesRelevanceGate } from "./ai/relevanceGate.js";
 import { reactInsteadOfReply } from "./ai/reactions.js";
 import type { Contact } from "@prisma/client";
@@ -477,7 +478,13 @@ export async function aiReply(
         // Несколько коротких сообщений вместо одного полотна — см. splitReplyParts.
         // Паузу между ними держит sendText сам (человеческий темп набора; на
         // сайте паузы нет — см. messaging/send.ts).
-        for (const part of splitReplyParts(replyText)) {
+        const splitOpts = splitOptionsFor(contact.channel, {
+          instagram: await getSetting("replySplitInstagram"),
+          whatsapp: await getSetting("replySplitWhatsapp"),
+          web: await getSetting("replySplitWeb"),
+          maxParts: await getSetting("replySplitMaxParts"),
+        });
+        for (const part of splitHumanLike(replyText, splitOpts)) {
           const mid = await sendToContact(contact, part);
           await recordOutgoingMessage(contact.id, part, mid);
         }
