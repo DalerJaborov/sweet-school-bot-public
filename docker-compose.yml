@@ -13,7 +13,7 @@ services:
       NODE_ENV: production
       # Вход в панель: 0 = пароль + подпись Telegram (по умолчанию, решение владельца 08.11.2026),
       # 1 = только Cloudflare Access (тогда нужны четыре переменные ниже).
-      SCHOOL_ACCESS_REQUIRED: ${SCHOOL_ACCESS_REQUIRED:-0}
+      SCHOOL_ACCESS_REQUIRED: ${SCHOOL_ACCESS_REQUIRED:?Set SCHOOL_ACCESS_REQUIRED to 0 or 1}
       SCHOOL_ACCESS_TEAM_DOMAIN: ${SCHOOL_ACCESS_TEAM_DOMAIN:-}
       SCHOOL_ACCESS_AUDIENCE: ${SCHOOL_ACCESS_AUDIENCE:-}
       SCHOOL_ADMIN_EMAIL: ${SCHOOL_ADMIN_EMAIL:-}
