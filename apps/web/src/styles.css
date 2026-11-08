@@ -228,13 +228,14 @@ h1, h2, h3 { line-height: 1.25; }
   height: 34px;
   flex: none;
   border-radius: 11px;
-  background: var(--accent);
+  background: #9c0004;
   display: grid;
   place-items: center;
   box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
-.logo-mark svg { width: 19px; height: 19px; }
+.logo-mark img { display: block; width: 100%; height: 100%; }
 .logo-text { display: flex; flex-direction: column; }
 .logo-text b { font-size: 15px; }
 .logo-text span {
