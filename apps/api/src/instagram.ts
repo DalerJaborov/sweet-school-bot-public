@@ -142,6 +142,21 @@ async function senderAction(igUserId: string, action: "mark_seen" | "typing_on",
 }
 
 /**
+ * Реакция-смайлик на входящее сообщение (официальный sender_action=react, документация
+ * Meta Instagram Messaging; permissions instagram_business_manage_messages). Ошибку НЕ
+ * глотаем: вызывающий (ai/reactions.ts) тогда ответит обычным текстом.
+ */
+export async function reactToInstagramMessage(igUserId: string, messageId: string, emoji: string): Promise<void> {
+  await assertMessagingAllowed();
+  await callGraph(
+    `/${GRAPH_VERSION}/me/messages`,
+    { recipient: { id: igUserId }, sender_action: "react", payload: { message_id: messageId, reaction: emoji === "❤️" ? "love" : emoji } },
+    "INSTAGRAM",
+    8_000
+  );
+}
+
+/**
  * СКОЛЬКО «НАБИРАТЬ» ПЕРЕД ОТВЕТОМ.
  *
  * Ровный интервал выдаёт автомат даже подсознательно: живой человек то отвечает за
@@ -179,7 +194,7 @@ export async function sendText(
   await assertMessagingAllowed();
   const clean = await withoutRepeatGreeting(igUserId, text, channel);
   // Прочитали → набираем → отвечаем: порядок как у живого человека (см. senderAction).
-  await senderAction(igUserId, "mark_seen", channel);
+  if ((await getSetting("readReceiptsEnabled")) !== "false") await senderAction(igUserId, "mark_seen", channel);
   await senderAction(igUserId, "typing_on", channel);
   await sleep(typingDelayMs(clean));
 

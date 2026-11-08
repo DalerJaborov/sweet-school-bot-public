@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { prisma } from "../db.js";
+import { prisma, getSetting } from "../db.js";
 import type { QuickButton } from "../instagram.js";
 import { currentReceiptEvidence, assertMessagingAllowed } from "../messaging/automation.js";
 import { bridgeRequest, whatsappMessageId, type ContactStatus } from "./client.js";
@@ -50,7 +50,8 @@ export async function sendWhatsAppText(contact: Recipient, text: string, buttons
   const auth = await authorization(contact, purpose);
   const plain = buttons.length ? `${text}\n\n${buttons.map(b => b.title).join("\n")}` : text;
   await assertMessagingAllowed();
-  const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, text: plain });
+  const markSeen = (await getSetting("readReceiptsEnabled")) !== "false";
+  const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, text: plain, markSeen });
   return whatsappMessageId(auth.accountId, sent.messageId);
 }
 export async function sendWhatsAppAttachment(contact: Recipient, mediaUrl: string, mediaType: string, purpose: Purpose = "reply", caption?: string): Promise<string> {
@@ -58,4 +59,14 @@ export async function sendWhatsAppAttachment(contact: Recipient, mediaUrl: strin
   await assertMessagingAllowed();
   const sent = await bridgeRequest<{ messageId: string }>("/send", { ...auth, mediaUrl, mediaType, ...(caption ? { text: caption } : {}) });
   return whatsappMessageId(auth.accountId, sent.messageId);
+}
+
+/** Реакция-смайлик на текущее входящее сообщение (как у живого человека). Те же замки, что у ответа — их держит мост. */
+export async function sendWhatsAppReaction(contact: Recipient, emoji: string): Promise<void> {
+  if (contact.channel !== "WHATSAPP") throw new Error("Не тот канал отправки");
+  const active = currentWhatsAppTurn();
+  if (!active || active.contactId !== contact.id) throw new Error("WhatsApp: реакция только на новое входящее сообщение");
+  await assertMessagingAllowed();
+  const operationId = createHash("sha256").update(`${active.inboxId}:react`).digest("hex");
+  await bridgeRequest("/react", { operationId, chatId: active.chatId, replyToId: active.messageId, emoji });
 }

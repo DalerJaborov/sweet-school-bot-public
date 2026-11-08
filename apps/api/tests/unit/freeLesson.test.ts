@@ -16,10 +16,21 @@ const state = vi.hoisted(() => ({
     posterPath: null,
   },
   create: vi.fn(),
+  siblings: [
+    {
+      id: "paid-1", title: "Рафаэлло", order: 2, coverPath: "covers/paid-1.jpg", posterPath: null,
+      hlsPath: "courses/c/paid-1/master.m3u8", encryptionKey: "SECRETKEY", recipeText: "Мука 250 г", recipePhotos: "[\"recipes/x.png\"]",
+      recipeData: JSON.stringify({ title: "Рафаэлло", language: "ru", components: [{ name: "Крем", items: [
+        { ingredient: "Сливки 33%", amount: "250", unit: "мл", note: null, emoji: null },
+        { ingredient: "Кокосовая стружка 120 г", amount: null, unit: null, note: null, emoji: null },
+        { ingredient: "Сливки 33%", amount: "100", unit: "мл", note: null, emoji: null },
+      ] }] }),
+    },
+  ],
 }));
 vi.mock("../../src/db.js", () => ({
   getSetting: (key: string) => Promise.resolve(state.settings.get(key) ?? null),
-  prisma: { lesson: { findFirst: vi.fn(async () => state.lesson) }, freeLessonLead: { create: state.create } },
+  prisma: { lesson: { findFirst: vi.fn(async () => state.lesson), findMany: vi.fn(async () => state.siblings.map(({ id, title, order, coverPath, posterPath, recipeData }) => ({ id, title, order, coverPath, posterPath, recipeData }))) }, module: { findUnique: vi.fn(async () => ({ courseId: "course-1" })) }, freeLessonLead: { create: state.create } },
 }));
 vi.mock("../../src/env.js", () => ({ env: { jwtSecret: "local-free-test", publicBaseUrl: "http://localhost" } }));
 vi.mock("../../src/storage/s3.js", () => ({ storageConfig: async () => ({}), presignGet: vi.fn(), getObject: async () => Buffer.from("local image fixture") }));
@@ -99,5 +110,43 @@ describe("free lesson access boundary", () => {
     expect(validFreeGrant(jwt.sign({ kind: "course-session", lessonId: "sample" }, "local-free-test"), "sample")).toBe(
       false,
     );
+  });
+});
+
+describe("closed showcase (more lessons of the same course)", () => {
+  const on = () => {
+    state.settings.set("freeLessonEnabled", "true");
+    state.settings.set("freeLessonId", "sample");
+  };
+  it("returns nothing while the free lesson is off", async () => {
+    const res = await fetch(base + "/more", { headers: { cookie: `ssb_free_lesson=${token()}` } });
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain("Рафаэлло");
+  });
+  it("without the free-lesson cookie answers 401", async () => {
+    on();
+    expect((await fetch(base + "/more")).status).toBe(401);
+    expect((await fetch(base + "/more/paid-1/cover")).status).toBe(401);
+    expect((await fetch(base + "/more", { headers: { cookie: "ssb_free_lesson=forged" } })).status).toBe(401);
+  });
+  it("gives only order, title, cover and ingredients without amounts — no video, key or grams", async () => {
+    on();
+    const res = await fetch(base + "/more", { headers: { cookie: `ssb_free_lesson=${token()}` } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({
+      lessons: [
+        { id: "paid-1", title: "Рафаэлло", order: 1, coverUrl: `${FREE_BASE}/more/paid-1/cover`, ingredients: ["Сливки 33%", "Кокосовая стружка"] },
+      ],
+    });
+    for (const leak of ["SECRETKEY", "m3u8", "hlsPath", "encryptionKey", "recipeText", "recipePhotos", "250", "120", "100", "amount", "unit"]) {
+      expect(body).not.toContain(leak);
+    }
+  });
+  it("serves a cover only for a lesson of the showcase, never an arbitrary id", async () => {
+    on();
+    const headers = { cookie: `ssb_free_lesson=${token()}` };
+    expect((await fetch(base + "/more/paid-1/cover", { headers })).status).toBe(200);
+    expect((await fetch(base + "/more/other/cover", { headers })).status).toBe(404);
   });
 });

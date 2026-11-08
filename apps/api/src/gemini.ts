@@ -49,7 +49,7 @@ export function throughProxy(url: string): string {
  * там же на боевом ключе — незачем повторять ту же проверку заново здесь и
  * рисковать той же ошибкой на своём трафике.
  */
-const MINIMAL_THINKING_UNSUPPORTED = [/^gemini-3\.7-/];
+const MINIMAL_THINKING_UNSUPPORTED = [/^gemini-3\.[78]-/];
 
 /** «Размышление» съедает лимит ответа и тарифицируется как output по полной
  *  цене — глушим его до минимума, какой принимает конкретная модель. */
@@ -75,7 +75,8 @@ export function sleep(ms: number): Promise<void> {
  * что здесь (`low`) — ни одна не даёт 400 на этот параметр, поэтому список общий,
  * без разбора по семействам, как в основной CRM.
  */
-export const FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash", "gemini-3-flash-preview"];
+// gemini-3.1-flash убрана 08.11.2026: Google отвечает 404 (модели нет) — лишний запрос на каждый перебор.
+export const FALLBACK_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash-preview"];
 
 /** Токены израсходованного ответа — по ним считаются деньги (см. ai/pricing.ts). */
 export interface GeminiUsage {
@@ -95,9 +96,14 @@ export interface GeminiFunctionCall {
 
 /** Модель, которая реально ответила (не обязательно primaryModel — могла
  *  сработать резервная) — без неё цену вызова посчитать не по чему. */
-type GeminiResult = { text: string | null; model: string; usage: GeminiUsage; functionCalls?: GeminiFunctionCall[] } | { error: string };
+type GeminiResult =
+  { text: string | null; model: string; usage: GeminiUsage; functionCalls?: GeminiFunctionCall[] } | { error: string };
 
-function parseUsage(u?: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number }): GeminiUsage {
+function parseUsage(u?: {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  cachedContentTokenCount?: number;
+}): GeminiUsage {
   return {
     inputTokens: u?.promptTokenCount ?? 0,
     outputTokens: u?.candidatesTokenCount ?? 0,
@@ -118,7 +124,7 @@ export async function generateWithFallback(
   apiKeys: string[],
   primaryModel: string,
   buildBody: (model: string) => string,
-  totalBudgetMs: number
+  totalBudgetMs: number,
 ): Promise<GeminiResult> {
   const deadline = Date.now() + totalBudgetMs;
   const models = [primaryModel, ...FALLBACK_MODELS.filter((m) => m !== primaryModel)];
@@ -150,7 +156,12 @@ export async function generateWithFallback(
           const data = (await res.json()) as {
             candidates?: {
               content?: {
-                parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { name?: string; args?: Record<string, unknown> } }[];
+                parts?: {
+                  text?: string;
+                  thought?: boolean;
+                  thoughtSignature?: string;
+                  functionCall?: { name?: string; args?: Record<string, unknown> };
+                }[];
               };
               finishReason?: string;
             }[];

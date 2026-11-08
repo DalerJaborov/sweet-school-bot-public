@@ -2,6 +2,10 @@ import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { answerCallback, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds } from "./telegram.js";
 import { buildReport, offsetMs, truncate } from "./dailyReport.js";
 import { env } from "./env.js";
+import {
+  SITE_TARGETS, SITE_SOURCES, SOURCES_WITH_LABEL, TARGET_LABEL, SOURCE_LABEL, createSiteLink, shortUrl,
+  type SiteTarget, type SiteLang, type SiteSource,
+} from "./links/siteLinks.js";
 import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "./courses.js";
 
 /**
@@ -19,12 +23,21 @@ import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "./courses.js";
 export const BTN_REPORT = "📊 Сводка сейчас";
 export const BTN_WAITING = "⏳ Кто ждёт ответа";
 export const BTN_INVITE = "👥 Приглашение в группу";
+export const BTN_PAYMENTS = "💳 Последние оплаты";
+export const BTN_FIND = "🔎 Найти ученицу";
+export const BTN_GRANT = "🔑 Выдать доступ";
+export const BTN_LINK = "🔗 Ссылка на сайт";
+const PROMPT_LABEL = "Как назвать (имя блогера или рекламы)? Ответьте на это сообщение. #";
+// Вопрос бота с «ответом» (force_reply): по началу текста узнаём, чей это ответ.
+const PROMPT_FIND = "Кого найти? Ответьте на это сообщение ником";
+const PROMPT_GRANT = "Кому выдать доступ? Ответьте на это сообщение ником";
 const MENU_COMMANDS = ["/start", "/menu", "/меню"];
 
 type TgMessage = {
   message_id?: number;
   text?: string;
   chat?: { id?: number | string; type?: string };
+  reply_to_message?: { text?: string };
   from?: { id?: number | string };
 };
 
@@ -38,11 +51,17 @@ export type MenuQuery = {
 /** Постоянная клавиатура. «Открыть панель» — кнопка мини-приложения, только
  *  если известен https-адрес сайта (иначе Telegram отвергнет всю клавиатуру). */
 export function menuKeyboard(): Record<string, unknown> {
-  const rows: Record<string, unknown>[][] = [[{ text: BTN_REPORT }, { text: BTN_WAITING }], [{ text: BTN_INVITE }]];
+  const rows: Record<string, unknown>[][] = [
+    [{ text: BTN_REPORT }, { text: BTN_WAITING }],
+    [{ text: BTN_INVITE }, { text: BTN_PAYMENTS }],
+    [{ text: BTN_FIND }, { text: BTN_GRANT }],
+    [{ text: BTN_LINK }],
+    [],
+  ];
   if (env.publicBaseUrl.startsWith("https://")) {
-    rows[1].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
+    rows[4].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
   }
-  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
+  return { keyboard: rows.filter((r) => r.length > 0), resize_keyboard: true, is_persistent: true };
 }
 
 /** Какие группы можно пригласить: только те, у которых в настройках есть ID. */
@@ -104,12 +123,104 @@ export async function buildWaitingText(): Promise<string> {
   return lines.join("\n");
 }
 
+const COURSE_SHORT: Record<string, string> = { COURSE50: "Арт-десерты", COURSE70: "21 рецепт" };
+const handleOf = (c: { username: string | null; igUserId: string }) =>
+  c.username ? `@${c.username}` : `ID ···${c.igUserId.slice(-6)}`;
+
+/** Оплаты за 3 дня: кто, какой курс, сколько. */
+export async function buildPaymentsText(): Promise<string> {
+  const since = new Date(Date.now() - 3 * 24 * 3_600_000);
+  const rows = await prisma.purchase.findMany({
+    where: { createdAt: { gte: since }, revokedAt: null },
+    include: { contact: { select: { username: true, igUserId: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 15,
+  });
+  if (rows.length === 0) return "💳 За 3 дня оплат нет.";
+  const sum = rows.reduce((t, r) => t + r.amount, 0);
+  return [
+    `💳 За 3 дня: ${rows.length} шт. · ${sum} сомони`,
+    ...rows.map((r) => `   ${handleOf(r.contact)} · ${COURSE_SHORT[r.course] ?? r.course} · ${r.amount} с.`),
+  ].join("\n");
+}
+
+/** Карточка ученицы по нику: какие курсы куплены и в группе ли она. */
+export async function buildStudentText(nick: string): Promise<string> {
+  const username = nick.trim().replace(/^@/, "");
+  if (!username) return "Напишите ник, например @malika.";
+  const c = await prisma.contact.findFirst({ where: { username: { in: [username, username.toLowerCase()] } } });
+  if (!c) return `Не нашла @${username}. Проверьте ник.`;
+  const purchases = await prisma.purchase.findMany({
+    where: { contactId: c.id, revokedAt: null },
+    orderBy: { createdAt: "asc" },
+  });
+  if (purchases.length === 0) return `@${c.username}: курсов нет${c.paid ? "" : " (не оплачивала)"}.`;
+  return [
+    `🔎 @${c.username}`,
+    ...purchases.map(
+      (p) => `   ${COURSE_SHORT[p.course] ?? p.course} · ${p.amount} с. · ${p.joinedAt ? "в группе" : "ещё не вошла"}`,
+    ),
+    "Новую ссылку на уроки — кнопка «🔑 Выдать доступ».",
+  ].join("\n");
+}
+
+const isTarget = (v: string): v is SiteTarget => (SITE_TARGETS as readonly string[]).includes(v);
+const isSource = (v: string): v is SiteSource => (SITE_SOURCES as readonly string[]).includes(v);
+const isLang = (v: string): v is SiteLang => v === "tg" || v === "ru";
+
+async function makeSiteLink(target: SiteTarget, lang: SiteLang, source: SiteSource, label?: string): Promise<string> {
+  const link = await createSiteLink({ target, lang, source, label });
+  return `🔗 ${TARGET_LABEL[target]} · ${SOURCE_LABEL[source]}${link.label ? ` · ${link.label}` : ""}\n${shortUrl(link.code)}`;
+}
+
+/** Шаги «Ссылка на сайт»: куда → язык → откуда (→ имя для блогера/рекламы). */
+async function handleLinkStep(botToken: string, chatId: string, data: string): Promise<boolean> {
+  const t = /^mn:lt:([a-z]+)$/.exec(data);
+  if (t && isTarget(t[1])) {
+    await sendWithMarkup(botToken, chatId, "На каком языке страница?", {
+      inline_keyboard: [[{ text: "Тоҷикӣ", callback_data: `mn:ll:${t[1]}:tg` }, { text: "Русский", callback_data: `mn:ll:${t[1]}:ru` }]],
+    });
+    return true;
+  }
+  const l = /^mn:ll:([a-z]+):([a-z]+)$/.exec(data);
+  if (l && isTarget(l[1]) && isLang(l[2])) {
+    await sendWithMarkup(botToken, chatId, "Откуда придут люди?", {
+      inline_keyboard: SITE_SOURCES.map((x) => [{ text: SOURCE_LABEL[x], callback_data: `mn:ls:${l[1]}:${l[2]}:${x}` }]),
+    });
+    return true;
+  }
+  const r = /^mn:ls:([a-z]+):([a-z]+):([a-z]+)$/.exec(data);
+  if (r && isTarget(r[1]) && isLang(r[2]) && isSource(r[3])) {
+    if (SOURCES_WITH_LABEL.has(r[3])) {
+      await sendWithMarkup(botToken, chatId, `${PROMPT_LABEL}${r[1]}:${r[2]}:${r[3]}`, {
+        force_reply: true,
+        input_field_placeholder: "имя",
+      });
+    } else {
+      await sendTelegramMessage(botToken, chatId, await makeSiteLink(r[1], r[2], r[3]));
+    }
+    return true;
+  }
+  return false;
+}
+
 /** true — сообщение было командой меню и обработано; дальше его вести не нужно. */
 export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
   const text = (message.text ?? "").trim();
   const lower = text.toLowerCase();
   const isMenu = MENU_COMMANDS.some((c) => lower === c || lower.startsWith(`${c}@`));
-  if (!isMenu && ![BTN_REPORT, BTN_WAITING, BTN_INVITE].includes(text)) return false;
+  const replyTo = message.reply_to_message?.text ?? "";
+  const answeringFind = replyTo.startsWith(PROMPT_FIND);
+  const answeringGrant = replyTo.startsWith(PROMPT_GRANT);
+  const answeringLabel = replyTo.startsWith(PROMPT_LABEL);
+  if (
+    !isMenu &&
+    !answeringLabel &&
+    !answeringFind &&
+    !answeringGrant &&
+    ![BTN_REPORT, BTN_WAITING, BTN_INVITE, BTN_PAYMENTS, BTN_FIND, BTN_GRANT, BTN_LINK].includes(text)
+  )
+    return false;
 
   // Только личная переписка: в группе учениц эти слова — обычные сообщения.
   if (message.chat?.type && message.chat.type !== "private") return false;
@@ -120,6 +231,40 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
 
   const send = (body: string) => sendTelegramMessage(botToken, chatId, body, message.message_id ?? undefined);
 
+  if (answeringFind) {
+    await send(await buildStudentText(text));
+    return true;
+  }
+  if (answeringLabel) {
+    const m = /#([a-z]+):([a-z]+):([a-z]+)$/.exec(replyTo);
+    if (m && isTarget(m[1]) && isLang(m[2]) && isSource(m[3])) {
+      await send(await makeSiteLink(m[1], m[2], m[3], text));
+    }
+    return true;
+  }
+  if (text === BTN_LINK) {
+    await sendWithMarkup(botToken, chatId, "Куда ведёт ссылка?", {
+      inline_keyboard: SITE_TARGETS.map((t) => [{ text: TARGET_LABEL[t], callback_data: `mn:lt:${t}` }]),
+    });
+    return true;
+  }
+  if (answeringGrant) {
+    // Выдача — тем же путём, что команда «/ссылка @ник» (новая ссылка, старая гаснет).
+    const { handleManualLinkCommand } = await import("./course/manualLink.js");
+    await handleManualLinkCommand({ ...message, text: `/ссылка ${text}` });
+    return true;
+  }
+  if (text === BTN_PAYMENTS) {
+    await send(await buildPaymentsText());
+    return true;
+  }
+  if (text === BTN_FIND || text === BTN_GRANT) {
+    await sendWithMarkup(botToken, chatId, text === BTN_FIND ? PROMPT_FIND : PROMPT_GRANT, {
+      force_reply: true,
+      input_field_placeholder: "@ник",
+    });
+    return true;
+  }
   if (isMenu) {
     await sendWithMarkup(botToken, chatId, "Кнопки внизу — быстрые действия. Чеки приходят сюда же, с кнопками.", menuKeyboard());
     return true;
@@ -146,8 +291,13 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
 
 /** Нажатие кнопки меню (callback_data `mn:...`). Доверие уже проверено выше. */
 export async function handleMenuCallback(botToken: string, query: MenuQuery): Promise<void> {
-  const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");
   const chatId = query.message?.chat?.id != null ? String(query.message.chat.id) : String(query.from?.id ?? "");
+  if (query.id && chatId && /^mn:l[tls]:/.test(query.data ?? "")) {
+    await answerCallback(botToken, query.id, "");
+    await handleLinkStep(botToken, chatId, query.data ?? "").catch((err) => logError("telegramMenu:siteLink", err));
+    return;
+  }
+  const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");
   if (!match || !query.id || !chatId) return;
   const group = (await inviteGroups()).find((g) => g.key === match[1]);
   if (!group) {

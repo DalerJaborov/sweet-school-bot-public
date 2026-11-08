@@ -100,7 +100,10 @@ export async function processInbox(id: string): Promise<void> {
     }
     await aiReply(fresh, event.text, attachments, images);
   });
-  await prisma.whatsAppInbox.update({ where: { id }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+  // updateMany + условие: если шлюз «не по делу» уже перевёл строку в attention («нужен человек»),
+  // статус done её не затрёт.
+  await prisma.whatsAppInbox.updateMany({ where: { id, status: "processing" }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+  await prisma.whatsAppInbox.updateMany({ where: { id, status: "attention" }, data: { payload: JSON.stringify({ ...payload, media: undefined }) } });
 }
 
 export async function dispatchWhatsAppInbox(): Promise<void> {
@@ -141,6 +144,6 @@ export function startWhatsAppWorker(): void {
   // A process interrupted after dispatch may already have sent something.
   // Never blindly replay such a turn on restart.
   void prisma.whatsAppInbox.updateMany({ where: { status: "processing" }, data: { status: "attention", attentionReason: "restarted" } }).catch(e => logError("whatsapp:recover", e));
-  setInterval(() => { void ingestWhatsAppEvents().catch(e => logError("whatsapp:connection", e)); }, 2500).unref();
-  setInterval(() => { void dispatchWhatsAppInbox().catch(e => logError("whatsapp:queue", e)); }, 3000).unref();
+  setInterval(() => { void ingestWhatsAppEvents().catch(e => logError("whatsapp:connection", e)); }, 1000).unref();
+  setInterval(() => { void dispatchWhatsAppInbox().catch(e => logError("whatsapp:queue", e)); }, 1000).unref();
 }

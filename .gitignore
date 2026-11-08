@@ -34,3 +34,4 @@ services/whatsapp-bridge/data/
 !.env.*.example
 
 apps/web/ru/
+npmci.log
