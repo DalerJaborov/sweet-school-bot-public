@@ -22,7 +22,7 @@ vi.mock("../../src/ai/styleLearning.js", () => ({ markExamplesAsSuccessful: vi.f
 vi.mock("../../src/exchangeRates.js", () => ({ toSomoni: vi.fn(async () => null) }));
 vi.mock("../../src/courses.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/courses.js")>()),
-  allocate: vi.fn(async () => ({ grant: ["COURSE50"], note: "второй курс: Арт-десерты", discounted: false })),
+  allocate: vi.fn(async () => ({ grant: ["COURSE70"], note: "21 рецепт", discounted: false })),
 }));
 
 import { confirmRequisitesToCustomer, handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";

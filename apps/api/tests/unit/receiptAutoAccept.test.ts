@@ -228,6 +228,7 @@ describe("два скриншота одного перевода", () => {
   it("соседний разбор успел раньше: выдача вернула пусто, но курс уже доставлен — не тревога", async () => {
     grantCourses.mockResolvedValueOnce([]);
     db.model("purchase").count.mockResolvedValue(1);
+    db.model("contact").updateMany.mockResolvedValue({ count: 0 });
     await handleReceiptVerdict(contact, verdict({ imageHash: "hash-race" }));
     expect(sendReceiptForReview).not.toHaveBeenCalled();
     expect(createdData()).toMatchObject({ kind: "duplicate", ownerDecision: null });
@@ -341,7 +342,7 @@ describe("мошеннические сценарии (ревью)", () => {
     await handleReceiptVerdict(contact, verdict({ amount: 70, receiptAt: null, imageHash: "old70" }));
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
-    expect((sendReceiptForReview.mock.calls[0][2] as { caption: string }).caption).toMatch(/уже купленного курса/);
+    expect((sendReceiptForReview.mock.calls[0][2] as { caption: string }).caption).toMatch(/уже оплачивали/);
   });
 
   it("то же с датой: сумма ближе к цене купленного курса - всё равно владельцу", async () => {

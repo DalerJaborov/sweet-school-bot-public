@@ -10,7 +10,6 @@ import { getQuickReplies } from "./quickReplies.js";
 import { handleQaGroupMessage, type TgGroupMessage } from "./qaGroup.js";
 import { answerFromOwner } from "./course/chat.js";
 import { decideReceipt } from "./receiptDecision.js";
-import { closeCards } from "./receiptAlerts.js";
 import { handleMenuCommand, handleMenuCallback } from "./telegramMenu.js";
 
 export const telegramRouter = Router();
@@ -241,9 +240,7 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
         : result.message;
   const caption = `${icon} ${who}: ${verb}`;
   await finishCard(botToken, query, caption);
-  // Вторая карточка (сестре/владельцу) тоже теряет кнопки.
-  const fresh = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, select: { ownerAlerts: true } });
-  if (fresh) await closeCards(fresh, caption, query.message?.message_id).catch((err) => logError("telegram:closeCards", err));
+  // Остальные карточки чека закрывает decideReceipt (общий путь с панелью).
 }
 
 /** Как был закрыт чек — коротко, для подписи под карточкой. */

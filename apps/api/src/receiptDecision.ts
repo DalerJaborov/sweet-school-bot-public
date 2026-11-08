@@ -4,7 +4,8 @@ import { prisma, logError, recordOutgoingMessage } from "./db.js";
 import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
 import { sendToContact } from "./messaging/send.js";
 import { markExamplesAsSuccessful } from "./ai/styleLearning.js";
-import { allocate, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
+import { coursesForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
+import { closeCards } from "./receiptAlerts.js";
 import { getPrices } from "./services/priceService.js";
 import { grantCourses } from "./ai.js";
 
@@ -49,6 +50,25 @@ export type ReceiptDecisionResult =
   | { ok: false; reason: "not_found" | "already_decided" | "no_access_configured" | "needs_course"; message: string };
 
 export async function decideReceipt(
+  receiptId: string,
+  action: "approve" | "reject",
+  courseChoice?: CourseChoice,
+  opts: { reason?: string } = {}
+): Promise<ReceiptDecisionResult> {
+  const result = await decideReceiptInner(receiptId, action, courseChoice, opts);
+  if (result.ok) {
+    // Решение принято (кнопкой или из панели) - ВСЕ карточки этого чека в Telegram
+    // (владельцу и сестре) теряют кнопки.
+    const row = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, select: { ownerAlerts: true } }).catch(() => null);
+    if (row?.ownerAlerts) {
+      const text = result.status === "rejected" ? "отклонено" : result.status === "approved" ? "подтверждено, ссылка отправлена" : "закрыто, ссылка не отправлялась";
+      await closeCards(row, `Чек обработан: ${text}`).catch((err) => logError("receiptDecision:closeCards", err));
+    }
+  }
+  return result;
+}
+
+async function decideReceiptInner(
   receiptId: string,
   action: "approve" | "reject",
   courseChoice?: CourseChoice,
@@ -143,7 +163,16 @@ export async function decideReceipt(
   let plan: Allocation;
   if (receipt.amount != null) {
     amount = receipt.amount;
-    plan = await allocate(receipt.contactId, amount);
+    // ТОЛЬКО курсы, которые даёт сама сумма чека, и только те, которых у клиентки
+    // ещё нет (ревью PR 67): allocate() ради удобства раскладки мог выдать
+    // "второй курс" за повторный чек на ту же сумму - то есть бесплатно.
+    const wanted = await coursesForAmount(amount);
+    const owned = await ownedCourses(receipt.contactId);
+    const grant = wanted.filter((c) => !owned.includes(c));
+    plan = {
+      grant,
+      note: grant.length > 0 ? `по сумме: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "этот курс у клиентки уже есть - ничего не выдано",
+    };
   } else {
     const owned = await ownedCourses(receipt.contactId);
     const grant: Course[] =
@@ -199,7 +228,7 @@ export async function decideReceipt(
       where: { id: receiptId },
       data: { ownerDecision: "APPROVED", decidedAt: new Date(), reason: `${receipt.reason} (${plan.note})` },
     });
-    return { ok: true, status: "approved_no_link", message: `Ссылка не отправлена: ${plan.note}` };
+    return { ok: true, status: "approved_no_link", message: `Закрыто как дубль. Ссылка не отправлена: ${plan.note}` };
   }
 
   let granted: Course[];

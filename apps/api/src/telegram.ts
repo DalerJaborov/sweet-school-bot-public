@@ -95,6 +95,8 @@ export async function sendReceiptForReview(
      *  выбор курса явно (решение владельца 25.08.2026: не угадывать 70 сомони
      *  по умолчанию). См. c50/c70/cboth в telegramWebhook.ts handleDecision. */
     needsCourseChoice?: boolean;
+    /** Курс по сумме у клиентки уже есть: вместо "Подтвердить" - "Закрыть как дубль". */
+    closeAsDuplicate?: boolean;
   }
 ): Promise<{ chatId: string; messageId: number } | null> {
   const controller = new AbortController();
@@ -113,7 +115,7 @@ export async function sendReceiptForReview(
       ]
     : [
         [
-          { text: "✅ Подтвердить", callback_data: `ok:${input.receiptId}` },
+          { text: input.closeAsDuplicate ? "Закрыть как дубль" : "✅ Подтвердить", callback_data: `ok:${input.receiptId}` },
           { text: "❌ Отклонить", callback_data: `no:${input.receiptId}` },
         ],
       ];

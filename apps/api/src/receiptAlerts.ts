@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError } from "./db.js";
 import { editCaption } from "./telegram.js";
 import { coursesForAmount } from "./courses.js";
+import { ACCEPTED_WHERE } from "./receiptAccepted.js";
 import { deliveredCoursesSince } from "./course/handedOut.js";
 
 /**
@@ -53,12 +54,12 @@ export async function rememberAlert(receiptId: string, alert: OwnerAlert): Promi
 }
 
 /** Переписать подпись всех карточек чека и убрать кнопки. */
-export async function closeCards(receipt: { ownerAlerts: string | null }, caption: string, exceptMessageId?: number): Promise<void> {
+export async function closeCards(receipt: { ownerAlerts: string | null }, caption: string, except?: OwnerAlert): Promise<void> {
   const alerts = parseAlerts(receipt.ownerAlerts);
   if (alerts.length === 0) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
-  for (const a of alerts.filter((x) => x.messageId !== exceptMessageId)) await editCaption(botToken, a.chatId, a.messageId, caption);
+  for (const a of alerts.filter((x) => !(except && x.messageId === except.messageId && x.chatId === except.chatId))) await editCaption(botToken, a.chatId, a.messageId, caption);
 }
 
 function whoOf(contact: { username: string | null; igUserId: string }): string {
@@ -124,19 +125,26 @@ export async function closeSettledReceiptAlerts(now = Date.now()): Promise<numbe
   for (const r of pending) {
     // Покупки именно на те курсы, которые даёт сумма ЭТОГО чека; одна покупка
     // закрывает только один чек (чек за 50 не закрывается выдачей курса за 70).
-    // Если этот человек уже получил другой принятый чек рядом по времени, покупка
-    // могла появиться от него - не закрываем, решает владелец.
-    const neighbours = await prisma.receiptCheck.count({
+    const courses = await coursesForAmount(r.amount ?? 0);
+    if (courses.length === 0) continue;
+    // Один курс - один принятый чек: если по этому курсу у человека уже есть другой
+    // принятый чек, покупка принадлежит ему, а этот остаётся владельцу.
+    const others = await prisma.receiptCheck.findMany({
       where: {
         contactId: r.contactId,
         id: { not: r.id },
-        createdAt: { gte: new Date(r.createdAt.getTime() - 2 * 3_600_000), lte: new Date(r.createdAt.getTime() + 2 * 3_600_000) },
-        OR: [{ linkSent: true }, { ownerDecision: "APPROVED" }, { ownerDecision: "HANDLED" }],
+        amount: { not: null },
+        createdAt: { gte: new Date(r.createdAt.getTime() - 24 * 3_600_000) },
+        OR: ACCEPTED_WHERE,
       },
+      select: { amount: true },
     });
-    if (neighbours > 0) continue;
-    const courses = await coursesForAmount(r.amount ?? 0);
-    if (courses.length === 0) continue;
+    let taken = false;
+    for (const o of others ?? []) {
+      const theirs = await coursesForAmount(o.amount ?? 0);
+      if (courses.some((c) => theirs.includes(c))) taken = true;
+    }
+    if (taken) continue;
     const delivered = await deliveredCoursesSince(r.contactId, r.createdAt);
     const keys = courses.map((c) => `${r.contactId}:${c}`);
     if (!courses.every((c) => delivered.includes(c)) || keys.some((k) => used.has(k))) continue;

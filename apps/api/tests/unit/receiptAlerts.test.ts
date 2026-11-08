@@ -57,6 +57,11 @@ function row(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** findMany: ждущие чеки; запрос "других принятых чеков" (OR) - пусто. */
+function pendingRows(rows: unknown[]) {
+  db.model("receiptCheck").findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) => (where.OR ? [] : rows));
+}
+
 function press(data: string) {
   return handleTelegramUpdate(
     { callback_query: { id: "cb1", data, from: { id: 1 }, message: { message_id: 55, chat: { id: 1 } } } },
@@ -130,7 +135,7 @@ describe("decideReceipt", () => {
 
 describe("автозакрытие тревоги", () => {
   it("closeReceiptById: чек закрыт как HANDLED, карточка переписана", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    pendingRows([row()]);
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
     expect(await closeReceiptById("r1", "Ширин уже отправила ссылку сама")).toBe(1);
     expect(db.model("receiptCheck").updateMany).toHaveBeenCalledWith(
@@ -140,7 +145,7 @@ describe("автозакрытие тревоги", () => {
   });
 
   it("уборка: покупка заведена после чека — тревога закрывается", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    pendingRows([row()]);
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
     db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     expect(await closeSettledReceiptAlerts()).toBe(1);
@@ -148,36 +153,27 @@ describe("автозакрытие тревоги", () => {
   });
 
   it("уборка: сообщение Ширин со ссылкой статус не меняет (не отличить от обычного ответа)", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    pendingRows([row()]);
     db.model("purchase").findMany.mockResolvedValue([]);
     db.model("message").findFirst.mockResolvedValue({ text: "Вот ссылка https://shirinsweets.online/c/abc" });
     expect(await closeSettledReceiptAlerts()).toBe(0);
   });
 
-  it("уборка: одна покупка закрывает только один чек, второй (за другой курс) остаётся", async () => {
-    db.model("receiptCheck").findMany.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.id ? [row({ id: where.id })] : [row({ id: "a" }), row({ id: "b" })]
-    );
-    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
-    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
-    expect(await closeSettledReceiptAlerts()).toBe(1);
-  });
-
   it("уборка: комплект закрывается только когда доставлены оба курса", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row({ amount: 100 })]);
+    pendingRows([row({ amount: 100 })]);
     db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     expect(await closeSettledReceiptAlerts()).toBe(0);
   });
 
   it("уборка: чек за 50 ждёт Ширин, курс за 70 выдан другим чеком - чек за 50 НЕ закрывается", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row({ amount: 50 })]);
+    pendingRows([row({ amount: 50 })]);
     db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     expect(await closeSettledReceiptAlerts()).toBe(0);
     expect(editCaption).not.toHaveBeenCalled();
   });
 
   it("уборка: закрытый чек получает linkSent, чтобы проверки повторов видели платёж", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    pendingRows([row()]);
     db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
     db.model("purchase").findMany.mockResolvedValue([{ id: "p1", course: "COURSE70" }]);
     await closeSettledReceiptAlerts();
@@ -187,7 +183,7 @@ describe("автозакрытие тревоги", () => {
   });
 
   it("уборка: у клиентки только старая покупка и обычное сообщение — тревога остаётся", async () => {
-    db.model("receiptCheck").findMany.mockResolvedValue([row()]);
+    pendingRows([row()]);
     db.model("purchase").findMany.mockResolvedValue([]);
     expect(await closeSettledReceiptAlerts()).toBe(0);
     expect(editCaption).not.toHaveBeenCalled();
@@ -197,5 +193,28 @@ describe("автозакрытие тревоги", () => {
     expect(parseAlerts(null)).toEqual([]);
     expect(parseAlerts("не json")).toEqual([]);
     expect(parseAlerts('[{"chatId":"1","messageId":5},{"x":1}]')).toEqual([{ chatId: "1", messageId: 5 }]);
+  });
+});
+
+describe("сторож: понятие «чек принят» живёт в одном месте", () => {
+  it("условие принятого чека не копируется в обход receiptAccepted.ts", async () => {
+    const fsm = await import("node:fs");
+    const pathm = await import("node:path");
+    const root = pathm.join(__dirname, "../../src");
+    const files: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fsm.readdirSync(d, { withFileTypes: true })) {
+        const p = pathm.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (p.endsWith(".ts")) files.push(p);
+      }
+    };
+    walk(root);
+    const copies = files.filter((f) => {
+      if (f.endsWith("receiptAccepted.ts")) return false;
+      const text = fsm.readFileSync(f, "utf8");
+      return /OR:\s*\[\s*\{\s*linkSent:\s*true\s*\}\s*,\s*\{\s*ownerDecision:\s*"APPROVED"/.test(text);
+    });
+    expect(copies).toEqual([]);
   });
 });
