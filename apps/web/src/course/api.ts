@@ -29,7 +29,7 @@ export type DeviceInfo = {
 };
 
 /** Тело ответа 429 device_limit: что занято и модель занятого телефона (null — неизвестна). */
-export type DeviceLimitData = { devices: DeviceInfo[]; phone: string | null };
+export type DeviceLimitData = { devices: DeviceInfo[]; phone: string | null; channel?: string | null };
 
 export class CourseError extends Error {
   status: number;
@@ -49,7 +49,12 @@ export class CourseError extends Error {
     const devices = this.data.devices;
     const phone = this.data.phone;
     if (!Array.isArray(devices)) return null;
-    return { devices: devices as DeviceInfo[], phone: typeof phone === "string" && phone ? phone : null };
+    const channel = this.data.channel;
+    return {
+      devices: devices as DeviceInfo[],
+      phone: typeof phone === "string" && phone ? phone : null,
+      channel: typeof channel === "string" ? channel : null,
+    };
   }
 }
 

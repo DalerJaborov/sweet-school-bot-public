@@ -1,6 +1,6 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { handlePhoneChange, isAwaitingProof, phoneChangeProof } from "./phoneChange.js";
-import { ownerOfExpiredLink } from "./access.js";
+import { ownerOfExpiredLink, recentlyHitDeviceLimit } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
@@ -172,7 +172,10 @@ export async function maybeRestoreAccess(
   // ссылка устройства не снимает, перенос делает только бот и только при
   // совпавших данных, не чаще раза в 30 дней. Лимит перевыдач ссылки сюда не
   // относится: это не «потеряла ссылку».
-  if (waiting || DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text)) {
+  // Переносим только после настоящего отказа «курс открыт на другом телефоне»
+  // (или с кодом/чеком из экрана): иначе «новый телефон» в разговоре — не просьба.
+  const hitLimit = recentlyHitDeviceLimit(contact.id) || parseRecoveryCode(text) !== null || imageHashes.length > 0;
+  if (hitLimit && (waiting || DEVICE_LIMIT_HINT.test(text) || NEW_DEVICE.test(text))) {
     const active = verdict.active;
     const paidProof = await hasPaymentProof(contact.id);
     if (!paidProof || (await deliveryModeFor(contact)) === "telegram") {

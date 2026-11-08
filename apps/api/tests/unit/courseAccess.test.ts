@@ -722,7 +722,16 @@ describe("политика «один телефон»", () => {
     const result = await open(ANDROID_A, [occupied({ lastIp: "192.168.7.20" })]);
     expect(result.ok).toBe(true);
     expect(db.model("device").create).toHaveBeenCalledTimes(1);
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Возможно, второй телефон");
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Новый вход");
+  });
+
+  it("не больше ОДНОГО сомнительного места сверх лимита: уже занято и лимит+1 — третий человек в той же сети получает отказ", async () => {
+    const result = await open(IPHONE, [
+      occupied({ userAgent: IPHONE, lastSeenAt: new Date(Date.now() - 5 * 60_000) }),
+      occupied({ id: "device-second", userAgent: IPHONE, lastSeenAt: new Date(Date.now() - 4 * 60_000) }),
+    ]);
+    expect(result).toMatchObject({ ok: false, reason: "device_limit" });
+    expect(db.model("device").create).not.toHaveBeenCalled();
   });
 
   it("iPhone без модели: Instagram → Safari в той же сети недавно — пускаем, владельцу сводка (модель неизвестна)", async () => {

@@ -31,9 +31,13 @@ export function DeviceLimitScreen({ t, limit }: { t: Dict; limit: DeviceLimitSta
   const school = limit.school ?? fetched;
   const code = storedRecoveryCode();
   const text = code ? `${t.deviceLimitWa}. ${t.linkBrokenCode}: ${code}` : t.deviceLimitWa;
-  const chatUrl = school?.whatsapp
-    ? `${school.whatsapp}${school.whatsapp.includes("?") ? "&" : "?"}text=${encodeURIComponent(text)}`
-    : null;
+  // В тот чат, где куплен курс: бот иначе увидит чужой контакт и передаст Ширин.
+  const viaInstagram = limit.channel === "INSTAGRAM" && Boolean(school?.instagram);
+  const chatUrl = viaInstagram
+    ? (school?.instagram ?? null)
+    : school?.whatsapp
+      ? `${school.whatsapp}${school.whatsapp.includes("?") ? "&" : "?"}text=${encodeURIComponent(text)}`
+      : null;
 
   return (
     <div className="center devices-screen" role="alert">
