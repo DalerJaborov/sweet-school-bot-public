@@ -170,3 +170,22 @@ describe("какие токены открывают панель", () => {
     finally { settings.telegramOwnerChatId = OWNER; settings.telegramReportChatId = SISTER; }
   });
 });
+
+describe("защита счётчика неудач", () => {
+  it("карта ограничена, массив не растёт, переполнение не снимает блокировку", async () => {
+    const { createFailureGate } = await import("../../src/adminLogin.js");
+    const g = createFailureGate(3, { maxKeys: 5 });
+    for (let i = 0; i < 50; i++) g.fail(`1.1.1.${i}`);
+    expect(g.blocked("9.9.9.9")).toBe(true); // всё ушло в общий ключ "invalid" и он заблокирован
+    const solo = createFailureGate(3);
+    solo.fail("a"); solo.fail("a"); expect(solo.blocked("a")).toBe(false);
+    solo.fail("a"); expect(solo.blocked("a")).toBe(true);
+    expect(solo.blocked("a", Date.now() + 16 * 60_000)).toBe(false);
+  });
+  it("общий потолок неудач пароля закрывает только пароль", async () => {
+    const { createFailureGate } = await import("../../src/adminLogin.js");
+    const g = createFailureGate(8, { allLimit: 10 });
+    for (let i = 0; i < 10; i++) g.fail(`2.2.2.${i}`);
+    expect(g.blocked("3.3.3.3")).toBe(true);
+  });
+});
