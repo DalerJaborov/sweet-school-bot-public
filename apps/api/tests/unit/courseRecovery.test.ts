@@ -20,6 +20,7 @@ import {
   relinkBySiteToken,
   resetRelinkMemory,
 } from "../../src/course/recovery.js";
+import { noteDeviceLimitHit } from "../../src/course/access.js";
 import type { Contact } from "@prisma/client";
 
 const contact = fakeContact() as unknown as Contact;
@@ -136,11 +137,22 @@ describe("maybeRestoreAccess", () => {
     db.model("receiptCheck").count.mockResolvedValue(1);
     db.model("device").findMany.mockResolvedValue([{ id: "old-1", userAgent: "Android", lastCity: "TJ", lastSeenAt: new Date("2026-11-07") }]);
 
+    noteDeviceLimitHit(contact.id); // был отказ «курс открыт на другом телефоне»
     const result = await maybeRestoreAccess(contact, "я сменила телефон, дайте ссылку");
 
     expect(result).toMatchObject({ handled: true, outcome: "reissued" });
     expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["old-1"] } } });
     expect(String(sendText.mock.calls[0][1])).toMatch(/\/l\/[A-Za-z0-9]{10}/);
+  });
+
+  it("«новый телефон» в разговоре БЕЗ недавнего отказа и без кода — устройства не трогаются, это не перенос", async () => {
+    const other = { ...contact, id: "c-nohit" } as unknown as Contact;
+    db.model("purchase").findMany.mockResolvedValue([activePurchase({ courseId: "course-1", contactId: "c-nohit" })]);
+    db.model("receiptCheck").count.mockResolvedValue(1);
+
+    await maybeRestoreAccess(other, "купила новый телефон, не открывается ссылка");
+
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
   });
 
   it("«сменила телефон» с её чеком картинкой: бот переносит сам — новая ссылка, все старые устройства снимаются", async () => {

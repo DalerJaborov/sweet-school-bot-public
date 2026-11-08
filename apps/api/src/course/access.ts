@@ -557,6 +557,16 @@ export function deviceCountFor(contactId: string): Promise<number> {
 }
 
 /** Регистрация или узнавание устройства + продление офлайн-ключа. */
+/** Недавний отказ «курс открыт на другом телефоне» по контакту (память процесса, неделя): без него просьба «сменила телефон» ссылку не переносит. */
+const limitHits = new Map<string, number>();
+export function noteDeviceLimitHit(contactId: string): void {
+  limitHits.set(contactId, Date.now());
+}
+export function recentlyHitDeviceLimit(contactId: string, withinMs = 7 * 86_400_000): boolean {
+  const at = limitHits.get(contactId);
+  return at !== undefined && Date.now() - at < withinMs;
+}
+
 export async function registerDevice(
   req: Request,
   contact: Contact,
@@ -668,8 +678,9 @@ export async function registerDevice(
         });
         return { ok: true, contact, purchases, purchase, device };
       }
-      await alertUnsurePhone(contact, doubtful);
-      graceSeat = true;
+      // Не больше ОДНОГО сомнительного места сверх лимита: третий человек в той же
+      // сети (кафе, общежитие) места не получает.
+      graceSeat = used <= limit;
     }
   }
 
@@ -678,6 +689,7 @@ export async function registerDevice(
     // через бота с доказательством (recovery.ts), а второй телефон — это
     // отдельная покупка (владелец 08.11.2026).
     logInfo("course:deviceLimit", `контакт ${contact.id}: попытка входа с другого телефона`);
+    noteDeviceLimitHit(contact.id);
     const label = await occupiedPhoneLabel(contact.id);
     return { ok: false, reason: "device_limit", message: devicePhoneMessage(label) };
   }
@@ -697,6 +709,8 @@ export async function registerDevice(
       offlineKeyExpiresAt,
     },
   });
+  // Тревога — ПОСЛЕ создания записи и про НОВЫЙ вход (метку ученицы он не получил).
+  if (graceSeat) await alertUnsurePhone(contact, device);
   return { ok: true, contact, purchases, purchase, device };
 }
 
@@ -791,10 +805,10 @@ async function alertUnsurePhone(contact: Contact, device: Device): Promise<void>
   await sendTelegramMessage(
     botToken,
     chatId,
-    `Возможно, второй телефон у ${who}: вход без метки устройства, но похож на то же ` +
-      `(${describeDevice(device.userAgent)}, ${device.lastCity ?? "страна неизвестна"}). Пустили без блокировки. ` +
-      `Если это не она, блокировка закроет и её собственный телефон (запись устройства общая): ` +
-      `лучше напишите ей и при необходимости отзовите ссылку.`
+    `Новый вход у ${who} сверх лимита: другое устройство (${describeDevice(device.userAgent)}, ` +
+      `${device.lastCity ?? "страна неизвестна"}) в той же сети, похоже на её же телефон в другом браузере. ` +
+      `Пустили отдельной записью, метку её устройства он не получил; больше таких мест не выдаётся. ` +
+      `Если это не она, заблокируйте именно эту запись в панели.`
   ).catch((err) => logError("course:unsurePhoneAlert", err));
 }
 

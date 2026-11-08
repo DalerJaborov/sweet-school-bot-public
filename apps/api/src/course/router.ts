@@ -138,7 +138,7 @@ courseRouter.post(`${API_BASE}/open`, async (req: Request, res: Response) => {
       const byCode = claims?.jti && !claims.contactId ? await prisma.contact.findUnique({ where: { accessTokenId: claims.jti } }) : null;
       const contactId = claims?.contactId ?? byCode?.id ?? null;
       const devices = contactId ? await listDevicesFor(contactId) : [];
-      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, phone: contactId ? await occupiedPhoneLabel(contactId) : null, recoveryCode });
+      res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, devices, phone: contactId ? await occupiedPhoneLabel(contactId) : null, channel: contactId ? (await prisma.contact.findUnique({ where: { id: contactId }, select: { channel: true } }))?.channel ?? null : null, recoveryCode });
       return;
     }
     res.status(statusFor(result.reason)).json({ error: result.message, reason: result.reason, recoveryCode });

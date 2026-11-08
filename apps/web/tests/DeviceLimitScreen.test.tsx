@@ -59,6 +59,17 @@ describe("DeviceLimitScreen", () => {
     localStorage.removeItem("course.recoveryCode");
   });
 
+  it("покупка в Instagram: кнопка ведёт в Instagram, а не в WhatsApp", () => {
+    render(
+      <DeviceLimitScreen
+        t={t}
+        limit={limit({ channel: "INSTAGRAM", school: { telegram: null, instagram: "https://ig.me/m/shirin", whatsapp: "https://wa.me/992900000000" } })}
+      />,
+    );
+    const link = screen.getByRole("link", { name: t.deviceLimitWrite }) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://ig.me/m/shirin");
+  });
+
   it("контакты школы показываются, если известны", () => {
     render(<DeviceLimitScreen t={t} limit={limit({ school: { telegram: "https://t.me/x", instagram: null, whatsapp: null } })} />);
     expect(screen.getByRole("link", { name: t.telegramGroup })).toBeTruthy();
