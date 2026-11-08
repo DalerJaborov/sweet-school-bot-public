@@ -84,27 +84,26 @@ describe("Вечерняя сводка v2", () => {
     db.model("courseChatMessage").count.mockResolvedValue(3);
 
     const text = await buildReport(OFFSET);
-    expect(text).toContain("🌙 Итог за 5 сентября");
-    expect(text).toContain("💬 Написали — 1 человек");
-    expect(text).toContain("🎯 Пришли с комментария под роликом — 1");
-    expect(text).toContain("💰 Оплатили онлайн-курс — 1");
-    expect(text).toContain("     на 70 сомони");
-    expect(text).toContain("     Instagram 70 с. (1)");
-    expect(text).toContain("📚 Начали учиться — 2");
+    expect(text).toContain("🌙 5 сентября");
+    expect(text).toContain("💬 1 написали · 🆕 1 новых · 🎯 1 с рилсов");
+    expect(text).toContain("💰 1 оплата · 70 сомони");
+    expect(text).toContain("Instagram 70 с. (1)");
+    expect(text).toContain("📚 2 начали учиться · 🎓 1");
     expect(text).not.toContain("🏁"); // до конца сегодня никто не дошёл — строки нет
-    expect(text).toContain("🎓 Сертификатов — 1");
-    expect(text).toContain("❓ Вопросов учениц без ответа сейчас — 3");
-    expect(text).not.toContain("Gemini"); // расход ИИ в сводке владельцу непонятен — только тревога на 80 %
+    expect(text).toContain("❓ 3 без ответа");
+    expect(text).not.toContain("Gemini");
     expect(text).not.toContain("Где бот застрял");
+    expect(text.split(String.fromCharCode(10)).length).toBeLessThanOrEqual(8);
   });
 
   it("тихий день: учёба есть, Gemini и необязательные строки молчат", async () => {
     const text = await buildReport(OFFSET);
-    expect(text).toContain("💰 Оплат сегодня нет");
-    expect(text).toContain("📚 Начали учиться — 0");
+    expect(text).toContain("💰 оплат нет");
+    expect(text).toContain("📚 0 начали учиться");
     expect(text).not.toContain("Gemini");
     expect(text).not.toContain("❓");
     expect(text).not.toContain("🎓");
-    expect(text).toContain("Сегодня никто не писал.");
+    expect(text).not.toContain("⏳");
+    expect(text.split(String.fromCharCode(10)).length).toBeLessThanOrEqual(4);
   });
 });
