@@ -5,6 +5,7 @@ import { shouldSendAlert } from "./alertGate.js";
 import { deliberateSilenceSince } from "./ai/deliberateSilence.js";
 import { isPureThanks } from "./ai/reactions.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
+import { releaseExpiredTakeovers, loadTakeoverConfig, ownerAnchor, decideTakeover } from "./ai/ownerTakeover.js";
 import { healFalseTakeovers } from "./ai/takeoverHeal.js";
 
 /**
@@ -144,7 +145,15 @@ export async function explainUnanswered(
     const cause = contact.humanTakeoverMid
       ? await prisma.message.findUnique({ where: { mid: contact.humanTakeoverMid } })
       : null;
-    if (cause?.text) return { skip: true, why: "живая пауза хозяйки" };
+    if (cause?.text) {
+      // Согласовано с умным перехватом (ai/ownerTakeover.ts): пауза должна была закончиться — бот обязан был ответить.
+      const config = await loadTakeoverConfig();
+      const anchor = await ownerAnchor(contact);
+      if (!config.enabled || !anchor) return { skip: true, why: "живая пауза хозяйки" };
+      const d = decideTakeover({ config, anchor, incomingAt: lastIn.createdAt, safeIntent: false, now });
+      if (d.action === "hold") return { skip: true, why: "живая пауза хозяйки" };
+      return { skip: false, reason: "перехват хозяйки уже должен был закончиться (" + d.why + "), но бот не ответил", dedupeKey: "takeover-due:" + contactId + ":" + lastIn.createdAt.getTime() };
+    }
     return {
       skip: false,
       reason: `бот на паузе с ${fmt(contact.humanTakenOverAt, await offsetMs())}, а причина паузы — сообщение без текста (вложение): возможно, это было наше же эхо`,
@@ -173,6 +182,7 @@ export async function checkUnansweredInbound(now = new Date()): Promise<number> 
 
   // Самолечение раньше сторожа: ложная пауза от нашего же эха снимается сама.
   await healFalseTakeovers().catch((err) => logError("takeoverHeal", err));
+  await releaseExpiredTakeovers(now).catch((err) => logError("ownerTakeover:expire", err));
 
   // Окно начинается за 15 минут до старта: сообщение, потерянное при выкатке, тоже ловим.
   const since = new Date(Math.max(now.getTime() - LOOKBACK_MS, PROCESS_STARTED_AT - 15 * 60_000));

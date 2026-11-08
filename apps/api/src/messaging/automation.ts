@@ -27,7 +27,11 @@ export function currentReceiptEvidence(): { contactId: string; imageHash: string
 }
 
 /** Only the accepted receipt verdict may enter this scope; never a whole AI turn. */
-export function withVerifiedReceiptDelivery<T>(contactId: string, imageHash: string, deliver: () => Promise<T>): Promise<T> {
+export function withVerifiedReceiptDelivery<T>(
+  contactId: string,
+  imageHash: string,
+  deliver: () => Promise<T>,
+): Promise<T> {
   if (!imageHash) throw new ContactMessagingBlocked("missing receipt evidence");
   return receiptEvidence.run({ contactId, imageHash }, deliver);
 }
@@ -51,12 +55,19 @@ export function contactAutomationBlocked(contact: ContactPolicy, purpose: Messag
   if (purpose === "human") return false;
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return true;
   if (contact.id && takeoverOverride.getStore() === contact.id) return false;
-  return purpose !== "verified_receipt_access" && Boolean(contact.humanTakenOverAt ||
-    (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now()));
+  return (
+    purpose !== "verified_receipt_access" &&
+    Boolean(
+      contact.humanTakenOverAt || (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now()),
+    )
+  );
 }
 
 /** Reload immediately before each network operation, including transport retries. */
-export async function assertContactMessagingAllowed(contactId: string, purpose: MessagePurpose = "reply"): Promise<void> {
+export async function assertContactMessagingAllowed(
+  contactId: string,
+  purpose: MessagePurpose = "reply",
+): Promise<void> {
   if (purpose === "human" || permission.getStore() === "human") return;
   if (purpose === "verified_receipt_access" && currentReceiptEvidence()?.contactId !== contactId) {
     throw new ContactMessagingBlocked("unverified receipt scope");
@@ -66,7 +77,11 @@ export async function assertContactMessagingAllowed(contactId: string, purpose: 
   if (contactAutomationBlocked(contact, purpose)) throw new ContactMessagingBlocked("contact policy");
 }
 
-export function withContactMessaging<T>(contactId: string, purpose: MessagePurpose, send: () => Promise<T>): Promise<T> {
+export function withContactMessaging<T>(
+  contactId: string,
+  purpose: MessagePurpose,
+  send: () => Promise<T>,
+): Promise<T> {
   return contactPermission.run({ contactId, purpose }, send);
 }
 

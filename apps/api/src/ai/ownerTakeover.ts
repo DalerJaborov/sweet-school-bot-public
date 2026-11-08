@@ -54,8 +54,7 @@ export async function loadTakeoverConfig(): Promise<TakeoverConfig> {
 }
 
 export type TakeoverDecision =
-  | { action: "hold"; until: Date | null }
-  | { action: "answer"; why: "expired" | "idle" | "cold" | "safe_intent" };
+  { action: "hold"; until: Date | null } | { action: "answer"; why: "expired" | "idle" | "cold" | "safe_intent" };
 
 /** Безопасно ли ответить сразу, даже если Ширин на связи. */
 export function isSafeIntent(text: string | null | undefined, hasPurchase: boolean): boolean {
@@ -144,4 +143,27 @@ export async function scheduleHeldReply(contactId: string, text: string, until: 
   await prisma.pendingAiReply
     .create({ data: { contactId, text, snapshotAt, nextAttemptAt: until } })
     .catch((err) => logError("ownerTakeover:schedule", err));
+}
+
+/** Раз в минуту: перехваты старше `expireHours` без свежих ручных реплик снимаются (чистит список «на паузе» в панели). */
+export async function releaseExpiredTakeovers(now = new Date()): Promise<number> {
+  const config = await loadTakeoverConfig();
+  if (!config.enabled) return 0;
+  const cutoff = new Date(now.getTime() - config.expireHours * 3_600_000);
+  const rows = await prisma.contact.findMany({
+    where: { humanTakenOverAt: { lt: cutoff } },
+    select: { id: true, humanTakenOverAt: true },
+    take: 100,
+  });
+  let released = 0;
+  for (const c of rows) {
+    const recent = await prisma.message.findFirst({
+      where: { contactId: c.id, direction: "OUT", byHuman: true, createdAt: { gte: cutoff } },
+      select: { id: true },
+    });
+    if (recent) continue;
+    await releaseTakeover(c.id).catch((err) => logError("ownerTakeover:expire", err));
+    released += 1;
+  }
+  return released;
 }
