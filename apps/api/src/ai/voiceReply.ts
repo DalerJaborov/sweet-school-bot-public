@@ -22,9 +22,12 @@ export const VOICE_MARK = "🎤 ";
 const MAX_WARM = 160;
 const MAX_AFTER_CLIENT_VOICE = 240;
 
-const HAS_LINK = /https?:|www\.|\b[\w-]+\.(?:com|online|ru|tj|org|net)\b|@\w{3,}/i;
-const HAS_MONEY_OR_NUMBER = /\d{2,}|сомон|сомони|сум\b|руб|₽|\$|usd|tjs|нарх|цена|стоит/i;
-const HAS_REQUISITES = /карт[аыу]|реквизит|счёт|счет|перевод|оплат/i;
+// Голос разрешаем, только если НЕТ ничего похожего на адрес, число или деньги (ревью 08.11.2026:
+// прежние узкие шаблоны пропускали t.me/..., «пять тысяч», таджикское «ҳазор»).
+const HAS_LINK = /https?:|www\.|[\p{L}\d]\.[\p{L}]{2,}|@\w|\//u;
+const HAS_DIGIT = /\d|[٠-٩]/u;
+const HAS_MONEY_WORDS =
+  /тысяч|сотн|\bсто\b|двест|тристо|миллион|сомон|рубл|доллар|₽|\$|цен[аыуе]|стоим|стоит|скидк|процент|тахфиф|оплат|платёж|платеж|платит|предоплат|перевод|перевест|карт[аыуеой]|реквизит|\bсч[её]т|нарх|нарҳ|ҳазор|\bсад\b|пардохт|корт|ҳисоб|гузарон|\bпул\b|usd|tjs/iu;
 
 export function chooseVoiceOrText(
   text: string,
@@ -33,7 +36,7 @@ export function chooseVoiceOrText(
   if (ctx.channel !== "WHATSAPP" || ctx.lastReplyWasVoice) return "text";
   const t = text.trim();
   if (!t || t.includes("\n")) return "text";
-  if (HAS_LINK.test(t) || HAS_MONEY_OR_NUMBER.test(t) || HAS_REQUISITES.test(t)) return "text";
+  if (HAS_LINK.test(t) || HAS_DIGIT.test(t) || HAS_MONEY_WORDS.test(t)) return "text";
   const limit = ctx.clientSentVoice ? MAX_AFTER_CLIENT_VOICE : MAX_WARM;
   return t.length <= limit ? "voice" : "text";
 }
@@ -44,6 +47,7 @@ export async function trySendVoiceReply(
   text: string,
   clientSentVoice: boolean
 ): Promise<boolean> {
+  let url: string;
   try {
     if ((await getSetting("voiceReplyEnabled")) !== "true" || !(await voiceEnabled())) return false;
     const last = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "OUT" }, orderBy: { createdAt: "desc" } });
@@ -53,12 +57,15 @@ export async function trySendVoiceReply(
       lastReplyWasVoice: Boolean(last?.text?.startsWith(VOICE_MARK)),
     });
     if (choice !== "voice") return false;
-    const { url } = await synthesizeToFile(text);
-    const mid = await sendAttachmentToContact(contact, url, "audio");
-    await recordOutgoingMessage(contact.id, `${VOICE_MARK}${text.trim()}`, mid);
-    return true;
+    ({ url } = await synthesizeToFile(text));
   } catch (err) {
+    // До отправки ничего не ушло - безопасно ответить текстом.
     logError("voiceReply", err);
     return false;
   }
+  // После вызова моста исход мог остаться неизвестным: текстом НЕ дублируем,
+  // ошибку отдаём вызывающему (мост запрещает автоповтор при неопределённом исходе).
+  const mid = await sendAttachmentToContact(contact, url, "audio");
+  await recordOutgoingMessage(contact.id, `${VOICE_MARK}${text.trim()}`, mid);
+  return true;
 }

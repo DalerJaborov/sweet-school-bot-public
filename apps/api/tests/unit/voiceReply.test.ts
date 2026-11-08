@@ -10,7 +10,7 @@ const ctx = { channel: "WHATSAPP", clientSentVoice: false, lastReplyWasVoice: fa
 
 describe("chooseVoiceOrText", () => {
   it("короткий тёплый ответ — голосом", () => {
-    expect(chooseVoiceOrText("Здравствуйте! Рада вас видеть, чем помочь?", ctx)).toBe("voice");
+    expect(chooseVoiceOrText("Здравствуйте! Рада вас видеть, чем помочь", ctx)).toBe("voice");
   });
   it("ссылки, суммы, реквизиты, списки и длинное — текстом", () => {
     expect(chooseVoiceOrText("Запись тут: https://shirinsweets.online", ctx)).toBe("text");
@@ -34,4 +34,12 @@ describe("trySendVoiceReply", () => {
   it("рубильник выключен по умолчанию — голосом не отвечает", async () => {
     expect(await trySendVoiceReply({ id: "c", igUserId: "x", channel: "WHATSAPP" }, "Здравствуйте!", true)).toBe(false);
   });
+});
+
+describe("обход правила (ревью)", () => {
+  const c = { channel: "WHATSAPP", clientSentVoice: true, lastReplyWasVoice: false };
+  it.each([
+    "t.me/shirin_sweets", "bit.ly/abc", "shirin.me", "Цену уточню", "Стоимость курса пять тысяч",
+    "Пешпардохт ҳазор", "Ба корти ман гузаронед", "Напишите @shirin", "Оплата на карту",
+  ])("%s — только текстом", (t) => expect(chooseVoiceOrText(t, c)).toBe("text"));
 });

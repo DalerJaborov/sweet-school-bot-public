@@ -7,7 +7,7 @@ import { notifyOwnerDirect } from "../systemAlerts.js";
 import { toOpusOgg } from "./audioConvert.js";
 
 /**
- * ОЗВУЧКА ГОЛОСОМ ШИРИН (ElevenLabs). Ширин лично дала согласие 08.11.2026
+ * ОЗВУЧКА ГОЛОСОМ ШИРИН (ElevenLabs). Владелица голоса дала согласие 08.11.2026
  * на клонирование голоса, манеры и смеха, чтобы оживить бота.
  *
  * ГРАНИЦЫ (решение по безопасности, не обходить):
@@ -57,10 +57,15 @@ export function voiceCacheKey(text: string): string {
 
 const monthKey = (now: Date) => now.toISOString().slice(0, 7);
 
-async function numberSetting(key: string, fallback: number): Promise<number> {
-  const n = Number((await getSetting(key))?.replace(",", "."));
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+async function numberSetting(key: string, fallback: number, allowZero = false): Promise<number> {
+  const raw = (await getSetting(key))?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw.replace(",", "."));
+  return Number.isFinite(n) && (n > 0 || (allowZero && n === 0)) ? n : fallback;
 }
+
+// Счётчик трат читается и пишется несколькими async-вызовами: выстраиваем их в очередь.
+let chargeQueue: Promise<unknown> = Promise.resolve();
 
 /** Потрачено знаков в этом месяце (настройка voiceSpend вида «2026-11|1234»). */
 export async function voiceSpentChars(now = new Date()): Promise<number> {
@@ -72,8 +77,15 @@ export async function voiceSpentChars(now = new Date()): Promise<number> {
  * Потолок трат проверяется до обращения в ElevenLabs. При превышении — отказ;
  * при 80% — одно предупреждение в месяц, ТОЛЬКО владельцу (notifyOwnerDirect).
  */
-async function chargeOrRefuse(chars: number, now = new Date()): Promise<void> {
-  const cap = await numberSetting("voiceMonthlyCapUsd", DEFAULT_MONTHLY_CAP_USD);
+function chargeOrRefuse(chars: number, now = new Date()): Promise<void> {
+  const run = chargeQueue.catch(() => {}).then(() => chargeOrRefuseNow(chars, now));
+  chargeQueue = run;
+  return run;
+}
+
+async function chargeOrRefuseNow(chars: number, now: Date): Promise<void> {
+  // 0 в настройке потолка = озвучка остановлена полностью.
+  const cap = await numberSetting("voiceMonthlyCapUsd", DEFAULT_MONTHLY_CAP_USD, true);
   const price = await numberSetting("voicePricePer1kUsd", DEFAULT_PRICE_PER_1K_USD);
   const spent = await voiceSpentChars(now);
   const after = spent + chars;
@@ -119,7 +131,10 @@ export async function synthesizeToFile(rawText: string): Promise<SynthResult> {
   // ogg/opus - формат, который WhatsApp стабильно играет как голосовое; нет ffmpeg - остаётся mp3.
   const opus = await toOpusOgg(mp3);
   const name = `tts-${key}.${opus ? "ogg" : "mp3"}`;
-  fs.writeFileSync(path.join(MEDIA_DIR, name), opus ?? mp3);
+  // Пишем во временный файл и переименовываем: оборванная запись не станет «кешем».
+  const target = path.join(MEDIA_DIR, name);
+  fs.writeFileSync(`${target}.tmp`, opus ?? mp3);
+  fs.renameSync(`${target}.tmp`, target);
   return { url: `${env.publicBaseUrl}/media/${name}`, cached: false };
 }
 

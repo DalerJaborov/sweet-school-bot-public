@@ -5,7 +5,7 @@
 - WhatsApp bridge sends `audio` as a real voice note (`sendAudioAsVoice`), shows "recording audio..." instead of "typing...", no caption on voice.
 - ElevenLabs (`ai/voiceClone.ts`): off by default. Needs `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` (optional `ELEVENLABS_MODEL`)
   in the server `.env` AND setting `voiceCloneEnabled = true`. Synthesised files land in the library UNAPPROVED: a human listens and approves.
-  Shirin gave personal consent to voice cloning on 2026-11-08.
+  The voice owner gave consent on 2026-11-08 (see the consent record below).
 - Not verified yet: mp3 -> ptt conversion in whatsapp-web.js and Tajik quality of `eleven_multilingual_v2`; test on the owner's number only.
 
 ## Update 2026-11-08 (after architect review)
@@ -14,14 +14,14 @@
 - Monthly cap (`voiceMonthlyCapUsd`, default $20) and price (`voicePricePer1kUsd`, default 0.08 - the owner's figure, NOT verified on ElevenLabs' site). Owner-only alert at 80% and at the cap.
 - Settings keys `voiceCloneEnabled`, `voiceMonthlyCapUsd`, `voicePricePer1kUsd` are now in SETTING_KEYS.
 - LIBRARY rows are excluded from style-learning examples. Bridge rejects audio + text in one send.
-- Voice-vs-text rule for the bot (who answers by voice) is NOT implemented: waiting for the owner's approval of the rule.
-- Open: model/language measurement (Tajik, accent) needs an API key available locally; the key lives on the server only. Clone consent: the owner relayed the sister's consent; ask her to confirm in Telegram, then record date/wording here.
+- Voice-vs-text rule: see the section below (implemented, OFF by default).
+- Open: model/language measurement (Tajik, accent) needs an API key available locally; the key lives on the server only. Clone consent: consent was relayed through the project owner; ask the voice owner to confirm from her own account.
 
 ## Voice-or-text rule (ai/voiceReply.ts), switch `voiceReplyEnabled` OFF by default
 Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 after the client's own voice note). Always text: links, any numbers/prices/money words, card/requisites, multi-line, long. Never two voice replies in a row (previous OUT message starts with the microphone mark). Any synthesis error (cap, network) falls back to text. Needs ElevenLabs key + `voiceCloneEnabled=true` too.
 
 ## Voice consent record
-- Date: 2026-11-08. Person: Farangis J. (the voice owner).
+- Date: 2026-11-08. Person: the voice owner (identity is kept by the project owner, not in this repo).
 - Wording (name omitted here on purpose): "I give my consent for my voice to be used for my bot."
 - How received: written in the project owner's chat, not from her own Telegram account. Ask her to repeat it from her own account when convenient.
 - Scope: only her speech is used as samples; samples and generated audio are never published; no audio stored in git.
@@ -31,3 +31,5 @@ Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 af
 2. In ElevenLabs delete the cloned voice (Voices -> the voice -> Delete) and remove `ELEVENLABS_VOICE_ID` from the server `.env`.
 3. Delete cached synthesis on the server: files `tts-*.ogg` / `tts-*.mp3` in `/data/uploads`, and library rows with `audio` that came from synthesis (panel "Медиа на повтор" -> delete).
 4. Delete her original sample files wherever they were kept (not in git).
+
+Revocation also: purge the /media cache at the CDN (files are served `immutable` for a year) and delete approved library audio rows (the reuse path does not check `voiceCloneEnabled`).
