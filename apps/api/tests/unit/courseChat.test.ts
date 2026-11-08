@@ -5,7 +5,7 @@ const sendTelegramMessage = vi.fn(async () => 555);
 const findQaAnswer = vi.fn(async () => null as { ownerText: string } | null);
 
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
+  techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a) }));
 vi.mock("../../src/ai/qaGroupReply.js", () => ({ findQaAnswer: (t: string) => findQaAnswer(t) }));
 
 import { receiveQuestion, answerFromOwner, chatHistory } from "../../src/course/chat.js";

@@ -4,7 +4,7 @@ import { handleWhatsappSignupCommand } from "./course/manualOfflineSignup.js";
 import { z } from "zod";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { sendToContact } from "./messaging/send.js";
-import { answerCallback, editCaption, editMessageText } from "./telegram.js";
+import { answerCallback, editCaption, editMessageText, trustedChatIds } from "./telegram.js";
 import { handleChatMember } from "./groupAccess.js";
 import { getQuickReplies } from "./quickReplies.js";
 import { handleQaGroupMessage, type TgGroupMessage } from "./qaGroup.js";
@@ -27,10 +27,7 @@ type CallbackQuery = {
  * курс — единственной преградой была неугадываемость id чека, а это не защита.
  */
 async function isTrustedSender(query: CallbackQuery): Promise<boolean> {
-  const allowed = [
-    (await getSetting("telegramOwnerChatId"))?.trim(),
-    (await getSetting("telegramReportChatId"))?.trim(),
-  ].filter(Boolean);
+  const allowed = await trustedChatIds();
   if (allowed.length === 0) return false; // получатели не настроены — не доверяем никому
   const who = [query.from?.id, query.message?.chat?.id].filter((v) => v != null).map(String);
   return who.some((id) => allowed.includes(id));
@@ -61,11 +58,7 @@ async function secretOk(header: string | undefined): Promise<boolean> {
  * открытая дверь при пустых настройках это ровно та ошибка, что уже была.
  */
 async function knownChat(message: { chat?: { id?: number | string } }): Promise<boolean> {
-  const allowed = [
-    (await getSetting("telegramOwnerChatId"))?.trim(),
-    (await getSetting("telegramReportChatId"))?.trim(),
-    (await getSetting("telegramQaGroupId"))?.trim(),
-  ].filter(Boolean);
+  const allowed = [...(await trustedChatIds()), (await getSetting("telegramQaGroupId"))?.trim()].filter(Boolean);
   if (allowed.length === 0) return false;
   const chatId = message.chat?.id;
   return chatId != null && allowed.includes(String(chatId));

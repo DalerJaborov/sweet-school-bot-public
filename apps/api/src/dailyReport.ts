@@ -1,5 +1,5 @@
 import { prisma, getSetting, setSetting, logError } from "./db.js";
-import { sendTelegramMessage } from "./telegram.js";
+import { sendTelegramMessage, summaryChatIds } from "./telegram.js";
 import { unansweredCount } from "./course/chat.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { completedCoursesSince, purchaseChannel, CHANNEL_TITLE, type PurchaseChannel } from "./metrics.js";
@@ -340,11 +340,9 @@ export async function maybeSendDailyReport(): Promise<void> {
 
   // Двое получателей: сестра и владелец. Дубли (если указан один и тот же
   // chat_id) отсекаем — иначе одному человеку придут два одинаковых письма.
-  const recipients = [
-    (await getSetting("telegramOwnerChatId"))?.trim(),
-    (await getSetting("telegramReportChatId"))?.trim(),
-  ].filter((id): id is string => Boolean(id));
-  const unique = [...new Set(recipients)];
+  // Список — настройка telegramSummaryChatIds (вечерняя сводка и карточки
+  // чеков: владелец и сестра); см. telegram.ts::summaryChatIds.
+  const unique = await summaryChatIds();
   if (unique.length === 0) return;
 
   // Отметка ставится ДО отправки: если Telegram не ответит, лучше пропустить

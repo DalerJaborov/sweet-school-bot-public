@@ -1,7 +1,8 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { deviceLimitFor, deviceCountFor } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "../telegram.js";
+import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { shouldSendAlert } from "../alertGate.js";
 import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact } from "@prisma/client";
@@ -235,8 +236,10 @@ async function reply(contact: Contact, text: string): Promise<boolean> {
  *  должен замечать закономерности вроде «одна и та же ученица каждую неделю». */
 async function tellOwner(contact: Contact, what: string, purchases: number, reissues: number): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await ownerAlertChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
+  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!botToken || !chatId) return;
+  // Одна и та же ученица — не чаще раза в сутки (08.11.2026).
+  if (!(await shouldSendAlert(`recovery:${contact.id}`, { cooldownMs: 24 * 3_600_000 }))) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   await sendTelegramMessage(
     botToken,

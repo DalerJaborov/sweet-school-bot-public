@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
 const sendTelegramMessage = vi.fn(async () => 1);
-vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]),
+vi.mock("../../src/telegram.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/telegram.js")>()),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 

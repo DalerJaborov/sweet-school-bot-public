@@ -9,7 +9,7 @@ vi.mock("../../src/instagram.js", () => ({
   channelOf: () => "INSTAGRAM",
 }));
 vi.mock("../../src/telegram.js", () => ({
-  ownerAlertChatIds: vi.fn(async () => ["owner-1"]),
+  techChatIds: vi.fn(async () => ["owner-1"]),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 

@@ -36,7 +36,7 @@ import { autoCatch } from "./asyncRoute.js";
 import { flushAllPending } from "./debounce.js";
 import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
-import { checkDisk } from "./diskWatch.js";
+import { runDiskMaintenance } from "./diskInfo.js";
 import { checkIgToken } from "./igTokenWatch.js";
 import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
@@ -184,7 +184,8 @@ function withTimeout<T>(name: string, task: Promise<T>): Promise<T | null> {
       if (markWorkerTimeout(name)) {
         void notifyOwnerDirect(
           `⚠️ Фоновая задача «${name}» не отвечает: ${STUCK_AFTER} тайм-аута подряд. ` +
-            `Остальные задачи работают, но эта стоит — если не оживёт сама, перезапустите бота.`
+            `Остальные задачи работают, но эта стоит — если не оживёт сама, перезапустите бота.`,
+          { dedupeKey: `worker-timeout:${name}` }
         );
       }
       resolve(null);
@@ -261,12 +262,12 @@ setInterval(() => void purgeTrashedLessons().catch((err) => logError("lessonTras
 
 // МЕСТО НА ДИСКЕ — самый тихий из отказов: заполнился, SQLite перестал писать,
 // и бот молча замолчал для всех. Раз в час чистим брошенные временные файлы и
-// предупреждаем владельца заранее, пока есть недели на разбор (diskWatch.ts).
+// пишем в журнал (diskInfo.ts). В Telegram про диск больше не пишем (08.11.2026).
 // Первая проверка — через минуту после старта, а не сразу: пусть контейнер
 // сначала поднимется.
-setTimeout(() => void checkDisk().catch((err) => logError("disk:check", err)), 60_000);
+setTimeout(() => void runDiskMaintenance().catch((err) => logError("disk:check", err)), 60_000);
 setInterval(() => {
-  void checkDisk().catch((err) => logError("disk:check", err));
+  void runDiskMaintenance().catch((err) => logError("disk:check", err));
 }, 60 * 60_000);
 // МАРКЕР INSTAGRAM (igTokenWatch.ts): живёт 60 дней. 20.10.2026 истёк, и бот
 // шесть дней молчал для всех. Раз в 6 часов продлеваем, если пора, и заранее
