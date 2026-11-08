@@ -155,4 +155,21 @@ export const Icons = {
       <path d="M6 6 18 18M18 6 6 18" />
     </svg>
   ),
+  more: (
+    <svg viewBox="0 0 24 24" {...ICON}>
+      <circle cx="5.5" cy="12" r="1.2" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+      <circle cx="18.5" cy="12" r="1.2" fill="currentColor" />
+    </svg>
+  ),
+  download: (
+    <svg viewBox="0 0 24 24" {...ICON}>
+      <path d="M12 4v10M7.8 10.2 12 14.4l4.2-4.2M5 19h14" />
+    </svg>
+  ),
+  check: (
+    <svg viewBox="0 0 24 24" {...ICON}>
+      <path d="m5 12.5 4.5 4.5L19 7.5" />
+    </svg>
+  ),
 };
