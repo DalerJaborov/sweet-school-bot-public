@@ -19,6 +19,7 @@ import { miniAppRouter } from "./miniApp.js";
 import { courseRouter } from "./course/router.js";
 import { siteRouter } from "./site/router.js";
 import { freeLessonRouter } from "./site/freeLesson.js";
+import { goRouter } from "./links/siteLinks.js";
 import { maybeSendDailyReport } from "./dailyReport.js";
 import { retryUncheckedReceipts } from "./receiptRetry.js";
 import { retryPendingAiReplies } from "./aiReplyRetry.js";
@@ -36,7 +37,7 @@ import { autoCatch } from "./asyncRoute.js";
 import { flushAllPending } from "./debounce.js";
 import { checkStorageReachable } from "./storage/s3.js";
 import { purgeTrashedLessons } from "./course/lessonTrash.js";
-import { checkDisk } from "./diskWatch.js";
+import { runDiskMaintenance } from "./diskInfo.js";
 import { checkIgToken } from "./igTokenWatch.js";
 import { checkAppSecret } from "./appSecretWatch.js";
 import { healthReport, markWorkerTick } from "./health.js";
@@ -56,6 +57,7 @@ autoCatch(miniAppRouter);
 autoCatch(courseRouter);
 autoCatch(siteRouter);
 autoCatch(freeLessonRouter);
+autoCatch(goRouter);
 autoCatch(adminRouter);
 autoCatch(adminLoginRouter);
 
@@ -97,6 +99,7 @@ app.use(telegramRouter);
 app.use(courseRouter); // платформа курсов: своя сессия по куке, не админский JWT
 app.use(siteRouter); // публичное API сайта: кука посетителя, без токена
 app.use(freeLessonRouter);
+app.use(goRouter); // короткие рекламные ссылки /go/<код>: только перенаправление на свой сайт
 app.use(miniAppRouter); // до adminRouter: вход из Telegram идёт без токена
 app.use(adminLoginRouter); // пароль: до adminRouter, под защитой от перебора
 app.use(adminRouter);
@@ -184,7 +187,8 @@ function withTimeout<T>(name: string, task: Promise<T>): Promise<T | null> {
       if (markWorkerTimeout(name)) {
         void notifyOwnerDirect(
           `⚠️ Фоновая задача «${name}» не отвечает: ${STUCK_AFTER} тайм-аута подряд. ` +
-            `Остальные задачи работают, но эта стоит — если не оживёт сама, перезапустите бота.`
+            `Остальные задачи работают, но эта стоит — если не оживёт сама, перезапустите бота.`,
+          { dedupeKey: `worker-timeout:${name}` }
         );
       }
       resolve(null);
@@ -261,12 +265,12 @@ setInterval(() => void purgeTrashedLessons().catch((err) => logError("lessonTras
 
 // МЕСТО НА ДИСКЕ — самый тихий из отказов: заполнился, SQLite перестал писать,
 // и бот молча замолчал для всех. Раз в час чистим брошенные временные файлы и
-// предупреждаем владельца заранее, пока есть недели на разбор (diskWatch.ts).
+// пишем в журнал (diskInfo.ts). В Telegram про диск больше не пишем (08.11.2026).
 // Первая проверка — через минуту после старта, а не сразу: пусть контейнер
 // сначала поднимется.
-setTimeout(() => void checkDisk().catch((err) => logError("disk:check", err)), 60_000);
+setTimeout(() => void runDiskMaintenance().catch((err) => logError("disk:check", err)), 60_000);
 setInterval(() => {
-  void checkDisk().catch((err) => logError("disk:check", err));
+  void runDiskMaintenance().catch((err) => logError("disk:check", err));
 }, 60 * 60_000);
 // МАРКЕР INSTAGRAM (igTokenWatch.ts): живёт 60 дней. 20.10.2026 истёк, и бот
 // шесть дней молчал для всех. Раз в 6 часов продлеваем, если пора, и заранее

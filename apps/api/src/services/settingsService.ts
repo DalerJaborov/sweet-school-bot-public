@@ -40,6 +40,11 @@ export const SETTING_KEYS = [
   "telegramChatId70",
   "telegramOwnerChatId",
   "telegramReportChatId",
+  // Кому слать технику (сбои, токены) — только владельцу; и кому — вечернюю
+  // сводку и карточки чеков (владелец и сестра). Через запятую. НЕ путать с
+  // telegramAdminIds (вход в панель).
+  "telegramTechChatId",
+  "telegramSummaryChatIds",
   // Постоянные ссылки, которые владелец рассылает САМ (не через бота) — вход по
   // ним не должен пугать "непонятным входом"/"слитой ссылкой" (см. groupAccess.ts
   // alertUnexplainedJoin). По одной на строку. Не секрет уровня пароля, но и не

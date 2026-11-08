@@ -1,5 +1,6 @@
 import { getSetting, logError } from "./db.js";
-import { sendTelegramMessage } from "./telegram.js";
+import { sendTelegramMessage, techChatIds } from "./telegram.js";
+import { shouldSendAlert, ALERT_SUSTAINED_MS } from "./alertGate.js";
 
 /**
  * ПРЯМАЯ ТРЕВОГА БЕЗ ДЕДУПА — владельцу и в чат сводок.
@@ -11,15 +12,17 @@ import { sendTelegramMessage } from "./telegram.js";
  * в никуда без единого следа (разбор надёжности 03.09.2026). Теперь это
  * попадает в журнал — а журнал виден в панели.
  */
-export async function notifyOwnerDirect(text: string): Promise<void> {
+export async function notifyOwnerDirect(
+  text: string,
+  opts: { dedupeKey?: string; cooldownMs?: number } = {}
+): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
-  const recipients = [
-    (await getSetting("telegramOwnerChatId"))?.trim(),
-    (await getSetting("telegramReportChatId"))?.trim(),
-  ].filter((id): id is string => Boolean(id));
-  const unique = [...new Set(recipients)];
+  // Только технический получатель (владелец), не сестра (08.11.2026).
+  const unique = await techChatIds();
   if (unique.length === 0) return;
+  // dedupeKey — один и тот же алерт не чаще раза в 6 часов (по умолчанию).
+  if (opts.dedupeKey && !(await shouldSendAlert(opts.dedupeKey, { cooldownMs: opts.cooldownMs }))) return;
   for (const chatId of unique) {
     await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("systemAlerts:send", err));
   }
@@ -51,14 +54,12 @@ export async function notifyOwnerOfSystemError(source: string, message: string):
     const botToken = (await getSetting("telegramBotToken"))?.trim();
     if (!botToken) return;
 
-    // Оба получателя вечерней сводки (dailyReport.ts) — новая поломка касается
-    // и владельца, и сестры одинаково, кто из них первым увидит Telegram.
-    const recipients = [
-      (await getSetting("telegramOwnerChatId"))?.trim(),
-      (await getSetting("telegramReportChatId"))?.trim(),
-    ].filter((id): id is string => Boolean(id));
-    const unique = [...new Set(recipients)];
+    // Только владелец (08.11.2026): сестре техника не нужна. И только если сбой
+    // длится дольше 30 минут (перезапуск моста, обрыв сети — не повод будить);
+    // один и тот же сбой — не чаще раза в 6 часов.
+    const unique = await techChatIds();
     if (unique.length === 0) return;
+    if (!(await shouldSendAlert(`sys:${source}:${message.slice(0, 80)}`, { sustainedMs: ALERT_SUSTAINED_MS }))) return;
 
     const label = SOURCE_LABELS[source] ?? source;
     const text = `⚠️ Новая проблема в боте (${label})\n${message.slice(0, 300)}`;
@@ -88,8 +89,12 @@ export async function notifyFunnelGaveUp(who: string, attempts: number, lastErro
   try {
     await notifyOwnerDirect(
       `🚨 ${who} написал(а) с рекламы, воронка ${attempts} раз не смогла отправить ответ и сдалась.\n` +
-        `Человек НЕ получил ничего — посмотрите вручную (Журнал → Сбои).` +
-        (lastError ? `\nПричина: ${lastError.slice(0, 200)}` : "")
+        `Человек НЕ получил ничего — посмотрите вручную (Журнал → Сбои). ` +
+        `Такие сообщения приходят не чаще раза в 6 часов.` +
+        (lastError ? `\nПричина: ${lastError.slice(0, 200)}` : ""),
+      // Одна и та же причина (например, истёкший маркер Instagram) — одно
+      // сообщение в 6 часов, а не по алерту на каждого человека (08.11.2026).
+      { dedupeKey: `funnel-gaveup:${(lastError ?? "").slice(0, 60)}` }
     );
   } catch {
     // Уведомление не должно ронять саму обработку отказа.

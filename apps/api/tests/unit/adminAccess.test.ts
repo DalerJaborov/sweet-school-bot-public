@@ -80,7 +80,7 @@ describe("school Access assertion validation", () => {
 });
 
 describe("HTTP boundary before every legacy route", () => {
-  it.each(["/admin/settings", "/ADMIN/settings", "/admin/courses", "/admin/lessons/1/video-uploads", "/admin/session"])
+  it.each(["/admin/settings", "/ADMIN/settings", "/admin/courses", "/admin/lessons/1/video-uploads", "/admin/session", "/admin/v1/waiting"])
     ("rejects anonymous and email/header impersonation at %s", async path => {
       const res = await fetch(base + path, { headers: {
         "Cf-Access-Authenticated-User-Email": config.email, Authorization: "Bearer old-admin-token" } });

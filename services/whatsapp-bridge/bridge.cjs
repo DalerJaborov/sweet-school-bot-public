@@ -12,8 +12,27 @@ const directId = id => typeof id === 'string' && /^\d{7,20}@(c\.us|lid)$/.test(i
 const failure = (message, status = 409) => Object.assign(new Error(message), { status });
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+/**
+ * Anti-ban pacing for outgoing replies (opt-in via constructor, enabled in server.cjs):
+ * a random gap between any two sends, a "typing…" state proportional to the text length, and
+ * hard caps per chat, per hour and per day. Caps fail BEFORE dispatch (no operation is recorded),
+ * so a capped message is safe to hand to a human instead of being retried blindly.
+ */
+const DEFAULT_PACING = {
+  minGapMs: 4000, maxGapMs: 9000,
+  typingMinMs: 1500, typingMaxMs: 8000, typingMsPerChar: 40,
+  perChatWindowMs: 10 * 60 * 1000, perChatMax: 8, hourMax: 40, dayMax: 200,
+};
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 class Bridge {
-  constructor({ stateDir, createClient, makeQr, mediaFromUrl, now = Date.now }) {
+  constructor({ stateDir, createClient, makeQr, mediaFromUrl, now = Date.now, pacing = null, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random }) {
+    this.pacing = pacing ? { ...DEFAULT_PACING, ...pacing } : null;
+    this.sleep = sleep;
+    this.random = random;
+    this.lastSendAt = 0;
+    this.paceChain = Promise.resolve();
     this.stateDir = stateDir;
     this.createClient = createClient;
     this.makeQr = makeQr;
@@ -328,6 +347,8 @@ class Bridge {
       if (!inbound || inbound.type !== 'incoming' || inbound.chatId !== chatId || inbound.accountId !== accountId
         || this.now() - inbound.timestamp > REPLY_MAX_AGE_MS) throw failure('A recent incoming message is required', 403);
       await this.assertSendAllowed(chatId, purpose);
+      this.assertWithinLimits(chatId);
+      await this.pace(chatId, (text || '').length);
       const content = mediaUrl ? await this.mediaFromUrl(mediaUrl, mediaType) : text;
       // Network/media work may take time. Recheck immediately before dispatch.
       await this.assertSendAllowed(chatId, purpose);
@@ -341,7 +362,9 @@ class Bridge {
         const sent = await this.client.sendMessage(chatId, content, { ...(mediaUrl && text ? { caption: text } : {}), sendSeen: false });
         const messageId = idOf(sent?.id);
         if (!messageId) throw failure('Transport returned no message ID');
-        op.status = 'sent'; op.messageId = messageId; this.save();
+        op.status = 'sent'; op.messageId = messageId;
+        if (this.pacing) { (account.sendLog ||= []).push({ t: this.now(), chatId }); }
+        this.save();
         return { operationId, messageId, status: 'sent' };
       } catch (error) {
         op.status = 'uncertain'; this.save(); this.report(error);
@@ -351,6 +374,35 @@ class Bridge {
     this.chatChains.set(chatId, task);
     try { return await task; }
     finally { if (this.chatChains.get(chatId) === task) this.chatChains.delete(chatId); }
+  }
+
+  assertWithinLimits(chatId) {
+    const p = this.pacing; if (!p) return;
+    const account = this.account(); const now = this.now();
+    account.sendLog = (account.sendLog || []).filter(entry => now - entry.t < DAY_MS);
+    if (account.sendLog.length >= p.dayMax) throw failure('Daily send limit reached; hand to a human', 429);
+    if (account.sendLog.filter(entry => now - entry.t < HOUR_MS).length >= p.hourMax) throw failure('Hourly send limit reached; hand to a human', 429);
+    if (account.sendLog.filter(entry => entry.chatId === chatId && now - entry.t < p.perChatWindowMs).length >= p.perChatMax) throw failure('Chat send limit reached; hand to a human', 429);
+  }
+
+  /** Serialises all sends: random gap since the previous send, then a typing indicator sized to the text. */
+  pace(chatId, textLength) {
+    const p = this.pacing; if (!p) return Promise.resolve();
+    const run = this.paceChain.catch(() => {}).then(async () => {
+      const gap = p.minGapMs + this.random() * (p.maxGapMs - p.minGapMs);
+      const wait = this.lastSendAt + gap - this.now();
+      if (wait > 0) await this.sleep(wait);
+      const typingMs = Math.min(p.typingMaxMs, Math.max(p.typingMinMs, textLength * p.typingMsPerChar)) * (0.8 + this.random() * 0.4);
+      try {
+        const chat = await this.client.getChatById?.(chatId);
+        await chat?.sendStateTyping?.();
+        await this.sleep(typingMs);
+        await chat?.clearState?.();
+      } catch { /* typing is cosmetic; never block or fail a send because of it */ }
+      this.lastSendAt = this.now();
+    });
+    this.paceChain = run;
+    return run;
   }
 
   async assertSendAllowed(chatId, purpose) {

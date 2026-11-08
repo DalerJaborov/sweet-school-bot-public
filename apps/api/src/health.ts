@@ -1,5 +1,5 @@
 import { prisma } from "./db.js";
-import { diskState } from "./diskWatch.js";
+import { diskState } from "./diskInfo.js";
 import { stuckWorkers } from "./workerHealth.js";
 import { inboundSilenceState } from "./inboundWatch.js";
 
@@ -12,7 +12,7 @@ import { inboundSilenceState } from "./inboundWatch.js";
  *
  * Здесь три вещи, каждая из которых ломает бота целиком:
  *  • база отвечает на запрос;
- *  • на диске есть место (иначе SQLite перестанет писать, см. diskWatch.ts);
+ *  • на диске есть место (иначе SQLite перестанет писать, см. diskInfo.ts);
  *  • фоновый круг задач замыкается (иначе воронки, догоняющие и перепроверка
  *    чеков молча останавливаются — так уже было 03.09.2026).
  *

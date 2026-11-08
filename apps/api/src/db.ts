@@ -108,7 +108,10 @@ export async function setSetting(key: string, value: string): Promise<void> {
  *  адрес. Вырезаем значение секретных query-параметров, а не сам факт вызова:
  *  так видно, что произошло, но не видно, чем можно воспользоваться. */
 function redact(msg: string): string {
-  return msg.replace(/((?:access_token|token|key)=)[^&\s"]+/gi, "$1***");
+  return msg
+    .replace(/((?:access_token|token|key)=)[^&\s"]+/gi, "$1***")
+    // Telegram Bot API несёт токен прямо в пути: https://api.telegram.org/bot<id>:<секрет>/…
+    .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot***");
 }
 
 /**
@@ -171,12 +174,14 @@ async function persistAndMaybeAlert(source: string, text: string): Promise<void>
 
     await prisma.errorLog.create({ data: { source, message: text.slice(0, 2000) } });
 
-    if (!seenLately) {
-      try {
-        newErrorHook?.(source, text);
-      } catch {
-        // Крючок не должен ронять запись самой ошибки.
-      }
+    // Крючок зовём на каждую неотсеянную запись (раз в 10 минут на вид ошибки):
+    // отправлять ли что-то, решает шлюз alertGate.ts — тревога только если сбой
+    // идёт дольше 30 минут и не чаще раза в 6 часов (08.11.2026).
+    void seenLately;
+    try {
+      newErrorHook?.(source, text);
+    } catch {
+      // Крючок не должен ронять запись самой ошибки.
     }
   } catch {
     // Журнал ошибок не должен ломать то, об ошибке чего он пишет. Если

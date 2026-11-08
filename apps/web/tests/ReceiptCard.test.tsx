@@ -79,7 +79,7 @@ describe("ReceiptCard — свайп", () => {
     render(<ReceiptCard receipt={receipt} onApprove={vi.fn()} onReject={vi.fn()} />);
     expect(screen.getByText("70 с.")).toBeTruthy();
     expect(screen.getByText("21 рецепт")).toBeTruthy();
-    expect(screen.getByText("ИИ уверен на 61%")).toBeTruthy();
+    expect(screen.getByText("Помощник уверен на 61%")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Подтвердить" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Отклонить" })).toBeTruthy();
   });

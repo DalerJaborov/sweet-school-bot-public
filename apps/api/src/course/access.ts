@@ -4,7 +4,8 @@ import jwt from "jsonwebtoken";
 import type { Request, Response } from "express";
 import { env } from "../env.js";
 import { prisma, getSetting, logError, logInfo } from "../db.js";
-import { ownerAlertChatIds, sendTelegramMessage } from "../telegram.js";
+import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { shouldSendAlert } from "../alertGate.js";
 import type { Device, Purchase, Contact } from "@prisma/client";
 
 /**
@@ -518,8 +519,10 @@ async function maybeAlertGeoAnomaly(contact: Contact, device: Device, country: s
   if (Date.now() - device.lastSeenAt.getTime() > GEO_WINDOW_MS) return;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await ownerAlertChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
+  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
   if (!botToken || !chatId) return;
+  // Один и тот же покупатель — не чаще раза в сутки (08.11.2026).
+  if (!(await shouldSendAlert(`geo:${contact.id}`, { cooldownMs: 24 * 3_600_000 }))) return;
 
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   await sendTelegramMessage(

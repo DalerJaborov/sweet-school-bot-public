@@ -4,7 +4,7 @@ import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automation.js";
-import { sendReceiptForReview } from "../telegram.js";
+import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
 import { allocate } from "../courses.js";
@@ -122,14 +122,8 @@ async function askOwner(
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken || !verdict.imageUrl) return;
 
-  const recipients = [
-    ...new Set(
-      [
-        (await getSetting("telegramOwnerChatId"))?.trim(),
-        (await getSetting("telegramReportChatId"))?.trim(),
-      ].filter((id): id is string => Boolean(id))
-    ),
-  ];
+  // Карточки подозрительных чеков — владельцу и сестре (telegramSummaryChatIds).
+  const recipients = await summaryChatIds();
   if (recipients.length === 0) return;
 
   const who = contact.username ? `@${contact.username}` : contact.igUserId;

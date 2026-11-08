@@ -48,7 +48,9 @@ export async function notifyIfStuck(contactId: string): Promise<void> {
   // Выключатель в панели (Настройки) — владелец решил 25.08.2026 выключить эту
   // живую тревогу совсем: те же случаи и так видны в вечерней сводке (23:00).
   // По умолчанию включено — тот же приём, что styleLearningEnabled.
-  if ((await getSetting("stuckAlertEnabled")) === "false") return;
+  // С 08.11.2026 выключено по умолчанию (минимум шума в Telegram): те же случаи
+  // есть в вечерней сводке и в панели. Включается явным "true".
+  if ((await getSetting("stuckAlertEnabled")) !== "true") return;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;

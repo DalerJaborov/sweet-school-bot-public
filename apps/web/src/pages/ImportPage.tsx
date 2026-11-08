@@ -285,7 +285,7 @@ export function ImportPage({ onGo }: { onGo: (tab: "courses" | "recipes") => voi
 
   return (
     <div className="card">
-      <h2>{Icons.media} Импорт уроков из Telegram</h2>
+      <h2>{Icons.media} Загрузка уроков из Telegram</h2>
       <p className="hint">
         Шаг {step + 1} из 6.{" "}
         {step === 0 && "Что подготовить, прежде чем начинать."}
