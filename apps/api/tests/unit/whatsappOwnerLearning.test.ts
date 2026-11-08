@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Ответы Ширин со своего телефона в WhatsApp — образцы манеры для бота
@@ -23,12 +23,23 @@ vi.mock("../../src/whatsapp/client.js", async (importOriginal) => ({
   whatsappConfigured: () => true,
 }));
 import { bridgeRequest } from "../../src/whatsapp/client.js";
-import { ingestWhatsAppEvents } from "../../src/whatsapp/worker.js";
+import { ingestWhatsAppEvents, OWNER_LEARN_DELAY_MS } from "../../src/whatsapp/worker.js";
+
+/** Приём событий + пауза, после которой проверяется, что это правда Ширин. */
+async function ingestAndWait(): Promise<void> {
+  await ingestWhatsAppEvents();
+  await vi.advanceTimersByTimeAsync(OWNER_LEARN_DELAY_MS);
+}
 
 const human = { id: "h1", messageId: "h1", accountId: "acc", chatId: "chat", type: "human", timestamp: Date.now(), text: "Кабул кардем, хозир дохил мекнем" };
 const client = { id: "contact", igUserId: "acc:chat", channel: "WHATSAPP", personal: false, whatsappSavedContact: false, spamBlockedAt: null };
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.clearAllMocks();
   mocks.prisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(mocks.prisma));
   mocks.prisma.contact.upsert.mockResolvedValue(client);
@@ -38,22 +49,37 @@ beforeEach(() => {
 });
 
 describe("WhatsApp: ответ Ширин учит бота её манере", () => {
-  it("ответ клиентке становится образцом «вопрос → ответ Ширин»", async () => {
+  it("до паузы не учимся: мост мог прислать событие раньше, чем бот записал свой mid", async () => {
     await ingestWhatsAppEvents();
+    expect(mocks.rememberOwnerReply).not.toHaveBeenCalled();
+    // Бот успел записать своё сообщение — пометка «человек» снята, образца нет.
+    mocks.prisma.message.findUnique.mockResolvedValueOnce({ byHuman: false });
+    await vi.advanceTimersByTimeAsync(OWNER_LEARN_DELAY_MS);
+    expect(mocks.rememberOwnerReply).not.toHaveBeenCalled();
+  });
+  it("вопрос клиента ищется только за последние сутки до ответа Ширин и без нажатий кнопок", async () => {
+    await ingestAndWait();
+    const where = mocks.prisma.message.findFirst.mock.calls[0][0].where;
+    expect(where.payload).toBeNull();
+    expect(where.createdAt.lte.getTime() - where.createdAt.gte.getTime()).toBe(24 * 3_600_000);
+    expect(where.createdAt.lte.getTime()).toBe(human.timestamp);
+  });
+  it("ответ клиентке становится образцом «вопрос → ответ Ширин»", async () => {
+    await ingestAndWait();
     expect(mocks.rememberOwnerReply).toHaveBeenCalledWith("Пул гузарондам", human.text, "TAKEOVER", undefined, "contact");
   });
   it("личный контакт, сохранённый в телефоне или спам — не учимся", async () => {
     for (const extra of [{ personal: true }, { whatsappSavedContact: true }, { spamBlockedAt: new Date() }]) {
       mocks.prisma.contact.upsert.mockResolvedValueOnce({ ...client, ...extra });
-      await ingestWhatsAppEvents();
+      await ingestAndWait();
     }
     expect(mocks.rememberOwnerReply).not.toHaveBeenCalled();
   });
   it("чат, где клиент ещё ничего не писал, и эхо ответа самого бота — не учимся", async () => {
     mocks.prisma.message.findFirst.mockResolvedValueOnce(null);
-    await ingestWhatsAppEvents();
+    await ingestAndWait();
     mocks.prisma.message.findUnique.mockResolvedValueOnce({ byHuman: false });
-    await ingestWhatsAppEvents();
+    await ingestAndWait();
     expect(mocks.rememberOwnerReply).not.toHaveBeenCalled();
   });
 });

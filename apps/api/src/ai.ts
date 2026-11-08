@@ -28,7 +28,8 @@ import { maybeSendVideos } from "./ai/videoLibrary.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
-import { detectClientLanguage, detectReplyLanguage, languageSignal, conversationLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { detectReplyLanguage, languageSignal, type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
 import { BUDGET_FALLBACK } from "./ai/prompts.js";
 import { buildSystemPrompt, getSalesTexts, getOfflineFacts } from "./services/salesTextsService.js";
@@ -262,10 +263,11 @@ export async function aiReply(
   const primaryKey = apiKeys[0];
 
   // Голосовое WhatsApp приходит с пустым текстом, а «Салом» пишут на любом языке:
-  // в обоих случаях язык берём из прошлых написанных сообщений клиента, а не
-  // «таджикский по умолчанию» (владелец 08.11.2026).
+  // язык — по единой цепочке (ai/contactLanguage.ts): сообщение → прошлые сообщения
+  // клиента → язык с сайта → русский. Проверка языка ответа включается только при
+  // явном сигнале в самом сообщении (ownLanguage).
   const ownLanguage = languageSignal(text ?? "");
-  const language = ownLanguage ?? (await lastWrittenLanguage(contact.id));
+  const language = ownLanguage ?? (await contactLanguage(contact.id));
 
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
@@ -370,7 +372,7 @@ export async function aiReply(
   // раздела «Тексты и цены» (services/salesTextsService.ts).
   const prompt =
     (await buildSystemPrompt()) +
-    (await buildStyleBlock(text)) +
+    (await buildStyleBlock(text, language)) +
     (await buildInsightsBlock()) +
     (await buildObjectionsBlock()) +
     (await buildSocialProofBlock()) +
@@ -552,11 +554,10 @@ export async function aiReply(
         );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         for (const part of toSend) {
-          // В историю — ровно то, что увидел клиент (без тире, буквы по его стилю).
-          const shown = await humanizeForContact(contact.id, part);
-          if (!shown) continue;
-          const mid = await sendToContact(contact, shown);
-          await recordOutgoingMessage(contact.id, shown, mid);
+          // В историю sendToContact сам пишет ровно то, что увидел клиент (после фильтра);
+          // запись ниже с тем же mid ничего не меняет. Пусто после фильтра — не шлёт и не пишет.
+          const mid = await sendToContact(contact, part);
+          if (mid) await recordOutgoingMessage(contact.id, part, mid);
         }
         // Реалтайм-версия «где бот застрял» — см. stuckAlert.ts. Fire-and-forget,
         // как markStartedLearningIfReplied выше: сбой здесь не должен трогать
@@ -649,7 +650,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     return;
   }
 
-  const language = detectClientLanguage(text);
+  const language = await contactLanguage(contact.id, text);
   const verdict = guardOffTopic(text);
   if (verdict) {
     // «Пустите бесплатно» и назойливое дёрганье под роликом — молчим совсем.
@@ -813,21 +814,6 @@ const HUMAN_REQUESTED_SILENCE_MS = 60 * 60_000;
  *  Английский не трогаем: детектор ответа на латинице слишком груб, а промт с
  *  английским справляется. */
 const OPPOSITE: Partial<Record<ClientLanguage, ClientLanguage>> = { ru: "tg", tg: "ru" };
-
-/** Язык по последним НАПИСАННЫМ сообщениям клиента (голосовое и «Салом» не в счёт).
- *  Ничего не известно — русский: это не «по умолчанию таджикский», а честное «не знаем»,
- *  и проверка языка ответа в этом случае не включается (модель слышит голос сама). */
-async function lastWrittenLanguage(contactId: string): Promise<ClientLanguage> {
-  const rows = await prisma.message
-    .findMany({
-      where: { contactId, direction: "IN", text: { not: null } },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-      select: { text: true },
-    })
-    .catch(() => null);
-  return conversationLanguage((rows ?? []).map((r) => r.text));
-}
 
 const LANGUAGE_FIX: Record<"ru" | "tg", string> = {
   ru:

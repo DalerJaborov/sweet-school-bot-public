@@ -12,11 +12,14 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../src/db.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/db.js")>("../../src/db.js");
-  class KnownError extends Error { code = "P2002"; }
+  const { Prisma } = await vi.importActual<typeof import("@prisma/client")>("@prisma/client");
   const prisma = {
     message: {
       create: vi.fn(async ({ data }: { data: { contactId: string; direction: string; text: string; mid: string | null } }) => {
-        if (data.mid && state.rows.some((r) => r.mid === data.mid)) throw new KnownError("dup");
+        // Настоящая ошибка уникальности Prisma: recordOutgoingMessage ловит именно её.
+        if (data.mid && state.rows.some((r) => r.mid === data.mid)) {
+          throw new Prisma.PrismaClientKnownRequestError("Unique constraint failed on mid", { code: "P2002", clientVersion: "test" });
+        }
         state.rows.push({ ...data, byHuman: false, createdAt: new Date(2026, 10, 8, 16, state.rows.length) });
       }),
       findUnique: vi.fn(async ({ where }: { where: { mid: string } }) => state.rows.find((r) => r.mid === where.mid) ?? null),
@@ -30,24 +33,13 @@ vi.mock("../../src/db.js", async () => {
     },
     contact: { findUnique: vi.fn(async () => null) },
   };
+  // Настоящий recordOutgoingMessage из db.ts (это он и чинится) — подменена только база.
+  actual.setPrismaClient(prisma as never);
   return {
     ...actual,
     prisma,
     getSetting: vi.fn(async (k: string) => (k === "voiceReplyEnabled" ? "true" : null)),
     logError: vi.fn(),
-    // Настоящий recordOutgoingMessage с нашей prisma: это он и чинится.
-    recordOutgoingMessage: async (contactId: string, text: string, mid: string | null) => {
-      try {
-        await prisma.message.create({ data: { contactId, direction: "OUT", text, mid } });
-      } catch (err) {
-        if ((err as { code?: string }).code !== "P2002") throw err;
-        if (!mid) return;
-        const existing = await prisma.message.findUnique({ where: { mid } });
-        if (existing && !existing.byHuman && existing.contactId === contactId && !existing.text?.trim() && text.trim()) {
-          await prisma.message.update({ where: { mid }, data: { text } });
-        }
-      }
-    },
   };
 });
 
@@ -95,7 +87,9 @@ describe("Instagram: не больше одного голосового под�
 describe("на «спасибо / рахмат / хоб» голосом не отвечаем", () => {
   beforeEach(() => { state.rows.length = 0; });
 
-  it.each(["Pahmat apajon", "Хоб", "Xob mayli", "Рахмат", "Спасибо большое", "Ок, спасибо", "Раҳмат, апа!", "хуб, рахмат", "ладно", "Хорошо"])(
+  it.each(["Pahmat apajon", "Хоб", "Xob mayli", "Рахмат", "Спасибо большое", "Ок, спасибо", "Раҳмат, апа!", "хуб, рахмат", "ладно", "Хорошо",
+    // ❤️ = сердце + невидимый U+FE0F: раньше из-за него «спасибо с сердечком» получало голосовое.
+    "Спасибо ❤️", "Рахмат апачон ❤️", "Спасибо 🙏🏻❤️", "Ташаккури зиёд", "Рахмати калон 🥰"])(
     "«%s» — благодарность без вопроса",
     (t) => expect(isShortAcknowledgement(t)).toBe(true),
   );

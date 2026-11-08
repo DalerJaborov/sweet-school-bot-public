@@ -9,7 +9,8 @@ import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
 import { allocate, COURSE_TITLE, coursesForAmount, ownedCourses, planForAmount, type Course } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
-import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
+import { type ClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
@@ -62,7 +63,7 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
         orderBy: { createdAt: "desc" },
         select: { text: true },
       });
-  const text = byLang[detectClientLanguage(lastIn?.text ?? "")];
+  const text = byLang[await contactLanguage(contact.id, lastIn?.text ?? "")];
   const mid = await sendToContact(contact, text);
   if (mid) await recordOutgoingMessage(contact.id, text, mid);
 }
@@ -110,7 +111,7 @@ export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: 
     orderBy: { createdAt: "desc" },
     select: { text: true },
   });
-  const text = FORWARDED_TO_OWNER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  const text = FORWARDED_TO_OWNER_TEXT[await contactLanguage(contact.id, lastIn?.text ?? "")];
   if (await isBotFrozen()) return;
   await sendToContact(contact, text)
     .then((mid) => {
@@ -176,7 +177,7 @@ async function tellAlreadyAccepted(contact: Contact, lastText: string | null = n
         orderBy: { createdAt: "desc" },
         select: { text: true },
       });
-  const text = DUPLICATE_PAYMENT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  const text = DUPLICATE_PAYMENT_TEXT[await contactLanguage(contact.id, lastIn?.text ?? "")];
   if (await isBotFrozen()) return false;
   let sent = false;
   await sendToContact(contact, text)
@@ -620,7 +621,7 @@ export async function handleReceiptVerdict(
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
-    const text = ALT_SCREENSHOT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    const text = ALT_SCREENSHOT_TEXT[await contactLanguage(contact.id, lastIn?.text ?? "")];
     if (await isBotFrozen()) return;
     await sendToContact(contact, text)
       .then((mid) => {

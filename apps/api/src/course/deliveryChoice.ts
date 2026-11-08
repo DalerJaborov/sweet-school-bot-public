@@ -1,7 +1,7 @@
 import type { Contact } from "@prisma/client";
 import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
-import { detectClientLanguage } from "../ai/clientLanguage.js";
+import { contactLanguage } from "../ai/contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
@@ -89,7 +89,7 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
   if (claim.count !== 1) return false;
   const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN" }, orderBy: { createdAt: "desc" } });
   const lang = contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
-    ? contact.preferredLanguage : detectClientLanguage(lastIn?.text ?? "") === "ru" ? "ru" : "tg";
+    ? contact.preferredLanguage : (await contactLanguage(contact.id, lastIn?.text ?? "")) === "ru" ? "ru" : "tg";
   const text = DELIVERY_QUESTION[lang];
   let sent = false;
   try {

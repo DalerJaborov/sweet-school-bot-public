@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from "@prisma/client";
+import { humanizeBotText } from "./ai/humanText.js";
 
 /** Singleton instance — used by all production code. Mutable so tests can
  *  replace it via setPrismaClient() without touching import sites. */
@@ -70,6 +71,9 @@ export const WEB_MID_PREFIX = "web:";
 
 export async function recordOutgoingMessage(contactId: string, text: string, mid: string | null): Promise<void> {
   if (mid?.startsWith(WEB_MID_PREFIX)) return; // канал WEB: строка уже записана в sendToContact
+  // Текст бота, от которого после фильтра ничего не осталось («Апачон!»), sendToContact не
+  // отправил (mid = null): в историю как «отправленное» его не пишем.
+  if (!mid && text.trim() && !humanizeBotText(text, { keepTajikLetters: true }).trim()) return;
   try {
     await prisma.message.create({ data: { contactId, direction: "OUT", text, mid } });
   } catch (err) {

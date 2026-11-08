@@ -3,7 +3,7 @@ import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "./telegram.js";
 import { offsetMs } from "./dailyReport.js";
-import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { offlineStartDate } from "./ai/courseDate.js";
 import { offlineAddress, parseHours, type OfflineFacts } from "./ai/offlineFacts.js";
 import { getOfflineFacts } from "./services/salesTextsService.js";
@@ -125,7 +125,7 @@ async function sweep(): Promise<void> {
     const windowOpen = lastIn != null && Date.now() - lastIn.createdAt.getTime() < 24 * 3_600_000;
 
     if (windowOpen) {
-      const language = detectClientLanguage(lastIn?.text ?? "");
+      const language = await contactLanguage(signup.contactId, lastIn?.text ?? "");
       const text = reminderText(language === "tg" ? "tg" : "ru", signup.name, facts);
       try {
         const mid = await sendToContact(signup.contact, text);

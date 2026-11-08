@@ -1,6 +1,6 @@
 import { prisma, getSetting, logError } from "./../db.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
-import { withoutAddressWords } from "./humanText.js";
+import { comparableBotText, humanizeBotText, withoutAddressWords } from "./humanText.js";
 
 /**
  * Самообучение стилю хозяйки — БЕЗ переписывания промта.
@@ -148,15 +148,25 @@ const NOT_HER_WORDS = /Automation powered|Drafting the|\*\*|NO_REPLY|Рады п
 export async function withoutBotAuthored<T extends { ownerText: string }>(pool: T[]): Promise<T[]> {
   const texts = [...new Set(pool.map((e) => e.ownerText.trim()).filter(Boolean))];
   if (texts.length === 0) return pool;
+  // Бот пишет в историю текст после фильтра отправки (без тире, буквы по стилю клиента),
+  // а образец мог прийти и до фильтра, и после: ищем все варианты и сравниваем в одном виде.
+  const variants = new Set<string>();
+  for (const t of texts) {
+    variants.add(t);
+    variants.add(humanizeBotText(t, { keepTajikLetters: false }));
+    variants.add(humanizeBotText(t, { keepTajikLetters: true }));
+  }
+  // Instagram снимает точку в конце (voice.ts::toOwnerVoice), а в истории она осталась.
+  for (const v of [...variants]) if (!/[.!?…]$/u.test(v)) variants.add(v + ".");
   const sentByBot = new Set(
     (
       await prisma.message.findMany({
-        where: { direction: "OUT", byHuman: false, text: { in: texts } },
+        where: { direction: "OUT", byHuman: false, text: { in: [...variants] } },
         select: { text: true },
       })
-    ).map((m) => (m.text ?? "").trim()),
+    ).map((m) => comparableBotText(m.text)),
   );
-  return pool.filter((e) => !sentByBot.has(e.ownerText.trim()) && !NOT_HER_WORDS.test(e.ownerText));
+  return pool.filter((e) => !sentByBot.has(comparableBotText(e.ownerText)) && !NOT_HER_WORDS.test(e.ownerText));
 }
 
 /** Бонус образцу на языке текущего клиента: таджикской клиентке — таджикские образцы. */
@@ -165,7 +175,7 @@ export function languageBonus(example: { ownerText: string }, language: ClientLa
   return detectClientLanguage(example.ownerText) === language ? 4 : 0;
 }
 
-export async function buildStyleBlock(clientText = ""): Promise<string> {
+export async function buildStyleBlock(clientText = "", knownLanguage?: ClientLanguage): Promise<string> {
   if ((await getSetting("styleLearningEnabled")) === "false") return "";
 
   const rawPool = await prisma.styleExample.findMany({
@@ -178,7 +188,8 @@ export async function buildStyleBlock(clientText = ""): Promise<string> {
   if (pool.length === 0) return "";
 
   const ask = words(clientText);
-  const language = detectClientLanguage(clientText);
+  // Язык контакта из ai.ts (цепочка contactLanguage) точнее, чем одно сообщение: «Салом» или голосовое.
+  const language = knownLanguage ?? detectClientLanguage(clientText);
   const examples = [...pool]
     .map((e) => ({ e, s: score(e, ask) + languageBonus(e, language) }))
     .sort((a, b) => b.s - a.s)

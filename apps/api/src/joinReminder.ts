@@ -3,7 +3,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
 import { rememberInviteLink } from "./groupAccess.js";
 import { chatIdFor, COURSE_TITLE, type Course } from "./courses.js";
@@ -158,7 +158,7 @@ async function sweep(): Promise<void> {
     if (windowOpen) {
       // Язык берём по последнему сообщению человека — писать по-русски той, кто
       // писала на таджикском, значит сразу выдать в себе робота.
-      const tajik = detectClientLanguage(lastIn?.text ?? "") === "tg";
+      const tajik = (await contactLanguage(contact.id, lastIn?.text ?? "")) === "tg";
       // В веб-режиме зовём открыть уроки, а не «войти в группу»: группы у
       // такой ученицы нет, и просьба присоединиться к ней сбивала бы с толку.
       const webOnly = contactMode === "web";

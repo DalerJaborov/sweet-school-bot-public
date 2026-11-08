@@ -1,7 +1,8 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { formatCourseDate, offlineStartDate, upcomingOfflineStartDate, type CalendarDay } from "./courseDate.js";
 import { sendToContact } from "../messaging/send.js";
-import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
+import { type ClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
 import { DEFAULT_OFFLINE_FACTS, formatHours, offlineAddress, parseHours, pluralRu, type OfflineFacts } from "./offlineFacts.js";
 import { getOfflineFacts } from "../services/salesTextsService.js";
 import type { Contact } from "@prisma/client";
@@ -168,7 +169,7 @@ export async function maybeSendOfflineCard(contact: Contact, clientText: string)
   });
   if (claimed.count === 0) return false;
 
-  const text = await offlineCourseCard(detectClientLanguage(clientText));
+  const text = await offlineCourseCard(await contactLanguage(contact.id, clientText));
   try {
     // Несколько коротких сообщений вместо одной простыни (владелец 08.11.2026).
     // Упало посередине — отметку снимаем ниже, повтор пришлёт карточку целиком.

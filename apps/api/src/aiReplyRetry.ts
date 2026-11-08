@@ -1,7 +1,7 @@
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
 import { sendToContact } from "./messaging/send.js";
-import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
@@ -154,7 +154,7 @@ async function runQueue(): Promise<void> {
         where: { id: row.id, delayNoticeAt: null }, data: { delayNoticeAt: new Date() },
       });
       if (claimed.count) {
-        const notice = DELAY_NOTICES[detectClientLanguage(row.text)];
+        const notice = DELAY_NOTICES[await contactLanguage(row.contactId, row.text)];
         try {
           const mid = await sendToContact(row.contact, notice);
           await recordOutgoingMessage(row.contactId, notice, mid);

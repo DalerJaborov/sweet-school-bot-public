@@ -16,7 +16,8 @@ export async function humanizeForContact(contactId: string, text: string, extraC
   let recent: string[] = [];
   try {
     const rows = await prisma.message.findMany({
-      where: { contactId, direction: "IN", text: { not: null } },
+      // Нажатие кнопки воронки — это текст владельца, а не клиента: в стиль не считаем.
+      where: { contactId, direction: "IN", text: { not: null }, payload: null },
       orderBy: { createdAt: "desc" },
       take: STYLE_SAMPLE,
       select: { text: true },

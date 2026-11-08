@@ -37,7 +37,8 @@ export async function ingestWhatsAppEvents(): Promise<void> {
         } });
       });
       if (e.type === "human" && e.text.trim() && !contact.personal && !contact.whatsappSavedContact && !contact.spamBlockedAt) {
-        await learnFromOwner(contact.id, whatsappMessageId(e.accountId, e.messageId), e.text);
+        // Не ждём: проверка идёт через паузу (см. learnFromOwner), а приём событий стоять не должен.
+        scheduleLearnFromOwner(contact.id, whatsappMessageId(e.accountId, e.messageId), e.text, new Date(e.timestamp));
       }
       if (e.type === "incoming" && e.ad) {
         await recordAdReferral(contact.id, { adId: e.ad.sourceId, ctwaClid: e.ad.ctwaClid, source: e.ad.sourceType ?? "whatsapp_ad" })
@@ -48,6 +49,17 @@ export async function ingestWhatsAppEvents(): Promise<void> {
   } finally { ingesting = false; }
 }
 
+/** Пауза перед проверкой «это правда Ширин»: событие моста может прийти раньше, чем
+ *  бот запишет mid своего же сообщения (recordOutgoingMessage снимет ложную пометку
+ *  byHuman). Тот же приём, что в Instagram (webhook.ts::handleEcho, 20 секунд). */
+export const OWNER_LEARN_DELAY_MS = 20_000;
+/** Вопрос клиента старше суток — уже не тот разговор: в пару его не берём. */
+const OWNER_LEARN_WINDOW_MS = 24 * 3_600_000;
+
+function scheduleLearnFromOwner(contactId: string, mid: string, ownerText: string, ownerAt: Date): void {
+  setTimeout(() => void learnFromOwner(contactId, mid, ownerText, ownerAt), OWNER_LEARN_DELAY_MS);
+}
+
 /**
  * ЖИВОЕ ОБУЧЕНИЕ НА WHATSAPP. Ширин ответила сама со своего телефона — её фраза
  * становится образцом манеры (ai/styleLearning.ts), как в Instagram (webhook.ts).
@@ -55,12 +67,15 @@ export async function ingestWhatsAppEvents(): Promise<void> {
  * только на старой переписке Instagram. Строка должна остаться «человеческой»:
  * если это эхо ответа самого бота (строка уже записана как его), не учимся.
  */
-async function learnFromOwner(contactId: string, mid: string, ownerText: string): Promise<void> {
+async function learnFromOwner(contactId: string, mid: string, ownerText: string, ownerAt: Date): Promise<void> {
   try {
     const row = await prisma.message.findUnique({ where: { mid }, select: { byHuman: true } });
     if (!row?.byHuman) return;
     const lastIn = await prisma.message.findFirst({
-      where: { contactId, direction: "IN", text: { not: null } },
+      where: {
+        contactId, direction: "IN", text: { not: null }, payload: null,
+        createdAt: { lte: ownerAt, gte: new Date(ownerAt.getTime() - OWNER_LEARN_WINDOW_MS) },
+      },
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });

@@ -8,6 +8,7 @@ import {
   withoutDashes,
   withoutAddressWords,
   withoutStockTails,
+  comparableBotText,
   FORBIDDEN_IN_PLAIN_BOT_TEXT,
 } from "../../src/ai/humanText.js";
 
@@ -23,7 +24,7 @@ import { sendToContact } from "../../src/messaging/send.js";
 import { BUDGET_FALLBACK, DEFAULT_SALES_TEXTS } from "../../src/ai/prompts.js";
 import { clarifyText } from "../../src/ai/relevance.js";
 import { receiptNotSeenReply } from "../../src/ai/receiptClaim.js";
-import { guardReply, type GuardKind } from "../../src/ai/offTopicGuard.js";
+import { guardReply, isGuardReply, type GuardKind } from "../../src/ai/offTopicGuard.js";
 import {
   offlineCardDefault,
   offlineCardMessages,
@@ -227,6 +228,25 @@ describe("архитектура: текст бота уходит наружу 
     for (const f of callers) expect(fs.readFileSync(path.join(root, f), "utf8")).toContain("humanizeForContact(");
   });
 
+  it("текст напрямую в транспорт (мимо двери) уходит только из send.ts; admin.ts — ручная отправка Ширин", () => {
+    const callers = (re: RegExp, own: string[]) =>
+      files(root)
+        .filter((f) => re.test(fs.readFileSync(f, "utf8")))
+        .map((f) => path.relative(root, f).replaceAll("\\", "/"))
+        .filter((f) => !own.includes(f))
+        .sort();
+    expect(callers(/\bsendText\(/, ["instagram.ts"])).toEqual(["admin.ts", "messaging/send.ts"]);
+    expect(callers(/\bsendWhatsApp(?:Text|Attachment)\(/, ["whatsapp/transport.ts"])).toEqual(["messaging/send.ts"]);
+    // Ручная отправка в admin.ts — это Ширин (разрешение "human"), фильтр к ней не применяется.
+    expect(fs.readFileSync(path.join(root, "admin.ts"), "utf8")).toContain('withMessagingPermission("human", () => sendText(');
+  });
+
+  it("подпись к видео в WhatsApp идёт через тот же фильтр, что и текст", () => {
+    const send = fs.readFileSync(path.join(root, "messaging/send.ts"), "utf8");
+    const fn = send.slice(send.indexOf("export async function sendVideoWithCaption"));
+    expect(fn.slice(0, fn.search(/\r?\n\}\r?\n/))).toContain("humanizeForContact(contact.id, cleanKeepingWarmTail(caption))");
+  });
+
   it("sendToContact правит всё, что написала не Ширин", () => {
     expect(fs.readFileSync(path.join(root, "messaging/send.ts"), "utf8")).toContain(
       "if (!opts.byHuman) text = await humanizeForContact(contact.id, cleanKeepingWarmTail(text))",
@@ -238,5 +258,39 @@ describe("архитектура: текст бота уходит наружу 
       .filter((f) => /replace\(\/ҷ\/g|ҷ:\s*"ч"/.test(fs.readFileSync(f, "utf8")))
       .map((f) => path.relative(root, f).replaceAll("\\", "/"));
     expect(copies).toEqual(["ai/humanText.ts"]);
+  });
+});
+
+describe("ревью 08.11.2026: правки фильтра", () => {
+  it("несколько дежурных хвостов подряд срезаются за один проход — повторная правка ничего не меняет", () => {
+    const once = humanizeBotText("Курс 50 сомони. Всегда рада помочь. Обращайтесь.", PLAIN);
+    expect(once).toBe("Курс 50 сомони.");
+    expect(humanizeBotText(once, PLAIN)).toBe(once);
+    expect(withoutStockTails("Если будут вопросы, пишите")).toBe("Если будут вопросы, пишите");
+  });
+
+  it("обращение через дефис уходит целиком, без хвоста «-чон»", () => {
+    expect(withoutAddressWords("Апа-ҷон, салом")).toBe("Салом");
+    expect(withoutAddressWords("Салом апа-джан! Курс 50")).toBe("Салом! Курс 50");
+    expect(withoutAddressWords("Апаи Ширин мегӯяд")).toBe("Апаи Ширин мегӯяд");
+  });
+
+  it("сравнение с историей: старая строка (тире, особые буквы, точка) = новая", () => {
+    expect(comparableBotText("Хорошо — сейчас Ширин сама вам ответит.")).toBe(comparableBotText("Хорошо, сейчас Ширин сама вам ответит"));
+    expect(comparableBotText("Ин порчаи видеодарс: Ҳамин ❤️")).toBe(comparableBotText("Ин порчаи видеодарс: хамин"));
+  });
+
+  it("старые шаблоны в истории засчитываются: ответ про рецепты второй раз не уйдёт", () => {
+    // Тексты до 08.11.2026, как они лежат в истории.
+    expect(isGuardReply("По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы", "recipe_question")).toBe(true);
+    expect(isGuardReply("Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед", "recipe_question")).toBe(true);
+    expect(isGuardReply("Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь", "recipe_question")).toBe(true);
+    expect(isGuardReply("К сожалению нет — у нас только кондитерские курсы")).toBe(true);
+    // Новый шаблон после фильтра отправки (тире на сайте становится запятой).
+    expect(isGuardReply(humanizeBotText(guardReply("recipe_question", "en", true), PLAIN), "recipe_question")).toBe(true);
+    expect(isGuardReply(humanizeBotText(guardReply("recipe_question", "ru", true, "web"), PLAIN), "recipe_question")).toBe(true);
+    // Чужой текст — не шаблон.
+    expect(isGuardReply("Курс стоит 70 сомони")).toBe(false);
+    expect(isGuardReply("")).toBe(false);
   });
 });

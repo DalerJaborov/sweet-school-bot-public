@@ -5,7 +5,8 @@ import { sendToContact } from "../messaging/send.js";
 import { techChatIds, sendTelegramMessage } from "../telegram.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { ACCEPTED_WHERE } from "../receiptAccepted.js";
-import { detectClientLanguage, type ClientLanguage } from "../ai/clientLanguage.js";
+import { type ClientLanguage } from "../ai/clientLanguage.js";
+import { contactLanguage } from "../ai/contactLanguage.js";
 import { issueCourseLink, deliveryModeFor } from "./delivery.js";
 import type { Contact, Purchase } from "@prisma/client";
 import { isBotFrozen, contactAutomationBlocked } from "../messaging/automation.js";
@@ -134,7 +135,7 @@ export async function maybeRestoreAccess(
   // мог написать «не работает ссылка» про что угодно.
   if (verdict.kind === "none") return { handled: false };
 
-  const language = detectClientLanguage(text);
+  const language = await contactLanguage(contact.id, text);
 
   if (verdict.kind === "revoked") {
     await reply(contact, TEXTS[language].revoked);
@@ -353,7 +354,7 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
   const language: ClientLanguage =
     contact.preferredLanguage === "tg" || contact.preferredLanguage === "ru"
       ? contact.preferredLanguage
-      : detectClientLanguage(lastIn?.text ?? "");
+      : await contactLanguage(contact.id, lastIn?.text ?? "");
   let url: string | null = null;
   try {
     url = await issueCourseLink(contact.id, { automatic: true });
@@ -375,7 +376,7 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
  * только передаём владельцу, кто покупатель, и он подтверждает одним действием.
  */
 async function handleForeignCode(contact: Contact, owner: Contact, text: string): Promise<RecoveryResult> {
-  const language = detectClientLanguage(text);
+  const language = await contactLanguage(contact.id, text);
   const purchases = await prisma.purchase.findMany({ where: { contactId: owner.id }, orderBy: { createdAt: "desc" } });
   const active = purchases.filter((p) => !p.revokedAt);
   await reply(contact, TEXTS[language].foreign);

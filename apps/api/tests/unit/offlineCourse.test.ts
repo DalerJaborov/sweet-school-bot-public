@@ -166,7 +166,9 @@ describe("maybeSendOfflineCard", () => {
     // Текст заготовки без пересказа моделью, тремя короткими сообщениями.
     const expected = offlineCardMessages(offlineCardDefault("tg", null)).map((m) => cleanAutomatedReply(m));
     expect(sendText.mock.calls.map((c) => c[1])).toEqual(expected);
-    expect(db.model("message").create).toHaveBeenCalledTimes(3);
+    // Каждая часть — в истории (дверь sendToContact пишет отправленное, вызывающий — тот же mid).
+    const recorded = db.model("message").create.mock.calls.map((c) => (c[0] as { data: { text: string } }).data.text);
+    expect(recorded).toEqual(expect.arrayContaining(expected));
   });
 
   it("второй раз молчим — не заваливаем той же простынёй", async () => {

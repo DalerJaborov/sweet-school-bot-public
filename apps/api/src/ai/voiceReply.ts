@@ -27,10 +27,12 @@ const VOICE_FORMAT_BY_CHANNEL: Record<string, "ogg" | "aac" | undefined> = { WHA
 export const VOICE_MARK = "🎤 ";
 /** Короткая благодарность или «понял» без вопроса: голосом на такое не отвечаем. */
 const ACK_WORD =
-  "(?:спасибо|спс|благодарю|рахмат|раҳмат|rahmat|raxmat|pahmat|pa[xh]mat|ташаккур|tashakkur|хоп|хоб|хуб|xob|xop|hop|hob|xub|майли|mayli|ok|ок|окей|okey|хорошо|ладно|понял|поняла|фахмидам|fahmidam|да|ҳа|ха|ha|yes|ясно|ага|большое|калон|апачон|апа|apajon|apa|ширин|shirin)";
+  "(?:спасибо|спс|благодарю|рахмати|раҳмати|рахмат|раҳмат|rahmat|raxmat|pahmat|pa[xh]mat|ташаккури|ташаккур|tashakkur|зиёд|ziyod|хоп|хоб|хуб|xob|xop|hop|hob|xub|майли|mayli|ok|ок|окей|okey|хорошо|ладно|понял|поняла|фахмидам|fahmidam|да|ҳа|ха|ha|yes|ясно|ага|большое|калон|апачон|апа|apajon|apa|ширин|shirin)";
 const ACK_TEXT = new RegExp(`^${ACK_WORD}(?:[\\s,.!]+${ACK_WORD})*[\\s.!,)]*$`, "iu");
 export function isShortAcknowledgement(clientText: string | null | undefined): boolean {
-  const t = (clientText ?? "").replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}]/gu, "").trim();
+  // ❤️ — это два символа: сердце и невидимый селектор U+FE0F; 👩‍🍳 — с «клеем» U+200D.
+  // Без них «Спасибо ❤️» не узнавалось, и на благодарность снова уходило голосовое.
+  const t = (clientText ?? "").replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}️‍]/gu, "").trim();
   if (!t || t.length > 40 || t.includes("?")) return false;
   return ACK_TEXT.test(t);
 }

@@ -68,7 +68,9 @@ export function withoutDashes(text: string): string {
 }
 
 /** Обращения, которых бот не говорит (владелец 08.11.2026). Только целым словом. */
-const ADDRESS_WORD = "апачон|апаҷон|ападжон|апажон|апачонам|апаҷонам|апа";
+// «апа», «апачон», «апа-ҷон», «апа-джан», «апачонам» — одним словом, иначе от «Апа-ҷон»
+// оставался бы хвост «-чон».
+const ADDRESS_WORD = "апа(?:-?(?:ҷон|чон|джон|джан|жон)(?:ам)?)?|ападжон";
 const ADDRESS_AT_LINE_START = new RegExp(String.raw`^([ \t]*)(?:${ADDRESS_WORD})(?!\p{L})[ \t]*[,!.]*[ \t]*`, "gimu");
 const ADDRESS_INLINE = new RegExp(String.raw`[ \t]*,?[ \t]*(?<!\p{L})(?:${ADDRESS_WORD})(?!\p{L})`, "giu");
 
@@ -111,12 +113,24 @@ const STOCK_TAIL = new RegExp(
   "iu"
 );
 
-export function withoutStockTails(text: string): string {
+function withoutOneStockTail(text: string): string {
   const trimmed = text.trim();
   const m = STOCK_TAIL.exec(trimmed);
   if (!m) return text;
   const rest = trimmed.slice(0, m.index).trim();
   return rest ? rest : text;
+}
+
+/** Срезает дежурные хвосты до неподвижной точки: «…Всегда рада помочь. Обращайтесь.»
+ *  теряет обе фразы за один вызов, поэтому повторная правка ничего не меняет. */
+export function withoutStockTails(text: string): string {
+  let out = text;
+  for (let i = 0; i < 5; i++) {
+    const next = withoutOneStockTail(out);
+    if (next === out) return out;
+    out = next;
+  }
+  return out;
 }
 
 export type HumanizeOptions = {
@@ -133,6 +147,21 @@ export function humanizeBotText(text: string, opts: HumanizeOptions): string {
   out = withoutDashes(out);
   if (!opts.keepTajikLetters) out = plainTajikLetters(out);
   return out.trim();
+}
+
+/**
+ * Текст для СРАВНЕНИЯ с историей (шаблоны, подписи видео, образцы манеры): та же правка,
+ * что у двери отправки, без особых букв, без смайликов, точек в конце и регистра. Так
+ * старая строка в истории («Хорошо — сейчас Ширин…», «ҳамон ҷо нависед.») и новая
+ * («Хорошо, сейчас Ширин…») сравниваются по смыслу шаблона, а не по знакам.
+ */
+export function comparableBotText(text: string | null | undefined): string {
+  return humanizeBotText(text ?? "", { keepTajikLetters: false })
+    .replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}️‍]/gu, "")
+    .replace(/[\s.!…]+$/u, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLocaleLowerCase("ru");
 }
 
 /** Пишет ли клиент сам особыми буквами — по его последним сообщениям. */

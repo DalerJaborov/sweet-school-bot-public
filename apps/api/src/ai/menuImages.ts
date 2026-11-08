@@ -3,7 +3,7 @@ import { env } from "../env.js";
 import { sendToContact, sendImageToContact } from "../messaging/send.js";
 import { getPrices } from "../services/priceService.js";
 import type { PriceTable } from "../prices.js";
-import { detectClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
 import type { Contact } from "@prisma/client";
 
 /**
@@ -84,7 +84,7 @@ export async function sendMenuImages(contact: Contact, text: string): Promise<vo
     select: { text: true },
   });
   const courses = inferCourses(text, recent.map((m) => m.text ?? ""), await getPrices());
-  const lang = detectClientLanguage(text) === "tg" ? "tg" : "ru";
+  const lang = (await contactLanguage(contact.id, text)) === "tg" ? "tg" : "ru";
   for (const course of courses) {
     const caption = CAPTION[course][lang];
     const mid = await sendToContact(contact, caption);

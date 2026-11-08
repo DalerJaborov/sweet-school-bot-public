@@ -153,7 +153,8 @@ describe("Язык ответа проверяет код", () => {
     await aiReply(web, "Можно с двух телефонов?", [], []);
 
     expect(generateWithFallback).toHaveBeenCalledTimes(2);
-    expect(String(sendToContact.mock.calls[0][1])).toBe("Хо, мешавад"); // клиент пишет без особых букв, «апачон» убран (08.11.2026)
+    // «апачон» убирает ai.ts; особые буквы по стилю клиента правит уже сама дверь sendToContact (здесь подменена).
+    expect(String(sendToContact.mock.calls[0][1])).toBe("Ҳо, мешавад");
     expect(warn.mock.calls.some((c) => String(c[0]).includes("ai:languageMismatch"))).toBe(true);
   });
 

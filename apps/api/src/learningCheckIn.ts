@@ -1,7 +1,7 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 
 /**
  * «Зашла в группу» ещё не значит «начала учиться». Telegram не даёт «прочитано»
@@ -72,7 +72,7 @@ async function sweep(): Promise<void> {
     if (!windowOpen) continue; // окно Meta закрыто — писать первым нельзя
 
     // Язык берём по последнему сообщению человека, как и в joinReminder.ts.
-    const tajik = detectClientLanguage(lastIn?.text ?? "") === "tg";
+    const tajik = (await contactLanguage(contact.id, lastIn?.text ?? "")) === "tg";
     const text = tajik ? TEXT_TG : TEXT_RU;
     try {
       const mid = await sendToContact(contact, text);

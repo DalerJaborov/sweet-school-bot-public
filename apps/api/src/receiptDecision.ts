@@ -1,7 +1,8 @@
 import { awaitingDeliveryChoice } from "./course/deliveryChoice.js";
 import { withVerifiedReceiptDelivery } from "./messaging/automation.js";
 import { prisma, logError, recordOutgoingMessage } from "./db.js";
-import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { sendToContact } from "./messaging/send.js";
 import { markExamplesAsSuccessful } from "./ai/styleLearning.js";
 import { planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
@@ -134,7 +135,7 @@ async function decideReceiptInner(
       }
       return { ok: true, status: "rejected", message: "Отклонено. Клиентке не писали: чек уже просили недавно" };
     }
-    const rejectText = REJECT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    const rejectText = REJECT_TEXT[await contactLanguage(receipt.contactId, lastIn?.text ?? "")];
     // Запись в историю — даже если отправка не удалась (как и раньше): владелец
     // должен видеть в переписке, что отказ был. Для сайта sendToContact сам
     // кладёт строку и отдаёт mid с префиксом — recordOutgoingMessage не дублирует.

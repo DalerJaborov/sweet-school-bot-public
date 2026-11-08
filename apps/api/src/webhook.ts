@@ -12,7 +12,8 @@ import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } f
 import { debounceMessage } from "./debounce.js";
 import { looksPersonal } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
-import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { rememberOwnerReply, type OwnerMedia } from "./ai/styleLearning.js";
 import { voiceToText } from "./ai/voiceToText.js";
 import { findOwnMedia, viewableUrl } from "./ownMedia.js";
@@ -579,7 +580,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
-    const language = detectClientLanguage(lastIn?.text ?? "");
+    const language = await contactLanguage(contact.id, lastIn?.text ?? "");
     const text = COULD_NOT_LOAD_PHOTO[language];
     const mid = await sendToContact(contact, text);
     if (mid) await recordOutgoingMessage(contact.id, text, mid);
