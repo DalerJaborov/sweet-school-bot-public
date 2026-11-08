@@ -7,13 +7,13 @@ import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automatio
 import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
-import { allocate, type Course } from "../courses.js";
+import { allocate, coursesForAmount, type Course } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
-import { accessAlreadyHandedOut } from "../course/handedOut.js";
+import { receiptServedState } from "../course/handedOut.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -213,23 +213,29 @@ export async function handleReceiptVerdict(
 ): Promise<void> {
   if (await isBotFrozen()) return;
   // ОТЛОЖЕННАЯ ПЕРЕПРОВЕРКА ПОСЛЕ РУЧНОЙ ВЫДАЧИ (08.11.2026): чек ждал в очереди,
-  // Ширин тем временем выдала доступ сама - молчим, тревогу закрываем. Один
-  // платёж - одна выдача.
-  if (existingId) {
+  // а нужные курсы человеку уже выданы - молчим и закрываем. Если Ширин лишь
+  // прислала ссылку вне системы (покупок нет) - оплату молча не закрываем:
+  // карточка владельцу с пометкой, клиентке ничего не пишем.
+  let maybeServed = false;
+  if (existingId && verdict.amount != null && (verdict.currency ?? "TJS").toUpperCase() === "TJS") {
     const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
-    if (queued && (await accessAlreadyHandedOut(contact.id, queued.createdAt))) {
-      await prisma.receiptCheck.update({
-        where: { id: existingId },
-        data: {
-          kind: "duplicate",
-          confidence: verdict.confidence,
-          reason: `${verdict.reason} (доступ уже выдан вручную - автоматика не сработала)`,
-          amount: verdict.amount != null ? Math.round(verdict.amount) : null,
-          ownerDecision: "HANDLED",
-          decidedAt: new Date(),
-        },
-      });
-      return;
+    if (queued) {
+      const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(verdict.amount));
+      if (state === "served") {
+        await prisma.receiptCheck.update({
+          where: { id: existingId },
+          data: {
+            kind: "duplicate",
+            confidence: verdict.confidence,
+            reason: `${verdict.reason} (доступ на эти курсы уже выдан - автоматика не сработала)`,
+            amount: Math.round(verdict.amount),
+            ownerDecision: "HANDLED",
+            decidedAt: new Date(),
+          },
+        });
+        return;
+      }
+      maybeServed = state === "maybe";
     }
   }
   const previous = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
@@ -391,6 +397,11 @@ export async function handleReceiptVerdict(
   // Из рублей и других валют банк конвертирует по своему курсу (единого нет):
   // пересчёт по нашему курсу сравниваем с ценами с запасом 5 %.
   const converted = verdict.amount != null && currency !== "TJS";
+  if (maybeServed && kind === "valid") {
+    kind = "suspicious";
+    hard = true;
+    doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
+  }
   const plan = amount != null ? await allocate(contact.id, converted ? amount * 1.05 : amount) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
@@ -529,6 +540,6 @@ export async function handleReceiptVerdict(
     await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason);
     // Мошеннику (чёрный список, повторный скриншот) ничего не обещаем —
     // владелец сам решит, что ему сказать.
-    if (!knownFraud) await notifyCustomerReceiptForwarded(contact, saved);
+    if (!knownFraud && !maybeServed) await notifyCustomerReceiptForwarded(contact, saved);
   }
 }

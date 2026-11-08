@@ -104,3 +104,17 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
 
   return { grant: [], note: `сумма ${Math.round(amount)} сомони не сходится с ценами курсов` };
 }
+
+/**
+ * Какие курсы даёт сумма чека, НЕ глядя на то, что уже куплено (для проверки
+ * "этот платёж уже обслужен"). Те же границы, что у allocate().
+ */
+export async function coursesForAmount(amount: number): Promise<Course[]> {
+  const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
+  const { price, bundle, bundleFull } = prices;
+  if (amount >= bundle - tol.down && amount <= bundleFull + tol.up + 10) return [COURSE_50, COURSE_70];
+  const fits = ([COURSE_50, COURSE_70] as Course[])
+    .filter((course) => near(amount, price[course], tol.down, tol.up))
+    .sort((a, b) => Math.abs(amount - price[a]) - Math.abs(amount - price[b]));
+  return fits.length > 0 ? [fits[0]] : [];
+}

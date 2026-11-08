@@ -1,55 +1,89 @@
 import { prisma } from "../db.js";
+import type { Course } from "../courses.js";
 
 /**
- * «ДОСТУП УЖЕ ВЫДАН» - ЕДИНЫЙ ВОПРОС ДЛЯ ВСЕЙ АВТОМАТИКИ ПО ОПЛАТЕ (08.11.2026).
+ * «ДОСТУП УЖЕ ВЫДАН» - ЕДИНЫЙ ВОПРОС ДЛЯ АВТОМАТИКИ ПО ОПЛАТЕ (08.11.2026).
  *
  * Живой случай: Ширин сама выдала ссылку в Telegram, клиентка сказала «Рахмат»,
  * а через несколько минут отложенная перепроверка чека сработала и бот написал
  * «Пардохт қабул шуд. Шумо Telegram доред?» - человеку, который уже учится.
- * Один платёж - одна выдача: любое автоматическое сообщение про оплату, вопрос о
- * способе доставки и отложенное одобрение сначала спрашивают здесь.
+ * Один платёж - одна выдача.
  *
- * Доступ считается выданным, если с момента `since`:
- *  - у человека появилась или получила ссылку действующая покупка, ИЛИ
- *  - живой человек (Ширин) написал ему сообщение со ссылкой.
- * Простое «Ширин что-то ответила» без ссылки сюда не входит: платёж мог
- * остаться неоткрытым, молчать автоматике тогда нельзя.
+ * ПРАВИЛО ОСТОРОЖНОСТИ (ревью architect): молчание автоматики не должно терять
+ * оплату. Поэтому:
+ *  - «выдано» значит: действующая покупка именно на НУЖНЫЕ курсы с выданной
+ *    ссылкой (inviteLink) после момента `since`; покупка другого курса не в счёт;
+ *  - сообщение Ширин считается ссылкой только если в нём настоящая ссылка на
+ *    уроки (/l/<токен>) или приглашение в группу (t.me/+...), а не рилс, сайт
+ *    или упоминание аккаунта;
+ *  - одного сообщения без покупки мало, чтобы тихо закрыть оплату: такой чек
+ *    уходит владельцу с пометкой «возможно, уже выдано» ("maybe").
  */
-const LINK_IN_TEXT = /https?:\/\/|t\.me\/|\bshirinsweets\b/i;
+const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{16,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
 
-export async function accessAlreadyHandedOut(contactId: string, since: Date): Promise<boolean> {
-  const delivered = await prisma.purchase.findFirst({
+export async function manualLinkSince(contactId: string, since: Date): Promise<boolean> {
+  const rows = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 30,
+    select: { text: true },
+  });
+  return (rows ?? []).some((m) => Boolean(m.text && MANUAL_LINK.test(m.text)));
+}
+
+/** Курсы с выданной ссылкой, купленные после `since`. */
+export async function deliveredCoursesSince(contactId: string, since: Date): Promise<string[]> {
+  const rows = await prisma.purchase.findMany({
     where: {
       contactId,
       revokedAt: null,
       accessDeliveryUncertainAt: null,
-      OR: [{ createdAt: { gte: since }, inviteLink: { not: null } }, { accessIssuedAt: { gte: since } }],
+      inviteLink: { not: null },
+      createdAt: { gte: since },
     },
-    select: { id: true },
+    select: { course: true },
   });
-  if (delivered) return true;
-  const human = await prisma.message.findFirst({
-    where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
-    orderBy: { createdAt: "desc" },
-    select: { text: true },
-  });
-  return Boolean(human?.text && LINK_IN_TEXT.test(human.text));
+  return (rows ?? []).map((r) => r.course);
+}
+
+export type ServedState = "served" | "maybe" | "no";
+
+/**
+ * Обслужен ли уже платёж на `courses` (то, что даёт сумма чека): "served" -
+ * покупки на все эти курсы выданы; "maybe" - Ширин прислала настоящую ссылку, но
+ * покупок на эти курсы нет (выдача вне системы) - молча закрывать нельзя;
+ * "no" - автоматика работает как обычно.
+ */
+export async function receiptServedState(contactId: string, since: Date, courses: Course[]): Promise<ServedState> {
+  if (courses.length === 0) return "no";
+  const delivered = await deliveredCoursesSince(contactId, since);
+  if (courses.every((c) => delivered.includes(c))) return "served";
+  return (await manualLinkSince(contactId, since)) ? "maybe" : "no";
 }
 
 /**
- * Вопрос «есть ли Telegram?» ждёт ответа, но доступ уже выдан руками: снимаем
- * ожидание выбора, чтобы бот не спрашивал и не слал вторую ссылку. true -
- * ожидание снято.
+ * Вопрос «есть ли Telegram?» ждёт ответа, но эта покупка уже выдана (у неё есть
+ * ссылка) или Ширин прислала настоящую ссылку после покупки: снимаем ожидание
+ * ТОЛЬКО у таких покупок. true - не осталось ни одной ждущей покупки.
  */
 export async function settleChoiceIfHandedOut(contactId: string): Promise<boolean> {
-  const first = await prisma.purchase.findFirst({
+  const waiting = await prisma.purchase.findMany({
     where: { contactId, revokedAt: null, deliveryAwaitingChoice: true },
-    orderBy: { createdAt: "asc" },
-    select: { createdAt: true },
+    select: { id: true, createdAt: true, inviteLink: true },
   });
-  if (!first) return false;
-  if (!(await accessAlreadyHandedOut(contactId, first.createdAt))) return false;
-  await prisma.purchase.updateMany({ where: { contactId, deliveryAwaitingChoice: true }, data: { deliveryAwaitingChoice: false } });
-  await prisma.receiptCheck.updateMany({ where: { contactId, awaitingDeliveryChoice: true }, data: { awaitingDeliveryChoice: false } });
-  return true;
+  if (!waiting || waiting.length === 0) return false;
+  const settled: string[] = [];
+  for (const p of waiting) {
+    if (p.inviteLink || (await manualLinkSince(contactId, p.createdAt))) settled.push(p.id);
+  }
+  if (settled.length === 0) return false;
+  await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false } });
+  if (settled.length === waiting.length) {
+    await prisma.receiptCheck.updateMany({
+      where: { contactId, awaitingDeliveryChoice: true },
+      data: { awaitingDeliveryChoice: false },
+    });
+    return true;
+  }
+  return false;
 }

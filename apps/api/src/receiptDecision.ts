@@ -40,7 +40,7 @@ const REJECT_TEXT: Record<ClientLanguage, string> = {
 
 /** Признаки того, что клиентку уже просили прислать чек/другой скриншот. */
 const ASKED_FOR_RECEIPT =
-  /ещё один|пришлите.*чек|правильный чек|не удалось подтвердить|сурати дигар|чекро ҳамин|чеки дуруст|скриншоти чек|send.*(another|receipt)|correct receipt/iu;
+  /Пришлите, пожалуйста, ещё один|Лутфан сурати дигар фиристед|could you send another one|оплату пока не удалось подтвердить|пардохт ҳоло тасдиқ нашуд|confirm the payment yet/iu;
 
 export type ReceiptDecisionResult =
   | { ok: true; status: "rejected"; message: string }
@@ -96,8 +96,11 @@ export async function decideReceipt(
     // «Пришлите чек» не чаще одного раза за разговор: если бот уже просил другой
     // чек (или ответил, что номер чужой) в последние сутки, повторять просьбу
     // шаблоном не нужно - решение владельца записываем без второго сообщения.
+    // Считаем только НАШИ шаблоны "пришлите другой чек"/"отклонено", отправленные
+    // после этого чека (ревью architect: слова из реквизитов "пришлите скриншот
+    // чека" не в счёт, иначе отказ после оплаты не на тот номер молчал бы).
     const recentOut = await prisma.message.findMany({
-      where: { contactId: receipt.contactId, direction: "OUT", text: { not: null }, createdAt: { gte: new Date(Date.now() - 24 * 3_600_000) } },
+      where: { contactId: receipt.contactId, direction: "OUT", text: { not: null }, createdAt: { gte: receipt.createdAt } },
       orderBy: { createdAt: "desc" },
       take: 20,
       select: { text: true },

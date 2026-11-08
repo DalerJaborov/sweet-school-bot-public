@@ -76,64 +76,124 @@ describe("случай 2: отложенная автоматика после �
 
   it("перепроверка из очереди, Ширин уже выдала ссылку: ни выдачи, ни вопросов, ни тревоги", async () => {
     db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
-    db.model("purchase").findFirst.mockResolvedValue({ id: "p1" }); // покупка получила ссылку после чека
+    // покупка именно на курс за 70 получила ссылку после чека
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE70" }]);
     await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(db.model("purchase").findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ inviteLink: { not: null }, revokedAt: null }) }),
+    );
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendToContact).not.toHaveBeenCalled();
     expect(sendReceiptForReview).not.toHaveBeenCalled();
     expect(db.model("receiptCheck").update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "HANDLED", kind: "duplicate" }) })
+      expect.objectContaining({ data: expect.objectContaining({ ownerDecision: "HANDLED", kind: "duplicate" }) }),
     );
   });
 
-  it("то же, если Ширин написала клиентке ссылку сообщением", async () => {
+  it("выдан ДРУГОЙ курс: оплата за 70 не теряется, автоматика работает", async () => {
     db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
-    db.model("purchase").findFirst.mockResolvedValue(null);
-    db.model("message").findFirst.mockResolvedValue({ text: "Вот ваша ссылка: https://t.me/+abc" });
-    await handleReceiptVerdict(contact, verdict(), "q1");
-    expect(grantCourses).not.toHaveBeenCalled();
-    expect(sendToContact).not.toHaveBeenCalled();
-  });
-
-  it("перепроверка, когда доступ НЕ выдавали: работает как обычно", async () => {
-    db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
-    db.model("purchase").findFirst.mockResolvedValue(null);
-    db.model("message").findFirst.mockResolvedValue({ text: "Ширин, добрый день" }); // ответ без ссылки
+    db.model("purchase").findMany.mockResolvedValue([{ course: "COURSE50" }]); // ссылка есть только на курс за 50
+    db.model("message").findMany.mockResolvedValue([]);
     await handleReceiptVerdict(contact, verdict(), "q1");
     expect(grantCourses).toHaveBeenCalledTimes(1);
   });
 
-  it("вопрос «есть ли Telegram?» снимается, если доступ уже выдан руками", async () => {
-    db.model("purchase").count.mockResolvedValue(1); // ждёт выбора доставки
-    db.model("purchase").findFirst.mockResolvedValue({ createdAt: new Date(Date.now() - 600_000), id: "p1" });
+  it("Ширин прислала настоящую ссылку, но покупок нет: не молчим, а отдаём чек владельцу без сообщений клиентке", async () => {
+    db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("setting").findUnique.mockResolvedValue({ key: "telegramBotToken", value: "t" });
+    db.model("message").findMany.mockResolvedValue([{ text: "Вот ссылка https://shirinsweets.online/l/abcdefghijklmnopqrstuv" }]);
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("ссылка на рилс, сайт или ник не считается выдачей", async () => {
+    db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("message").findMany.mockResolvedValue([
+      { text: "Посмотрите https://www.instagram.com/reel/abc и https://shirinsweets.online/ @shirinsweets" },
+    ]);
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+
+  it("перепроверка, когда доступ НЕ выдавали: работает как обычно", async () => {
+    db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("message").findMany.mockResolvedValue([{ text: "Ширин, добрый день" }]); // ответ без ссылки
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+
+  it("вопрос «есть ли Telegram?» снимается у покупки, которой уже выдана ссылка", async () => {
+    db.model("purchase").count.mockResolvedValue(1);
+    db.model("purchase").findMany.mockResolvedValue([
+      { id: "p1", createdAt: new Date(Date.now() - 600_000), inviteLink: "https://x/l/abc" },
+    ]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(false);
     expect(db.model("purchase").updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { deliveryAwaitingChoice: false } })
+      expect.objectContaining({ where: { id: { in: ["p1"] } }, data: { deliveryAwaitingChoice: false } }),
     );
     await askDeliveryChoice(contact);
     expect(sendToContact).not.toHaveBeenCalled();
   });
 
-  it("вопрос о доставке остаётся, пока никто доступ не выдал", async () => {
+  it("вопрос о доставке остаётся, пока ссылка не выдана; обычное сообщение Ширин его не снимает", async () => {
     db.model("purchase").count.mockResolvedValue(1);
-    db.model("purchase").findFirst.mockResolvedValueOnce({ createdAt: new Date(Date.now() - 600_000) }).mockResolvedValue(null);
-    db.model("message").findFirst.mockResolvedValue(null);
+    db.model("purchase").findMany.mockResolvedValue([{ id: "p1", createdAt: new Date(Date.now() - 600_000), inviteLink: null }]);
+    db.model("message").findMany.mockResolvedValue([{ text: "Рахмат, ждите" }]);
     expect(await awaitingDeliveryChoice(contact.id)).toBe(true);
+    expect(db.model("purchase").updateMany).not.toHaveBeenCalled();
+  });
+
+  it("снимается только покупка с выданной ссылкой, вторая ждущая остаётся", async () => {
+    db.model("purchase").count.mockResolvedValue(2);
+    db.model("purchase").findMany.mockResolvedValue([
+      { id: "p1", createdAt: new Date(Date.now() - 600_000), inviteLink: "https://x/l/abc" },
+      { id: "p2", createdAt: new Date(Date.now() - 500_000), inviteLink: null },
+    ]);
+    db.model("message").findMany.mockResolvedValue([]);
+    expect(await awaitingDeliveryChoice(contact.id)).toBe(true);
+    expect(db.model("purchase").updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ["p1"] } } }));
   });
 });
 
 describe("случай 1: не повторять «пришлите чек»", () => {
   function pending(extra: Record<string, unknown> = {}) {
-    return { id: "r1", imageHash: "h", contactId: contact.id, contact, amount: 300, reason: "чужой номер", ownerDecision: "PENDING", ...extra };
+    return {
+      id: "r1",
+      imageHash: "h",
+      contactId: contact.id,
+      contact,
+      amount: 300,
+      reason: "чужой номер",
+      ownerDecision: "PENDING",
+      ...extra,
+    };
   }
 
   it("«Отклонить» после того, как бот уже просил чек: второе сообщение не уходит", async () => {
     db.model("receiptCheck").findUnique.mockResolvedValue(pending());
     db.model("message").findFirst.mockResolvedValue({ text: "🫶♥️" });
-    db.model("message").findMany.mockResolvedValue([{ text: "Баъди пардохт скриншоти чекро ҳамин ҷо фиристед." }]);
+    db.model("message").findMany.mockResolvedValue([
+      { text: "Чек чандон возеҳ дида намешавад. Лутфан сурати дигар фиристед — метавонед аз таърихи бонк гиред." },
+    ]);
     const result = await decideReceipt("r1", "reject");
     expect(result).toMatchObject({ ok: true, status: "rejected" });
     expect(sendToContact).not.toHaveBeenCalled();
+  });
+
+  it("обычные реквизиты («скриншоти чекро ҳамин ҷо фиристед») не считаются просьбой: отказ после оплаты клиентке уходит", async () => {
+    db.model("receiptCheck").findUnique.mockResolvedValue(pending());
+    db.model("message").findFirst.mockResolvedValue({ text: "Вот чек" });
+    db.model("message").findMany.mockResolvedValue([
+      { text: "Баъди пардохт скриншоти чекро ҳамин ҷо фиристед." },
+      { text: "Оплатите и пришлите скриншот чека сюда" },
+    ]);
+    await decideReceipt("r1", "reject");
+    expect(sendToContact).toHaveBeenCalledTimes(1);
   });
 
   it("«Отклонить», когда клиентку ещё не просили: шаблон уходит один раз", async () => {
