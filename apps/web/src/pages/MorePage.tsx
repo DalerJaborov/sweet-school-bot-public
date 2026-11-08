@@ -1,8 +1,16 @@
 import { Icons } from "../components/Brand";
+import { BehaviorSwitches } from "../components/BehaviorSwitches";
 import { InstallApp } from "../components/InstallApp";
 import { Switch } from "../components/Switch";
 import { MORE_SECTIONS, type Tab } from "../panel/nav";
-import { setSimpleMode, setTheme, useSimpleMode, useTheme } from "../panel/prefs";
+import {
+  setShowEscalations,
+  setSimpleMode,
+  setTheme,
+  useShowEscalations,
+  useSimpleMode,
+  useTheme,
+} from "../panel/prefs";
 
 /**
  * «ЕЩЁ» — всё, что не нужно каждый день. Сгруппировано по смыслу:
@@ -14,6 +22,7 @@ export function MorePage(props: { onGo: (tab: Tab) => void; onLogout: () => void
   const { onGo, onLogout } = props;
   const simple = useSimpleMode();
   const theme = useTheme();
+  const showEscalations = useShowEscalations();
   const main = MORE_SECTIONS.filter((s) => s.group === "main");
   const expert = MORE_SECTIONS.filter((s) => s.group === "expert");
 
@@ -30,6 +39,13 @@ export function MorePage(props: { onGo: (tab: Tab) => void; onLogout: () => void
             label="Режим сестры"
             hint="Остаются только Сегодня, Чеки и Клиенты. Всё лишнее спрятано."
             testId="switch-simple"
+          />
+          <Switch
+            checked={showEscalations}
+            onChange={setShowEscalations}
+            label="Показывать клиентов, которым нужен ответ"
+            hint="Только тех, кого помощник сам передал вам: просьба позвать Ширин или сбой. Обычные сообщения не показываются."
+            testId="switch-escalations"
           />
           <Switch
             checked={theme === "dark"}
@@ -52,6 +68,7 @@ export function MorePage(props: { onGo: (tab: Tab) => void; onLogout: () => void
           <details className="more-expert">
             <summary>Для опытных</summary>
             <p className="hint">Редкие и настроечные разделы. Если не уверены — сюда можно не заходить.</p>
+            <BehaviorSwitches />
             <div className="more-list">
               {expert.map((s) => (
                 <MoreItem key={s.id} label={s.label} about={s.about} onClick={() => onGo(s.id)} />

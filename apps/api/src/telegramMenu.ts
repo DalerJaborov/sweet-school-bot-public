@@ -2,6 +2,10 @@ import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { answerCallback, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds } from "./telegram.js";
 import { buildReport, offsetMs, truncate } from "./dailyReport.js";
 import { env } from "./env.js";
+import {
+  SITE_TARGETS, SITE_SOURCES, SOURCES_WITH_LABEL, TARGET_LABEL, SOURCE_LABEL, createSiteLink, shortUrl,
+  type SiteTarget, type SiteLang, type SiteSource,
+} from "./links/siteLinks.js";
 import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "./courses.js";
 
 /**
@@ -22,6 +26,8 @@ export const BTN_INVITE = "👥 Приглашение в группу";
 export const BTN_PAYMENTS = "💳 Последние оплаты";
 export const BTN_FIND = "🔎 Найти ученицу";
 export const BTN_GRANT = "🔑 Выдать доступ";
+export const BTN_LINK = "🔗 Ссылка на сайт";
+const PROMPT_LABEL = "Как назвать (имя блогера или рекламы)? Ответьте на это сообщение. #";
 // Вопрос бота с «ответом» (force_reply): по началу текста узнаём, чей это ответ.
 const PROMPT_FIND = "Кого найти? Ответьте на это сообщение ником";
 const PROMPT_GRANT = "Кому выдать доступ? Ответьте на это сообщение ником";
@@ -49,10 +55,11 @@ export function menuKeyboard(): Record<string, unknown> {
     [{ text: BTN_REPORT }, { text: BTN_WAITING }],
     [{ text: BTN_INVITE }, { text: BTN_PAYMENTS }],
     [{ text: BTN_FIND }, { text: BTN_GRANT }],
+    [{ text: BTN_LINK }],
     [],
   ];
   if (env.publicBaseUrl.startsWith("https://")) {
-    rows[3].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
+    rows[4].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
   }
   return { keyboard: rows.filter((r) => r.length > 0), resize_keyboard: true, is_persistent: true };
 }
@@ -157,6 +164,46 @@ export async function buildStudentText(nick: string): Promise<string> {
   ].join("\n");
 }
 
+const isTarget = (v: string): v is SiteTarget => (SITE_TARGETS as readonly string[]).includes(v);
+const isSource = (v: string): v is SiteSource => (SITE_SOURCES as readonly string[]).includes(v);
+const isLang = (v: string): v is SiteLang => v === "tg" || v === "ru";
+
+async function makeSiteLink(target: SiteTarget, lang: SiteLang, source: SiteSource, label?: string): Promise<string> {
+  const link = await createSiteLink({ target, lang, source, label });
+  return `🔗 ${TARGET_LABEL[target]} · ${SOURCE_LABEL[source]}${link.label ? ` · ${link.label}` : ""}\n${shortUrl(link.code)}`;
+}
+
+/** Шаги «Ссылка на сайт»: куда → язык → откуда (→ имя для блогера/рекламы). */
+async function handleLinkStep(botToken: string, chatId: string, data: string): Promise<boolean> {
+  const t = /^mn:lt:([a-z]+)$/.exec(data);
+  if (t && isTarget(t[1])) {
+    await sendWithMarkup(botToken, chatId, "На каком языке страница?", {
+      inline_keyboard: [[{ text: "Тоҷикӣ", callback_data: `mn:ll:${t[1]}:tg` }, { text: "Русский", callback_data: `mn:ll:${t[1]}:ru` }]],
+    });
+    return true;
+  }
+  const l = /^mn:ll:([a-z]+):([a-z]+)$/.exec(data);
+  if (l && isTarget(l[1]) && isLang(l[2])) {
+    await sendWithMarkup(botToken, chatId, "Откуда придут люди?", {
+      inline_keyboard: SITE_SOURCES.map((x) => [{ text: SOURCE_LABEL[x], callback_data: `mn:ls:${l[1]}:${l[2]}:${x}` }]),
+    });
+    return true;
+  }
+  const r = /^mn:ls:([a-z]+):([a-z]+):([a-z]+)$/.exec(data);
+  if (r && isTarget(r[1]) && isLang(r[2]) && isSource(r[3])) {
+    if (SOURCES_WITH_LABEL.has(r[3])) {
+      await sendWithMarkup(botToken, chatId, `${PROMPT_LABEL}${r[1]}:${r[2]}:${r[3]}`, {
+        force_reply: true,
+        input_field_placeholder: "имя",
+      });
+    } else {
+      await sendTelegramMessage(botToken, chatId, await makeSiteLink(r[1], r[2], r[3]));
+    }
+    return true;
+  }
+  return false;
+}
+
 /** true — сообщение было командой меню и обработано; дальше его вести не нужно. */
 export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
   const text = (message.text ?? "").trim();
@@ -165,11 +212,13 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
   const replyTo = message.reply_to_message?.text ?? "";
   const answeringFind = replyTo.startsWith(PROMPT_FIND);
   const answeringGrant = replyTo.startsWith(PROMPT_GRANT);
+  const answeringLabel = replyTo.startsWith(PROMPT_LABEL);
   if (
     !isMenu &&
+    !answeringLabel &&
     !answeringFind &&
     !answeringGrant &&
-    ![BTN_REPORT, BTN_WAITING, BTN_INVITE, BTN_PAYMENTS, BTN_FIND, BTN_GRANT].includes(text)
+    ![BTN_REPORT, BTN_WAITING, BTN_INVITE, BTN_PAYMENTS, BTN_FIND, BTN_GRANT, BTN_LINK].includes(text)
   )
     return false;
 
@@ -184,6 +233,19 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
 
   if (answeringFind) {
     await send(await buildStudentText(text));
+    return true;
+  }
+  if (answeringLabel) {
+    const m = /#([a-z]+):([a-z]+):([a-z]+)$/.exec(replyTo);
+    if (m && isTarget(m[1]) && isLang(m[2]) && isSource(m[3])) {
+      await send(await makeSiteLink(m[1], m[2], m[3], text));
+    }
+    return true;
+  }
+  if (text === BTN_LINK) {
+    await sendWithMarkup(botToken, chatId, "Куда ведёт ссылка?", {
+      inline_keyboard: SITE_TARGETS.map((t) => [{ text: TARGET_LABEL[t], callback_data: `mn:lt:${t}` }]),
+    });
     return true;
   }
   if (answeringGrant) {
@@ -229,8 +291,13 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
 
 /** Нажатие кнопки меню (callback_data `mn:...`). Доверие уже проверено выше. */
 export async function handleMenuCallback(botToken: string, query: MenuQuery): Promise<void> {
-  const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");
   const chatId = query.message?.chat?.id != null ? String(query.message.chat.id) : String(query.from?.id ?? "");
+  if (query.id && chatId && /^mn:l[tls]:/.test(query.data ?? "")) {
+    await answerCallback(botToken, query.id, "");
+    await handleLinkStep(botToken, chatId, query.data ?? "").catch((err) => logError("telegramMenu:siteLink", err));
+    return;
+  }
+  const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");
   if (!match || !query.id || !chatId) return;
   const group = (await inviteGroups()).find((g) => g.key === match[1]);
   if (!group) {
