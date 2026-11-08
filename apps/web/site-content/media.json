@@ -13,7 +13,7 @@
       "avifSm": "/img/desserts/klubnika-v-shokolade-sm.avif"
     },
     "Чизкейк «Дубайский шоколад»": {
-      "src": "/img/lessons/dubai.webp",
+      "src": "/img/lessons/dubai-photo-v2.webp",
       "width": 480,
       "height": 854,
       "alt": {
@@ -22,7 +22,7 @@
       }
     },
     "Пирожное «Сникерс»": {
-      "src": "/img/lessons/snickers.webp",
+      "src": "/img/lessons/snickers-photo-v2.webp",
       "width": 480,
       "height": 854,
       "alt": {
@@ -31,7 +31,7 @@
       }
     },
     "Фисташковое пирожное": {
-      "src": "/img/lessons/pistachio.webp",
+      "src": "/img/lessons/pistachio-photo-v2.webp",
       "width": 480,
       "height": 854,
       "alt": {
@@ -40,7 +40,7 @@
       }
     },
     "Пирожное «Красный бархат»": {
-      "src": "/img/lessons/velvet.webp",
+      "src": "/img/lessons/velvet-photo-v2.webp",
       "width": 480,
       "height": 854,
       "alt": {
@@ -285,7 +285,7 @@
   },
   "heroPages": {
     "online-kurs": {
-      "src": "/img/lessons/dubai.webp",
+      "src": "/img/lessons/dubai-photo-v2.webp",
       "width": 480,
       "height": 854,
       "alt": {
@@ -294,7 +294,7 @@
       }
     },
     "art-desserty": {
-      "src": "/img/lessons/mango.webp",
+      "src": "/img/lessons/mango-photo-v2.webp",
       "width": 480,
       "height": 854,
       "alt": {
@@ -367,7 +367,7 @@
       },
       "course": "COURSE70",
       "image": {
-        "src": "/img/lessons/whoopie.webp",
+        "src": "/img/lessons/whoopie-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -384,7 +384,7 @@
       },
       "course": "COURSE70",
       "image": {
-        "src": "/img/lessons/trifle.webp",
+        "src": "/img/lessons/trifle-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -400,7 +400,7 @@
       },
       "course": "COURSE70",
       "image": {
-        "src": "/img/lessons/pistachio.webp",
+        "src": "/img/lessons/pistachio-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -416,7 +416,7 @@
       },
       "course": "COURSE70",
       "image": {
-        "src": "/img/lessons/dubai.webp",
+        "src": "/img/lessons/dubai-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -432,7 +432,7 @@
       },
       "course": "COURSE70",
       "image": {
-        "src": "/img/lessons/snickers.webp",
+        "src": "/img/lessons/snickers-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -448,7 +448,7 @@
       },
       "course": "COURSE70",
       "image": {
-        "src": "/img/lessons/velvet.webp",
+        "src": "/img/lessons/velvet-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -464,7 +464,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/mango.webp",
+        "src": "/img/lessons/mango-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -481,7 +481,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/raspberry.webp",
+        "src": "/img/lessons/raspberry-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -497,7 +497,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/blueberry.webp",
+        "src": "/img/lessons/blueberry-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -513,7 +513,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/coconut.webp",
+        "src": "/img/lessons/coconut-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -529,7 +529,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/art-pistachio.webp",
+        "src": "/img/lessons/art-pistachio-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -545,7 +545,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/cherry.webp",
+        "src": "/img/lessons/cherry-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {
@@ -561,7 +561,7 @@
       },
       "course": "COURSE50",
       "image": {
-        "src": "/img/lessons/coffee.webp",
+        "src": "/img/lessons/coffee-photo-v2.webp",
         "width": 480,
         "height": 854,
         "alt": {

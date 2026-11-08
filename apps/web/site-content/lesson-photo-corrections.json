@@ -1,0 +1,122 @@
+{
+  "method": "brightness 1.015; saturation 0.98; sharpen sigma 0.3 m1 0.3 m2 0.5; WebP quality 85; no resize/crop",
+  "records": [
+    {
+      "source": "/img/lessons/art-pistachio.webp",
+      "output": "/img/lessons/art-pistachio-photo-v2.webp",
+      "sha256": "8ebc6fe7d5ad23096c8b6d7443f6b48551e3067994aafbd114774afbd78d1b02",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 48998,
+      "outputBytes": 47360
+    },
+    {
+      "source": "/img/lessons/blueberry.webp",
+      "output": "/img/lessons/blueberry-photo-v2.webp",
+      "sha256": "8ee73b977435d3fd26fbd7a0040cea854571a0816164a2be469622cc5f9546a6",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 33710,
+      "outputBytes": 34306
+    },
+    {
+      "source": "/img/lessons/cherry.webp",
+      "output": "/img/lessons/cherry-photo-v2.webp",
+      "sha256": "e49a85e761540e9f28efe5f73ca83a173f0b37730f4286373c66774d0f4615f8",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 30944,
+      "outputBytes": 30586
+    },
+    {
+      "source": "/img/lessons/coconut.webp",
+      "output": "/img/lessons/coconut-photo-v2.webp",
+      "sha256": "64ddc74367a6450a8b005f834a1b6a53b02ee63049338af9d5638ed659f5d711",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 38390,
+      "outputBytes": 37996
+    },
+    {
+      "source": "/img/lessons/coffee.webp",
+      "output": "/img/lessons/coffee-photo-v2.webp",
+      "sha256": "fb689f2234b19a891e72831b6b10cb0815c996f0b9476ca6c05a1fd2e39ec63f",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 40968,
+      "outputBytes": 41386
+    },
+    {
+      "source": "/img/lessons/dubai.webp",
+      "output": "/img/lessons/dubai-photo-v2.webp",
+      "sha256": "d43ae16177845bdf1b8d19f01095ebf4e1050acb572e7f6a8abdc732b59614b3",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 51762,
+      "outputBytes": 52002
+    },
+    {
+      "source": "/img/lessons/mango.webp",
+      "output": "/img/lessons/mango-photo-v2.webp",
+      "sha256": "fedb83f5621776aaee5ad9a4a4d6fe8776e775c77013941e9828943dfca6bd21",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 36446,
+      "outputBytes": 36590
+    },
+    {
+      "source": "/img/lessons/pistachio.webp",
+      "output": "/img/lessons/pistachio-photo-v2.webp",
+      "sha256": "88f6e8823637f95b50452cf6c64d1bf1ccdc6e5c440af7afe1dd60722467d715",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 40792,
+      "outputBytes": 41100
+    },
+    {
+      "source": "/img/lessons/raspberry.webp",
+      "output": "/img/lessons/raspberry-photo-v2.webp",
+      "sha256": "e8b6fd46d8e445dfc303f3884a24a28636312c9fdba596bf19dde19add87214f",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 34058,
+      "outputBytes": 33914
+    },
+    {
+      "source": "/img/lessons/snickers.webp",
+      "output": "/img/lessons/snickers-photo-v2.webp",
+      "sha256": "bccacdb0bc4be6780925f76781c643e33bc2283956786fdec8df464c89a842db",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 59098,
+      "outputBytes": 60316
+    },
+    {
+      "source": "/img/lessons/trifle.webp",
+      "output": "/img/lessons/trifle-photo-v2.webp",
+      "sha256": "45adfa4eaa4d0781a345532a55e124136d9978c6b9a0932dc64e2dd4c1860ffd",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 47564,
+      "outputBytes": 47640
+    },
+    {
+      "source": "/img/lessons/velvet.webp",
+      "output": "/img/lessons/velvet-photo-v2.webp",
+      "sha256": "14ce8cb9f79bd11da75a5907368dd951bc9d8985e9a75bd7fe372f9b90780d08",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 58780,
+      "outputBytes": 58150
+    },
+    {
+      "source": "/img/lessons/whoopie.webp",
+      "output": "/img/lessons/whoopie-photo-v2.webp",
+      "sha256": "fa0a8b724f2f13526315b99ab9660a5233995f9312c0e06d5d00ab138e93237a",
+      "width": 480,
+      "height": 854,
+      "sourceBytes": 53652,
+      "outputBytes": 54226
+    }
+  ]
+}
