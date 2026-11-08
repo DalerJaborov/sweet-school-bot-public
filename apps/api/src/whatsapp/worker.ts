@@ -144,6 +144,6 @@ export function startWhatsAppWorker(): void {
   // A process interrupted after dispatch may already have sent something.
   // Never blindly replay such a turn on restart.
   void prisma.whatsAppInbox.updateMany({ where: { status: "processing" }, data: { status: "attention", attentionReason: "restarted" } }).catch(e => logError("whatsapp:recover", e));
-  setInterval(() => { void ingestWhatsAppEvents().catch(e => logError("whatsapp:connection", e)); }, 2500).unref();
-  setInterval(() => { void dispatchWhatsAppInbox().catch(e => logError("whatsapp:queue", e)); }, 3000).unref();
+  setInterval(() => { void ingestWhatsAppEvents().catch(e => logError("whatsapp:connection", e)); }, 1000).unref();
+  setInterval(() => { void dispatchWhatsAppInbox().catch(e => logError("whatsapp:queue", e)); }, 1000).unref();
 }

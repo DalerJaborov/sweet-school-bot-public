@@ -49,7 +49,7 @@ export function throughProxy(url: string): string {
  * там же на боевом ключе — незачем повторять ту же проверку заново здесь и
  * рисковать той же ошибкой на своём трафике.
  */
-const MINIMAL_THINKING_UNSUPPORTED = [/^gemini-3\.7-/];
+const MINIMAL_THINKING_UNSUPPORTED = [/^gemini-3\.[78]-/];
 
 /** «Размышление» съедает лимит ответа и тарифицируется как output по полной
  *  цене — глушим его до минимума, какой принимает конкретная модель. */
@@ -96,9 +96,14 @@ export interface GeminiFunctionCall {
 
 /** Модель, которая реально ответила (не обязательно primaryModel — могла
  *  сработать резервная) — без неё цену вызова посчитать не по чему. */
-type GeminiResult = { text: string | null; model: string; usage: GeminiUsage; functionCalls?: GeminiFunctionCall[] } | { error: string };
+type GeminiResult =
+  { text: string | null; model: string; usage: GeminiUsage; functionCalls?: GeminiFunctionCall[] } | { error: string };
 
-function parseUsage(u?: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number }): GeminiUsage {
+function parseUsage(u?: {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  cachedContentTokenCount?: number;
+}): GeminiUsage {
   return {
     inputTokens: u?.promptTokenCount ?? 0,
     outputTokens: u?.candidatesTokenCount ?? 0,
@@ -119,7 +124,7 @@ export async function generateWithFallback(
   apiKeys: string[],
   primaryModel: string,
   buildBody: (model: string) => string,
-  totalBudgetMs: number
+  totalBudgetMs: number,
 ): Promise<GeminiResult> {
   const deadline = Date.now() + totalBudgetMs;
   const models = [primaryModel, ...FALLBACK_MODELS.filter((m) => m !== primaryModel)];
@@ -151,7 +156,12 @@ export async function generateWithFallback(
           const data = (await res.json()) as {
             candidates?: {
               content?: {
-                parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { name?: string; args?: Record<string, unknown> } }[];
+                parts?: {
+                  text?: string;
+                  thought?: boolean;
+                  thoughtSignature?: string;
+                  functionCall?: { name?: string; args?: Record<string, unknown> };
+                }[];
               };
               finishReason?: string;
             }[];

@@ -49,6 +49,9 @@ export type RelevanceAction = "reply" | "clarify" | "attention" | "silent";
 /** Отвечаем по сути только на эти классы. */
 export const ANSWERABLE: ReadonlySet<RelevanceClass> = new Set(["on_topic", "greeting"]);
 
+import { looksLikeHumanRequest, mentionsPayment } from "./offTopicGuard.js";
+import { claimsReceiptSent } from "./receiptClaim.js";
+
 const rx = (parts: string[]): RegExp => new RegExp(parts.join("|"), "iu");
 const NB = "(?<![\\p{L}\\p{N}])";
 const NE = "(?![\\p{L}\\p{N}])";
@@ -61,6 +64,9 @@ const STRONG_COURSE = rx([
   `${NB}(арт[\\s-]*десерт|21\\s*рецепт|дар\\s+назди\\s+ман|назди\\s+худат)${NE}`,
   `${NB}(ссылк\\p{L}*\\s+на\\s+(курс|урок|группу)|доступ\\p{L}*\\s+(к|ба)\\s+курс)`,
   `${NB}(сколько\\s+стоит\\s+(курс|обучение)|нархи\\s+курс|курс\\s+чанд)`,
+  // Деньги отправлены: «Скинула на карту», «Пул фиристодам» (ревью 08.11.2026).
+  `${NB}(скинул|кинул|закинул|отправил|перевел|перевёл)\\p{L}*\\s+(на\\s+)?(карт|номер|счёт|счет|деньги|оплат)`,
+  `${NB}пул\\s+(фиристодам|гузарондам|гузаронидам|равон\\s+кардам)`,
 ]);
 
 /** Курьер, водитель, доставка заказа. */
@@ -95,7 +101,6 @@ const PERSONAL = rx([
   `${NB}(как\\s+(дела|ты\\s+там|здоровье|самочувствие)|ты\\s+(поела|покушала|дома|приедешь)|когда\\s+приедешь|во\\s+сколько\\s+придёшь)`,
   `${NB}(с\\s+днём\\s+рождения|поздравляю\\s+с\\s+днём|с\\s+праздником)`,
   `${NB}(хуб\\s+ҳастӣ|хуб\\s+хасти|чӣ\\s+хел\\s+ҳастӣ|хӯрок\\s+хӯрдӣ|кай\\s+меоӣ|ба\\s+хона\\s+биё)`,
-  `${NB}(позвони\\s+мне|перезвони|занг\\s+зан)`,
 ]);
 
 /** Одно приветствие и больше ничего. */
@@ -119,10 +124,19 @@ export function codeRelevance(textRaw: string, hasMedia = false): RelevanceVerdi
   const text = (textRaw ?? "").trim();
   // «+» в ответ на рекламу («напишите + в директ») — это покупательница, а не пустота.
   if (/^[+＋]+$/.test(text)) return { cls: "greeting", source: "code", reason: "плюс в ответ на рекламу" };
+  // Только знаки вопроса или многоточие — человек что-то хотел сказать: переспрашиваем, а не молчим.
+  if (/^[\s.?!…？]+$/u.test(text) && /[?.…？]/u.test(text)) {
+    return { cls: "unclear", source: "code", reason: "только вопросительные знаки или многоточие" };
+  }
   if (!text || hasNoContent(text)) {
     return hasMedia ? null : { cls: "empty", source: "code", reason: "пустое сообщение, стикер или смайлик" };
   }
   if (GREETING_ONLY.test(text)) return { cls: "greeting", source: "code", reason: "только приветствие" };
+  // Одна дверь: просьба позвать человека, разговор про оплату и «я отправила чек» решает offTopicGuard / receiptClaim.
+  if (looksLikeHumanRequest(text)) return { cls: "on_topic", source: "code", reason: "просит живого человека или звонок" };
+  if (mentionsPayment(text) || claimsReceiptSent(text)) {
+    return { cls: "on_topic", source: "code", reason: "речь об оплате или чеке" };
+  }
   if (STRONG_COURSE.test(text))
     return { cls: "on_topic", source: "code", reason: "в тексте слова про курс или оплату" };
   if (SPAM.test(text)) return { cls: "spam", source: "code", reason: "признаки спама" };

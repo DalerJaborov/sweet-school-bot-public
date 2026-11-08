@@ -150,7 +150,7 @@ export async function reactToInstagramMessage(igUserId: string, messageId: strin
   await assertMessagingAllowed();
   await callGraph(
     `/${GRAPH_VERSION}/me/messages`,
-    { recipient: { id: igUserId }, sender_action: "react", payload: { message_id: messageId, reaction: emoji } },
+    { recipient: { id: igUserId }, sender_action: "react", payload: { message_id: messageId, reaction: emoji === "❤️" ? "love" : emoji } },
     "INSTAGRAM",
     8_000
   );
@@ -194,7 +194,7 @@ export async function sendText(
   await assertMessagingAllowed();
   const clean = await withoutRepeatGreeting(igUserId, text, channel);
   // Прочитали → набираем → отвечаем: порядок как у живого человека (см. senderAction).
-  await senderAction(igUserId, "mark_seen", channel);
+  if ((await getSetting("readReceiptsEnabled")) !== "false") await senderAction(igUserId, "mark_seen", channel);
   await senderAction(igUserId, "typing_on", channel);
   await sleep(typingDelayMs(clean));
 
