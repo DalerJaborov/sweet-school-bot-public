@@ -275,14 +275,15 @@ function capped(lines: string[]): string[] {
 
 /**
  * КОМУ: ТОЛЬКО ВЛАДЕЛЬЦУ, НЕ ШИРИН (решение владельца 09.11.2026).
- * Получатель — `telegramOwnerChatId`; пусто — технический чат владельца
- * (techChatIds). Чат сводок (`telegramSummaryChatIds`) не используем: в нём и
+ * Получатель — технический чат владельца (techChatIds); telegramOwnerChatId
+ * на проде — чат Ширин, его не используем. Чат сводок (`telegramSummaryChatIds`) не используем: в нём и
  * Ширин. Страховка: её Telegram-id (`telegramQaOwnerId`) вычёркивается всегда,
  * даже если по ошибке окажется в настройке выше.
  */
 export async function unansweredRecipients(): Promise<string[]> {
-  const owner = (await getSetting("telegramOwnerChatId"))?.trim();
-  const ids = owner ? [owner] : await techChatIds();
+  // На проде telegramOwnerChatId = чат Ширин (совпадает с telegramQaOwnerId), а
+  // владелец — технический чат. Поэтому берём ТОЛЬКО технический чат.
+  const ids = await techChatIds();
   const shirin = (await getSetting("telegramQaOwnerId"))?.trim();
   return [...new Set(ids.filter((id) => id && id !== shirin))];
 }

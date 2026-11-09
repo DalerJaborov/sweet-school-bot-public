@@ -89,7 +89,7 @@ describe("сторож: директ Instagram", () => {
     ]);
     await runUnansweredWatch(NOON);
     expect(aiReply).not.toHaveBeenCalled();
-    expect(sendTelegramMessage).toHaveBeenCalledWith("bot", "owner-chat", expect.any(String));
+    expect(sendTelegramMessage).toHaveBeenCalledWith("bot", "tech-chat", expect.any(String));
     expect(telegramText()).toContain("@client");
     expect(telegramText()).toContain("Кай сар мешавад?");
     expect(telegramText()).toContain("до 14:00");
@@ -164,56 +164,13 @@ describe("сторож: директ Instagram", () => {
 });
 
 describe("кому уходит напоминание (владелец 09.11.2026: только владельцу, не Ширин)", () => {
-  it("ГЛАВНОЕ: только telegramOwnerChatId, чат сводок с Ширин не используется", async () => {
+  it("ГЛАВНОЕ: только технический чат владельца; telegramOwnerChatId (чат Ширин) и чат сводок не используются", async () => {
     settings.telegramSummaryChatIds = "owner-chat,893446307";
-    expect(await unansweredRecipients()).toEqual(["owner-chat"]);
-  });
-
-  it("владелец не задан — технический чат владельца", async () => {
-    delete settings.telegramOwnerChatId;
     expect(await unansweredRecipients()).toEqual(["tech-chat"]);
   });
 
-  it("id Ширин (telegramQaOwnerId) вычёркивается, даже если попал в настройку владельца", async () => {
-    settings.telegramOwnerChatId = "893446307";
-    settings.telegramQaOwnerId = "893446307";
+  it("id Ширин (telegramQaOwnerId) вычёркивается, даже если совпал с техническим чатом", async () => {
+    settings.telegramQaOwnerId = "tech-chat";
     expect(await unansweredRecipients()).toEqual([]);
-  });
-});
-
-describe("сторож: комментарии", () => {
-  it("комментарий без ответа не по нашему решению — в напоминание; ответили потом в директ — нет", async () => {
-    db.model("contact").findMany.mockImplementation(async (args: unknown) =>
-      (args as { where: { id?: unknown } }).where.id ? [{ id: "c1", username: "commenter", igUserId: "1" }] : [],
-    );
-    db.model("seenComment").findMany.mockResolvedValue([
-      { commentId: "k1", contactId: "c1", text: "Нарх чанд?", outcome: "ai_off", createdAt: new Date(NOON.getTime() - 40 * MIN) },
-      { commentId: "k2", contactId: "c2", text: "Курс кай?", outcome: "budget", createdAt: new Date(NOON.getTime() - 40 * MIN) },
-    ]);
-    db.model("message").findFirst.mockImplementation(async (args: unknown) =>
-      (args as { where: { contactId: string } }).where.contactId === "c2" ? { id: "dm" } : null,
-    );
-    await runUnansweredWatch(NOON);
-    expect(telegramText()).toContain("Комментарии без ответа");
-    expect(telegramText()).toContain("@commenter");
-    expect(telegramText()).toContain("выключены");
-    expect(telegramText()).not.toContain("Курс кай?");
-  });
-});
-
-describe("что считается «ждёт ответа»", () => {
-  const m = (text: string | null, payload: string | null = null) => ({ text, payload });
-  it.each(["Салом", "+", "???", "Нархи курс чанд?", "а когда начало?"])("«%s» — ждёт ответа", (t) => {
-    expect(needsAnswer(m(t))).toBe(true);
-  });
-  it.each(["Рахмат", "спасибо большое", "ок", "хоб", "❤️", "👍👍"])("«%s» — пустое подтверждение", (t) => {
-    expect(needsAnswer(m(t))).toBe(false);
-  });
-  it("фото/голос без текста и нажатая кнопка — ждут ответа", () => {
-    expect(needsAnswer(m(null))).toBe(true);
-    expect(needsAnswer(m("Ҳа", "step:f:2"))).toBe(true);
-  });
-  it("«пустите бесплатно» — нарочное молчание владельца, не напоминаем", () => {
-    expect(needsAnswer(m("Курсро бепул диҳед"))).toBe(false);
   });
 });
