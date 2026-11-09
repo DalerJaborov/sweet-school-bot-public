@@ -47,6 +47,7 @@ import { healthReport, markWorkerTick } from "./health.js";
 import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
 import { startWhatsAppWorker } from "./whatsapp/worker.js";
 import { runMetaConversions } from "./metaConversions.js";
+import { runUnansweredWatch } from "./unansweredWatch.js";
 
 // index.ts — единственная точка, где db.ts и telegram.ts (через systemAlerts.ts)
 // встречаются без цикла импортов (см. комментарий у onNewSystemError в db.ts).
@@ -315,6 +316,14 @@ const ownerReminderTick = () =>
   void singleFlight("ownerReminder", () => runOwnerReminders()).catch((err) => logError("ownerReminder", err));
 setTimeout(ownerReminderTick, 3 * 60_000);
 setInterval(ownerReminderTick, 10 * 60_000);
+
+// СТОРОЖ «БЕЗ ОТВЕТА» (unansweredWatch.ts, владелец 09.11.2026): клиент в
+// Instagram ждёт ответа дольше 15 минут — бот отвечает сам после паузы Ширин
+// или напоминает ей в Telegram. Рубильник unansweredWatchdogEnabled.
+const unansweredTick = () =>
+  void singleFlight("unansweredWatch", () => runUnansweredWatch()).catch((err) => logError("unansweredWatch", err));
+setTimeout(unansweredTick, 4 * 60_000);
+setInterval(unansweredTick, 5 * 60_000);
 
 // ПОКУПКИ — В РЕКЛАМУ META (metaConversions.ts): очередь событий «Покупка».
 // Рубильник metaCapiEnabled по умолчанию выключен — тогда задача ничего не делает.

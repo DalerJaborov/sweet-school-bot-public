@@ -637,35 +637,69 @@ export async function aiReply(
  * (единственный способ написать первым тому, кто ещё не писал в директ), и без
  * кнопок: человек просто спросил что-то под роликом, продавать ему нечего.
  */
-export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<void> {
-  if ((await isBotFrozen()) || contactAutomationBlocked(contact)) return;
+/**
+ * Чем кончился ответ на комментарий (funnel.ts пишет это в SeenComment.outcome,
+ * сторож unansweredWatch.ts напоминает Ширин о тех, что остались без ответа).
+ *  ai — ответ ушёл в директ; no_reply — модель решила, что отвечать нечего;
+ *  guard — шаблон защиты; silent_guard — нарочно молчим («пустите бесплатно»);
+ *  остальное — без ответа НЕ по нашему решению.
+ */
+export type CommentReplyOutcome =
+  | "ai" | "no_reply" | "guard" | "silent_guard" | "frozen" | "waiting_human"
+  | "ai_off" | "no_keys" | "budget" | "ai_error";
+
+/** Ответы ИИ под комментариями. По умолчанию ВКЛЮЧЕНЫ (владелец 09.11.2026:
+ *  «никто не должен оставаться без ответа и в комментах»); "false" выключает. */
+export const AI_COMMENT_REPLIES_SETTING = "aiCommentRepliesEnabled";
+
+export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<CommentReplyOutcome> {
+  if (await isBotFrozen()) return "frozen";
+  if (contactAutomationBlocked(contact)) return "waiting_human";
   // Свой флаг, не aiEnabled — владелец 13.09.2026 попросил заглушить обычный
   // ИИ-ответ в директе, но оставить живыми ответы под комментариями; общий
-  // флаг гасил бы оба сразу.
-  const enabled = (await getSetting("aiCommentRepliesEnabled")) === "true";
-  if (!enabled) return;
+  // флаг гасил бы оба сразу. Раньше по умолчанию был ВЫКЛЮЧЕН («true» только
+  // явно), а в панели его не было вовсе — комментарий не к рекламному ролику
+  // молча оставался без ответа. Теперь включён, пока не выставлен "false".
+  const enabled = (await getSetting(AI_COMMENT_REPLIES_SETTING)) !== "false";
+  if (!enabled) return "ai_off";
   const apiKeys = await resolveGeminiKeys();
   if (apiKeys.length === 0) {
     logError("ai:aiReplyToComment:noGeminiKeys", new Error("Gemini API keys not configured — comment reply skipped"));
-    return;
+    return "no_keys";
   }
 
   const language = await contactLanguage(contact.id, text);
   const verdict = guardOffTopic(text);
   if (verdict) {
     // «Пустите бесплатно» и назойливое дёрганье под роликом — молчим совсем.
-    if (isSilentKind(verdict.kind)) return;
+    if (isSilentKind(verdict.kind)) return "silent_guard";
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
     const guardedText = await humanizeForContact(contact.id, guardReply(verdict.kind, language), [text]);
-    await withContactMessaging(contact.id, "reply", () =>
-      sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
-    ).catch((err) => {
+    try {
+      await withContactMessaging(contact.id, "reply", () =>
+        sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
+      );
+    } catch (err) {
       logError("ai:commentGuard:sendPrivateReply", err);
-    });
-    return;
+      return "ai_error";
+    }
+    return "guard";
   }
-  if (await isBudgetExceeded(contact.id)) return;
+  // Бюджет кончился — раньше тишина. Теперь честное «напишите чуть позже» в
+  // директ (тот же текст, что в переписке), а сторож напомнит Ширин.
+  if (await isBudgetExceeded(contact.id)) {
+    const fallback = BUDGET_FALLBACK[language];
+    try {
+      const mid = await withContactMessaging(contact.id, "reply", () =>
+        sendPrivateReply(commentId, fallback, [], metaChannelOf(contact)),
+      );
+      await recordOutgoingMessage(contact.id, fallback, mid);
+    } catch (err) {
+      logError("ai:commentBudget:sendPrivateReply", err);
+    }
+    return "budget";
+  }
 
   // Комментарий — это всегда текст, голосовых под роликами не бывает: модель
   // обычная, время обычное.
@@ -704,7 +738,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
   if ("error" in result) {
     logError("ai:commentReply", result.error);
     void logAiCall({ endpoint: "comment-reply", ms: Date.now() - startedAt, ok: false });
-    return;
+    return "ai_error";
   }
   void logAiCall({
     endpoint: "comment-reply",
@@ -714,20 +748,21 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     ok: true,
   });
   await recordAiCall(contact.id);
-  if (!result.text) return;
+  if (!result.text) return "ai_error";
 
-  if (result.text.trim() === "[NO_REPLY]") return;
+  if (result.text.trim() === "[NO_REPLY]") return "no_reply";
   const issues = replyPolicyIssues(result.text, await trustedSalesFacts());
   if (issues.length) {
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
     throw new ReplyPolicyError(issues);
   }
   const clean = await humanizeForContact(contact.id, cleanAutomatedReply(result.text), [text]);
-  if (!clean) return;
+  if (!clean) return "no_reply";
   const mid = await withContactMessaging(contact.id, "reply", () =>
     sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
   );
   await recordOutgoingMessage(contact.id, clean, mid);
+  return "ai";
 }
 
 /**

@@ -41,7 +41,10 @@ vi.mock("../../src/nightlyLearning.js", () => ({ buildInsightsBlock: vi.fn(async
 vi.mock("../../src/ai/objectionLibrary.js", () => ({ buildObjectionsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/mediaReuse.js", () => ({ findReusableMedia: vi.fn(async () => null), sendReusedMedia: vi.fn() }));
 vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn() }));
-vi.mock("../../src/ai/testimonials.js", () => ({ maybeSendTestimonial: vi.fn(async () => undefined) }));
+vi.mock("../../src/ai/testimonials.js", async (original) => ({
+  ...(await original<typeof import("../../src/ai/testimonials.js")>()),
+  maybeSendTestimonial: vi.fn(async () => undefined),
+}));
 vi.mock("../../src/learningCheckIn.js", () => ({ markStartedLearningIfReplied: vi.fn(async () => undefined) }));
 vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => undefined) }));
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));

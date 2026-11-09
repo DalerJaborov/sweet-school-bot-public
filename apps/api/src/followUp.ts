@@ -55,6 +55,10 @@ export async function runDueFollowUps(): Promise<void> {
 
       // Молчит ли бот с этим человеком прямо сейчас (хозяйка ведёт разговор сама).
       if (delivery.contact.humanSilencedUntil && delivery.contact.humanSilencedUntil.getTime() > Date.now()) continue;
+      // Ширин хоть раз отвечала этому человеку сама — догоняющее «вы ещё думаете?»
+      // поверх её живого разговора не шлём. Раньше это делала вечная пауза; теперь
+      // пауза временная (messaging/automation.ts), а напоминание — не ответ на вопрос.
+      if (delivery.contact.humanTakenOverAt) continue;
 
       // Окно Meta считается от ПОСЛЕДНЕГО сообщения человека, а не от конца
       // воронки: если он ответил позже, окно шире, если молчал — уже закрыто.

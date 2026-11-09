@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { env } from "./env.js";
+import { showsCourseInterest } from "./ai/relevance.js";
 
 /**
  * ИМЯ И АВАТАР КЛИЕНТА.
@@ -150,23 +151,100 @@ export function resetFollowCache(): void {
   followCache.clear();
 }
 
+/** Причина отметки «личный», которую ставит САМ бот по подписке Ширин. По ней
+ *  отличаем авто-отметку от ручной: ручную («Отмечен вручную», «Запрет
+ *  автоответов владельцем») бот не снимает никогда. */
+export const FOLLOW_PERSONAL_REASON = "Ширин подписана на этот аккаунт (Instagram), бот не отвечает";
+
+export function isAutoFollowPersonal(contact: { personal: boolean; personalReason?: string | null }): boolean {
+  return contact.personal && contact.personalReason === FOLLOW_PERSONAL_REASON;
+}
+
+type FollowContact = {
+  id: string;
+  channel: string;
+  igUserId: string;
+  paid: boolean;
+  personal: boolean;
+  personalReason?: string | null;
+  adReferralAt?: Date | null;
+};
+/** Что человек прислал сейчас: текст (или расшифровка голоса) и кнопка воронки. */
+export type ClientSignal = { text?: string | null; payload?: string | null };
+
+/** Сколько прошлых входящих смотрим в поисках вопроса про курс. */
+const INTEREST_HISTORY = 30;
+
+/**
+ * ЗНАКОМЫЙ ИЛИ КЛИЕНТ? (владелец 09.11.2026: «чтобы никто не оставался без
+ * ответа»). Подписка Ширин — слабый признак: она подписывается и на учениц, и на
+ * тех, кто пришёл с рекламы, и на тестовый аккаунт владельца. Отметка «личный»
+ * по подписке молчала навсегда даже на «сколько стоит курс?».
+ *
+ * Поэтому подписка глушит бота, только если НЕТ ни одного признака клиента:
+ *  - сам нажал кнопку воронки (payload `step:...`);
+ *  - сейчас или раньше написал про курс, цену, оплату, запись
+ *    (ai/relevance.ts::showsCourseInterest — те же правила, что у фильтра «по делу»);
+ *  - пришёл из рекламы (adReferralAt) или через воронку (есть доставка шагов);
+ *  - уже покупал.
+ * Раньше написанный вопрос про курс ищется в истории — так решение устойчиво
+ * без новой отметки в базе: следующий «а когда начало?» тоже получит ответ.
+ */
+async function looksLikeClient(contact: FollowContact, signal: ClientSignal): Promise<boolean> {
+  if (contact.paid || contact.adReferralAt) return true;
+  if (signal.payload?.startsWith("step:")) return true;
+  if (showsCourseInterest(signal.text)) return true;
+  const [purchases, deliveries, history] = await Promise.all([
+    prisma.purchase.count({ where: { contactId: contact.id } }).catch(() => 1),
+    prisma.delivery.count({ where: { contactId: contact.id } }).catch(() => 0),
+    prisma.message
+      .findMany({
+        where: { contactId: contact.id, direction: "IN", text: { not: null } },
+        orderBy: { createdAt: "desc" },
+        take: INTEREST_HISTORY,
+        select: { text: true },
+      })
+      .catch(() => []),
+  ]);
+  if ((purchases ?? 0) > 0 || (deliveries ?? 0) > 0) return true;
+  return (history ?? []).some((m) => showsCourseInterest(m.text));
+}
+
+/**
+ * Снять АВТО-отметку «Ширин подписана», если человек ведёт себя как клиент.
+ * Возвращает контакт с актуальной отметкой. Ручную отметку не трогает.
+ * Вызывать ДО проверки «личный» (webhook.ts, funnel.ts — комментарии).
+ */
+export async function releaseFollowSilenceIfClient<C extends FollowContact>(contact: C, signal: ClientSignal): Promise<C> {
+  if (!isAutoFollowPersonal(contact)) return contact;
+  if (!(await looksLikeClient(contact, signal))) return contact;
+  try {
+    await prisma.contact.update({ where: { id: contact.id }, data: { personal: false, personalReason: null } });
+  } catch (err) {
+    logError("profiles:releaseFollowed", err);
+    return contact;
+  }
+  return { ...contact, personal: false, personalReason: null };
+}
+
 /**
  * Проверка при входящем сообщении. true — контакт помечен личным, отвечать не
  * нужно. Вызывать после проверок «личный/спам», до ответа бота.
  */
 export async function silenceIfFollowedByBusiness(
-  contact: { id: string; channel: string; igUserId: string; paid: boolean; personal: boolean },
-  opts: { hasImage: boolean }
+  contact: FollowContact,
+  opts: { hasImage: boolean } & ClientSignal
 ): Promise<boolean> {
   if (contact.channel !== "INSTAGRAM" || contact.personal || contact.paid || opts.hasImage) return false;
+  // Явный признак клиента в САМОМ сообщении — даже не спрашиваем Meta о подписке.
+  if (opts.payload?.startsWith("step:") || showsCourseInterest(opts.text)) return false;
   const follows = await businessFollowsUser(contact.igUserId);
   if (follows !== true) return false;
-  const purchases = await prisma.purchase.count({ where: { contactId: contact.id } }).catch(() => 1);
-  if (purchases > 0) return false;
+  if (await looksLikeClient(contact, opts)) return false;
   await prisma.contact
     .update({
       where: { id: contact.id },
-      data: { personal: true, personalReason: "Ширин подписана на этот аккаунт (Instagram), бот не отвечает" },
+      data: { personal: true, personalReason: FOLLOW_PERSONAL_REASON },
     })
     .catch((err) => logError("profiles:markFollowed", err));
   return true;

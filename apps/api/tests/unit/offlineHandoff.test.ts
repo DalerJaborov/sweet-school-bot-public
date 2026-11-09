@@ -40,7 +40,10 @@ vi.mock("../../src/nightlyLearning.js", () => ({ buildInsightsBlock: vi.fn(async
 vi.mock("../../src/ai/objectionLibrary.js", () => ({ buildObjectionsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/mediaReuse.js", () => ({ findReusableMedia: vi.fn(async () => null), sendReusedMedia: vi.fn() }));
 vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn() }));
-vi.mock("../../src/ai/testimonials.js", () => ({ maybeSendTestimonial: vi.fn(async () => undefined) }));
+vi.mock("../../src/ai/testimonials.js", async (original) => ({
+  ...(await original<typeof import("../../src/ai/testimonials.js")>()),
+  maybeSendTestimonial: vi.fn(async () => undefined),
+}));
 vi.mock("../../src/learningCheckIn.js", () => ({ markStartedLearningIfReplied: vi.fn(async () => undefined) }));
 vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => undefined) }));
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));
@@ -65,7 +68,7 @@ vi.mock("../../src/courses.js", async (importOriginal) => ({
 }));
 
 import { aiReply } from "../../src/ai.js";
-import { isOnlineRequest, offlineHandoffGate } from "../../src/ai/offlineHandoff.js";
+import { isOnlineRequest, offlineHandoffGate, isCancelOrDoubt } from "../../src/ai/offlineHandoff.js";
 
 let db: PrismaMock;
 let SETTINGS: Record<string, string>;
@@ -222,3 +225,33 @@ describe("aiReply: офлайн → одна карточка и тишина; �
     expect(db.model("contact").update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Владелец 09.11.2026: после карточки офлайна бот молчал на ВСЁ — и в чате
+ * сайта, где Ширин нет вовсе, и на отмену записи. Теперь не молчит.
+ */
+describe("офлайн передан Ширин — где молчать нельзя", () => {
+  it("ГЛАВНОЕ: чат на сайте — бот отвечает (Ширин там нет), отметка остаётся", async () => {
+    const web = fakeContact({ channel: "WEB", offlineHandoffAt: new Date() }) as C;
+    expect(await offlineHandoffGate(web, "а адрес какой?")).toBe("none");
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+  });
+
+  it("отмена или сомнение по записи — бот отвечает, отметка остаётся", async () => {
+    expect(await offlineHandoffGate(handedOff, "Я передумала, не смогу прийти")).toBe("none");
+    expect(await offlineHandoffGate(handedOff, "Боюсь, не получится у меня")).toBe("none");
+    expect(await offlineHandoffGate(handedOff, "Бекор кунед, наметавонам")).toBe("none");
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+  });
+
+  it("обычный вопрос в Instagram — по-прежнему молчим (ведёт Ширин, сторож напомнит ей)", async () => {
+    expect(await offlineHandoffGate(handedOff, "а адрес какой?")).toBe("silent");
+  });
+
+  it("признак отмены не цепляет обычные вопросы", () => {
+    expect(isCancelOrDoubt("Когда начало курса?")).toBe(false);
+    expect(isCancelOrDoubt("Адрес куҷост?")).toBe(false);
+    expect(isCancelOrDoubt("Я отменяю запись")).toBe(true);
+  });
+});
+
