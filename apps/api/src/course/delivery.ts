@@ -34,13 +34,15 @@ export async function deliveryMode(): Promise<DeliveryMode> {
  * Режим доставки ДЛЯ КОНКРЕТНОГО ЧЕЛОВЕКА. Пришедшей с сайта Telegram-группа
  * не нужна вовсе (у неё и Telegram может не быть — ради этого сайт и делался),
  * поэтому канал WEB всегда получает ссылку на платформу, какой бы режим ни
- * стоял в настройках. Для Instagram/Messenger — как настроил владелец.
+ * стоял в настройках. Для Instagram/Messenger/WhatsApp — как настроил владелец.
  */
 export async function deliveryModeFor(contact: {
   channel: string;
   courseDeliveryChoice?: string | null;
 }): Promise<DeliveryMode> {
-  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return "web";
+  // WhatsApp идёт по общей настройке, как Instagram (владелец 08.11.2026: «как только получаем деньги —
+  // пусть бот отправит ссылку на Телеграм, и всё»). Раньше WhatsApp был жёстко «только платформа».
+  if (["WEB", "MANUAL"].includes(contact.channel)) return "web";
   if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web")
     return contact.courseDeliveryChoice;
   return deliveryMode();
@@ -165,9 +167,9 @@ export function accessMessage(opts: {
 
   if (opts.webLink && !opts.telegramLink && opts.added) {
     lines.push(
-      tg ? "Курси дуюм илова шуд 🎉" : "Второй курс добавлен 🎉",
+      tg ? "Курси дуюм илова шуд" : "Второй курс добавлен",
       "",
-      tg ? "Он аллакай дар кабинети шумост — ҳамон линкро кушоед:" : "Он уже в вашем кабинете — откройте ту же ссылку:",
+      tg ? "Вай дар кабинетатон хаст, хамон ссылкаро кушоен:" : "Он уже в вашем кабинете, откройте ту же ссылку:",
       opts.webLink,
     );
     return lines.join("\n");
@@ -175,7 +177,7 @@ export function accessMessage(opts: {
 
   if (opts.webLink && opts.telegramLink) {
     lines.push(
-      "Ваш курс открыт 🎉",
+      "Ваш курс открыт",
       "",
       `Смотреть на сайте (работает без Telegram, уроки сохраняются в телефоне):`,
       opts.webLink,
@@ -185,14 +187,14 @@ export function accessMessage(opts: {
     );
   } else if (opts.webLink) {
     lines.push(
-      tg ? "Дарси шумо кушода шуд 🎉" : "Ваш курс открыт 🎉",
+      tg ? "Курсатон кушода шуд" : "Ваш курс открыт",
       "",
-      tg ? "Ҳамаи дарсҳо ин ҷо — линкро дар телефон кушоед:" : "Все уроки здесь — откройте ссылку на телефоне:",
+      tg ? "Хамаи дарсхо ин чо, ссылкаро дар телефон кушоен:" : "Все уроки здесь, откройте ссылку на телефоне:",
       opts.webLink,
       "",
       tg
-        ? "Ин линк шахсии шумост: бо он ҳамаи курсҳои харидаатон кушода мешаванд. Саҳифаро ба экрани «Домой» илова кунед — дарсҳо бе интернет ҳам кор мекунанд."
-        : "Эта ссылка ваша личная: по ней откроются все купленные курсы. Добавьте страницу на экран «Домой» — уроки будут открываться без интернета.",
+        ? "Ин ссылка факат барои шумо, хамаи курсхои харидагиатон хамин чо кушода мешан. Сахифаро ба экрани «Домой» монен, дарсхо бе интернет хам кушода мешан."
+        : "Эта ссылка ваша личная, по ней откроются все купленные курсы. Добавьте страницу на экран «Домой», уроки будут открываться без интернета.",
     );
   } else if (opts.telegramLink) {
     lines.push(opts.telegramLink);

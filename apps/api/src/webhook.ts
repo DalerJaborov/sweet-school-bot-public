@@ -1,3 +1,4 @@
+import { silenceIfFollowedByBusiness } from "./profiles.js";
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
@@ -7,6 +8,7 @@ import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
 import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
+import { recordAdReferral, referralFromMeta } from "./metaConversions.js";
 import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
 import { storyReplyWorthAnswer, QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
@@ -14,7 +16,8 @@ import { noteDeliberateSilence } from "./ai/deliberateSilence.js";
 import { markListedPersonalNow } from "./profiles.js";
 import { looksPersonal, startsWithFamilyAddress } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
-import { detectClientLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { rememberOwnerReply, type OwnerMedia } from "./ai/styleLearning.js";
 import { voiceToText } from "./ai/voiceToText.js";
 import { findOwnMedia, viewableUrl } from "./ownMedia.js";
@@ -54,7 +57,13 @@ export type MessagingEvent = {
     attachments?: { type?: string; payload?: { url?: string } }[];
     /** Ответ на нашу историю: Meta кладёт сюда её адрес и id. */
     reply_to?: { story?: { url?: string; id?: string }; mid?: string };
+    /** Первое сообщение из рекламы «клик в переписку»: id объявления (metaConversions.ts). */
+    referral?: unknown;
   };
+  /** Отдельное событие messaging_referrals: человек открыл переписку из рекламы. */
+  referral?: unknown;
+  /** Кнопка «Начать» в Messenger из рекламы приносит referral здесь. */
+  postback?: { payload?: string; referral?: unknown };
   /**
    * Реакция на сообщение (сердечко и прочие). Приходит отдельным событием, БЕЗ
    * message — поэтому раньше проваливалась мимо обработки целиком.
@@ -381,9 +390,9 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 /** Фото пришло, но скачать не вышло даже с повтором — просим прислать ещё раз,
  *  вместо того чтобы отвечать так, будто ничего не было (см. лог выше). */
 const COULD_NOT_LOAD_PHOTO: Record<ClientLanguage, string> = {
-  ru: "Вижу, что вы что-то прислали, но фото не загрузилось 🙏 Пришлите, пожалуйста, ещё раз.",
-  tg: "Мебинам, ки чизе фиристодед, аммо расм бор нашуд 🙏 Лутфан бори дигар фиристед.",
-  en: "I can see you sent something, but the photo didn't load 🙏 Could you send it again?",
+  ru: "Вижу, что вы что-то прислали, но фото не загрузилось. Пришлите ещё раз",
+  tg: "Мебинам ки чизе фиристодед, аммо сурат кушода нашуд. Боз як бор фиристен",
+  en: "I can see you sent something, but the photo didn't load. Could you send it again?",
 };
 
 const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> = {
@@ -442,6 +451,27 @@ export async function handleMessage(
   if (event.reaction) {
     await handleReaction(event, selfId, channel);
     return;
+  }
+  // Метка рекламы — до всех фильтров ниже: даже если на само сообщение бот
+  // промолчит, знать, что человек пришёл из объявления, нужно для отчёта о
+  // продажах и для передачи оплаты в Meta.
+  // Отдельное событие без сообщения (открыл переписку, кнопка «Начать») контакт
+  // НЕ создаёт — иначе счётчик новых заявок вырос бы на тех, кто не написал.
+  // Сбой здесь не должен задержать само сообщение: только запись в журнал.
+  const referral = senderId && senderId !== selfId && !msg?.is_echo
+    ? referralFromMeta(msg?.referral ?? event.referral ?? event.postback?.referral) : null;
+  if (referral && senderId) {
+    try {
+      const existing = msg
+        ? await prisma.contact.upsert({
+            where: { channel_igUserId: { channel, igUserId: senderId } },
+            create: { channel, igUserId: senderId }, update: {}, select: { id: true },
+          })
+        : await prisma.contact.findUnique({ where: { channel_igUserId: { channel, igUserId: senderId } }, select: { id: true } });
+      if (existing) await recordAdReferral(existing.id, referral);
+    } catch (err) {
+      logError("webhook:adReferral", err);
+    }
   }
   if (!msg) return;
   if (msg.is_echo || senderId === selfId) {
@@ -555,6 +585,11 @@ export async function handleMessage(
   if (await markListedPersonalNow(contact)) return;
   if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
 
+  // На кого подписана Ширин (знакомые, родня, поставщики) — бот молчит; платящих
+  // и тех, кто прислал картинку (возможный чек), не трогаем. См. profiles.ts.
+  if (await silenceIfFollowedByBusiness(contact, { hasImage: attachments.some((a) => a.kind === "image") })) return;
+
+
   // ФЛИРТ / ОСКОРБЛЕНИЯ / РЕКЛАМНЫЙ СПАМ / ВИДЕО БЕЗ ТЕКСТА в директе от того,
   // кто не покупал (владелец 05.09.2026): блокируем сразу, без ответа. Оплатившую
   // ученицу не блокируем никогда — у неё может быть претензия резкими словами,
@@ -642,7 +677,7 @@ export async function handleMessage(
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
-    const language = detectClientLanguage(lastIn?.text ?? "");
+    const language = await contactLanguage(contact.id, lastIn?.text ?? "");
     const text = COULD_NOT_LOAD_PHOTO[language];
     const mid = await sendToContact(contact, text);
     if (mid) await recordOutgoingMessage(contact.id, text, mid);

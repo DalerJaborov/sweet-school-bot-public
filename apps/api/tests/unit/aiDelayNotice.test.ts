@@ -45,7 +45,7 @@ describe("AI delay queue", () => {
       expect.objectContaining({ data: expect.objectContaining({ attempts: 2 }) }),
     );
     for (const [arg] of db.model("message").findFirst.mock.calls) {
-      if ((arg as any).where.direction === "OUT") expect((arg as any).where.OR[1].text.notIn).toHaveLength(3);
+      if ((arg as any).where.direction === "OUT") expect((arg as any).where.OR[1].text.notIn).toHaveLength(6); // 3 новых + 3 прежних текста уведомления
     }
   });
   it("does not repeat a notice already claimed before a timeout or restart", async () => {

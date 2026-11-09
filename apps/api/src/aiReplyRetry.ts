@@ -1,7 +1,7 @@
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
 import { sendToContact } from "./messaging/send.js";
-import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
@@ -35,10 +35,18 @@ import { QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
  */
 
 const DELAY_NOTICES = {
-  ru: "Сейчас не получается подготовить ответ. Ваш вопрос сохранён, вернёмся к нему немного позже.",
-  tg: "Ҳоло ҷавоб омода нашуд. Саволи шумо нигоҳ дошта шуд, каме дертар ба он бармегардем.",
-  en: "Your question is saved. We cannot prepare an answer right now and will return to it later.",
+  ru: "Сейчас не получается ответить. Вопрос ваш видела, отвечу чуть позже",
+  tg: "Хозир чавоб дода наметонам. Саволатонро дидам, каме дертар чавоб медихам",
+  en: "I can't answer right now. I've seen your question and will reply a bit later",
 };
+/** Прежние тексты уведомления: строки с ними уже лежат в истории и не должны
+ *  считаться «настоящим ответом» в очереди, которая пережила выкладку. */
+const LEGACY_DELAY_NOTICES = [
+  "Сейчас не получается подготовить ответ. Ваш вопрос сохранён, вернёмся к нему немного позже.",
+  "Ҳоло ҷавоб омода нашуд. Саволи шумо нигоҳ дошта шуд, каме дертар ба он бармегардем.",
+  "Your question is saved. We cannot prepare an answer right now and will return to it later.",
+];
+const ALL_DELAY_NOTICES = [...Object.values(DELAY_NOTICES), ...LEGACY_DELAY_NOTICES];
 
 const DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000]; // 1, 2, 5, 10, 15 минут
 const TRAILING_DELAY_MS = 20 * 60_000;
@@ -51,7 +59,7 @@ function outgoingAnswerSince(contactId: string, snapshotAt: Date) {
     contactId,
     direction: "OUT" as const,
     createdAt: { gt: snapshotAt },
-    OR: [{ text: null }, { text: { notIn: Object.values(DELAY_NOTICES) } }],
+    OR: [{ text: null }, { text: { notIn: ALL_DELAY_NOTICES } }],
   };
 }
 
@@ -209,7 +217,7 @@ async function runQueue(): Promise<void> {
         data: { delayNoticeAt: new Date() },
       });
       if (claimed.count) {
-        const notice = DELAY_NOTICES[detectClientLanguage(row.text)];
+        const notice = DELAY_NOTICES[await contactLanguage(row.contactId, row.text)];
         try {
           const mid = await sendToContact(row.contact, notice);
           await recordOutgoingMessage(row.contactId, notice, mid);

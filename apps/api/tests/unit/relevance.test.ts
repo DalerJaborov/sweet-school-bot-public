@@ -71,7 +71,7 @@ describe("relevance: политика", () => {
   });
   it("уточняющий вопрос на трёх языках и таджикский — шаблон Ширин", () => {
     expect(clarifyText("ru")).toMatch(/Здравствуйте/);
-    expect(clarifyText("tg")).toContain("Ба шумо кадом маълумоти курсро равон кунем?");
+    expect(clarifyText("tg")).toBe("Ассалому алейкум. Чи хизмат кунем?");
     expect(clarifyText("en")).toMatch(/Hello/);
   });
 });

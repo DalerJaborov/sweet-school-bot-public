@@ -145,3 +145,78 @@ async function refreshProfilesOnce(): Promise<void> {
     logError("profiles", err);
   }
 }
+
+/**
+ * НА КОГО ПОДПИСАНА ШИРИН — БОТ ИМ НЕ ОТВЕЧАЕТ (владелец 08.11.2026).
+ *
+ * Если хозяйка подписана на аккаунт, это почти всегда знакомый ей человек:
+ * родня, подруга, коллега, поставщик. Бот не должен вмешиваться в их разговор.
+ *
+ * Источник данных — User Profile API Instagram: поле `is_business_follow_user`
+ * (ФАКТ: описано в документации Meta, «User Profile API», Messaging API). Это
+ * поле отдаёт текущее состояние подписки на момент запроса.
+ *
+ * ЧЕГО НЕ ДЕЛАЕМ. Не молчим, если:
+ *  - человек уже платил или у него есть покупка: доступ к курсу, ссылка и
+ *    поддержка важнее, чем «Ширин на него подписана» (она могла подписаться на
+ *    ученицу сама);
+ *  - в сообщении есть картинка: это может быть чек, а потерянный чек хуже
+ *    лишнего ответа знакомой;
+ *  - API не ответил или не дал согласия: сомнение — отвечаем как обычно.
+ * Отметка ставится как «личный контакт» (Contact.personal) с понятной причиной:
+ * владелец видит её в панели и снимает одним нажатием.
+ */
+const FOLLOW_CACHE_MS = 6 * 3_600_000;
+const followCache = new Map<string, { at: number; follows: boolean }>();
+
+/** true — Ширин подписана на этот аккаунт; null — не удалось узнать. */
+export async function businessFollowsUser(igUserId: string): Promise<boolean | null> {
+  const cached = followCache.get(igUserId);
+  if (cached && Date.now() - cached.at < FOLLOW_CACHE_MS) return cached.follows;
+  const token = (await getSetting("igToken"))?.trim();
+  if (!token) return null;
+  const path = `/${GRAPH_VERSION}/${igUserId}?fields=is_business_follow_user`;
+  const url = env.igProxyBase ? `${env.igProxyBase}${path}&access_token=${encodeURIComponent(token)}` : `${IG_ORIGIN}${path}`;
+  const headers: Record<string, string> = env.igProxyBase
+    ? env.igProxyKey
+      ? { "x-proxy-key": env.igProxyKey }
+      : {}
+    : { Authorization: `Bearer ${token}` };
+  try {
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const data = (await res.json()) as { is_business_follow_user?: boolean; error?: unknown };
+    if (!res.ok || data.error || typeof data.is_business_follow_user !== "boolean") return null;
+    followCache.set(igUserId, { at: Date.now(), follows: data.is_business_follow_user });
+    return data.is_business_follow_user;
+  } catch (err) {
+    logError("profiles:followCheck", err);
+    return null;
+  }
+}
+
+/** Только для тестов. */
+export function resetFollowCache(): void {
+  followCache.clear();
+}
+
+/**
+ * Проверка при входящем сообщении. true — контакт помечен личным, отвечать не
+ * нужно. Вызывать после проверок «личный/спам», до ответа бота.
+ */
+export async function silenceIfFollowedByBusiness(
+  contact: { id: string; channel: string; igUserId: string; paid: boolean; personal: boolean },
+  opts: { hasImage: boolean }
+): Promise<boolean> {
+  if (contact.channel !== "INSTAGRAM" || contact.personal || contact.paid || opts.hasImage) return false;
+  const follows = await businessFollowsUser(contact.igUserId);
+  if (follows !== true) return false;
+  const purchases = await prisma.purchase.count({ where: { contactId: contact.id } }).catch(() => 1);
+  if (purchases > 0) return false;
+  await prisma.contact
+    .update({
+      where: { id: contact.id },
+      data: { personal: true, personalReason: "Ширин подписана на этот аккаунт (Instagram), бот не отвечает" },
+    })
+    .catch((err) => logError("profiles:markFollowed", err));
+  return true;
+}

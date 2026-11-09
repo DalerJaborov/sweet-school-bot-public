@@ -26,11 +26,13 @@ import { textsRouter } from "./textsRoutes.js";
 import { mediaLibraryRouter } from "./mediaLibrary.js";
 import { offerRouter } from "./offerRoutes.js";
 import { waitingRouter } from "./waiting.js";
+import { ownerLinkRouter } from "./course/ownerLinkRoutes.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
 import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
 import { assistantRouter } from "./assistantPanel.js";
 import { whatsappAdminRouter, conversationAdminRouter } from "./whatsapp/routes.js";
+import { metaConversionsAdminRouter } from "./metaConversionsRoutes.js";
 import { knowledgeReviewRouter } from "./knowledgeReview.js";
 import { getPrices } from "./services/priceService.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
@@ -75,6 +77,7 @@ adminRouter.use("/admin", (req, res, next) => {
   requireAuth(req, res, next);
 });
 adminRouter.use("/admin/v1/whatsapp", whatsappAdminRouter);
+adminRouter.use("/admin/v1/meta-conversions", metaConversionsAdminRouter);
 adminRouter.use("/admin/v1/conversations", conversationAdminRouter);
 adminRouter.use("/admin/v1/knowledge", knowledgeReviewRouter);
 
@@ -989,6 +992,8 @@ adminRouter.get("/admin/contacts", async (req, res) => {
       personal: c.personal,
       spamBlockedAt: c.spamBlockedAt,
       spamReason: c.spamReason,
+      // «Офлайн: передано Ширин» — бот молчит, пока человек не напишет про онлайн.
+      offlineHandoffAt: c.offlineHandoffAt,
       // Дошёл ли человек до уроков и не отобран ли доступ — по этим полям
       // владелец видит, за кем идти, и кого выгонять за фальшивый чек.
       joinedGroupAt: c.joinedGroupAt,
@@ -1404,6 +1409,8 @@ adminRouter.use(offerRouter);
 // Главный экран «Сегодня» — очередь дел и утренние числа (today.ts).
 adminRouter.use(todayRouter);
 adminRouter.use(waitingRouter);
+// «Выдать ссылку» на экране «Сегодня» (course/ownerLink.ts).
+adminRouter.use(ownerLinkRouter);
 // Воронка, выручка по каналам, карточка ученицы (metrics.ts). Внутри
 // adminRouter, а не в index.ts, — иначе /admin/metrics/* обошёл бы проверку
 // пароля выше.

@@ -251,6 +251,16 @@ export async function revokeAccess(
       await call(botToken, "revokeChatInviteLink", { chat_id: chatId, invite_link: contact.inviteLink });
     }
   }
+  // Приглашения на каждую покупку (Contact.inviteLink хранит только последнее).
+  const purchaseLinks = await prisma.purchase
+    .findMany({ where: { contactId }, select: { inviteLink: true } })
+    .catch(() => [] as { inviteLink: string | null }[]);
+  for (const p of purchaseLinks) {
+    if (!p.inviteLink?.startsWith("https://t.me/") || p.inviteLink === contact.inviteLink) continue;
+    for (const chatId of await courseChats()) {
+      await call(botToken, "revokeChatInviteLink", { chat_id: chatId, invite_link: p.inviteLink });
+    }
+  }
   // Ссылки, выданные этой ученице вручную из панели, — тоже гасим: иначе по
   // ней можно было бы войти уже после отзыва доступа.
   const notRevoked = await revokeInvitesForContact(contactId).catch((err) => {

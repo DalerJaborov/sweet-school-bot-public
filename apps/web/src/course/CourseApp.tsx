@@ -55,7 +55,7 @@ function CourseScreens({ state }: { state: CourseState }) {
     return <LinkExpiredScreen t={t} state={state.linkExpired} onRequest={() => void state.requestLink()} />;
   }
   if (state.deviceLimit) {
-    return <DeviceLimitScreen t={t} limit={state.deviceLimit} onReplace={() => void state.replaceOldestDevice()} />;
+    return <DeviceLimitScreen t={t} limit={state.deviceLimit} />;
   }
   if (error) return <ErrorScreen t={t} error={error} onRetry={state.retry} school={view?.school} />;
   if (!view) return <Splash t={t} />;

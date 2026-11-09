@@ -1,18 +1,20 @@
 import { prisma, getSetting, logError } from "./../db.js";
 import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
+import { comparableBotText, humanizeBotText, withoutAddressWords } from "./humanText.js";
 
 /**
  * Самообучение стилю хозяйки — БЕЗ переписывания промта.
  *
  * Промт владельца это закон, его меняет только он. Бот учится иначе: копит
  * реальные пары «вопрос клиента → ответ хозяйки» и подмешивает лучшие из них в
- * каждый запрос как образцы. Модель перенимает манеру («Салом апачон», «Не
- * намешава», короткие фразы без подлизывания), а правила остаются под контролем
+ * каждый запрос как образцы. Модель перенимает манеру («Не намешава», короткие
+ * фразы без подлизывания), а правила остаются под контролем
  * человека — то есть стиль улучшается, а поведение не «уплывает» само по себе.
  *
  * Два источника примеров:
  *  1) прошлые переписки аккаунта (разовый импорт, см. importHistory);
- *  2) КАЖДЫЙ случай, когда хозяйка вмешалась в живой разговор — значит бот
+ *  2) КАЖДЫЙ случай, когда хозяйка вмешалась в живой разговор (Instagram:
+ *     webhook.ts, WhatsApp: whatsapp/worker.ts::learnFromOwner) — значит бот
  *     ответил не так, а она показала, как надо. Это и есть постоянное обучение:
  *     чем дольше система работает, тем ближе бот к её манере.
  */
@@ -57,7 +59,7 @@ export async function rememberOwnerReply(
   /** Чей это разговор — известен для живого вмешательства (TAKEOVER, см.
    *  webhook.ts), неизвестен/не гарантирован для разового импорта истории
    *  (HISTORY, см. historyImport.ts) — там остаётся null. См. markExamplesAsSuccessful. */
-  contactId?: string
+  contactId?: string,
 ): Promise<void> {
   if (!media && isUseless(ownerText)) return;
   await prisma.styleExample
@@ -146,15 +148,25 @@ const NOT_HER_WORDS = /Automation powered|Drafting the|\*\*|NO_REPLY|Рады п
 export async function withoutBotAuthored<T extends { ownerText: string }>(pool: T[]): Promise<T[]> {
   const texts = [...new Set(pool.map((e) => e.ownerText.trim()).filter(Boolean))];
   if (texts.length === 0) return pool;
+  // Бот пишет в историю текст после фильтра отправки (без тире, буквы по стилю клиента),
+  // а образец мог прийти и до фильтра, и после: ищем все варианты и сравниваем в одном виде.
+  const variants = new Set<string>();
+  for (const t of texts) {
+    variants.add(t);
+    variants.add(humanizeBotText(t, { keepTajikLetters: false }));
+    variants.add(humanizeBotText(t, { keepTajikLetters: true }));
+  }
+  // Instagram снимает точку в конце (voice.ts::toOwnerVoice), а в истории она осталась.
+  for (const v of [...variants]) if (!/[.!?…]$/u.test(v)) variants.add(v + ".");
   const sentByBot = new Set(
     (
       await prisma.message.findMany({
-        where: { direction: "OUT", byHuman: false, text: { in: texts } },
+        where: { direction: "OUT", byHuman: false, text: { in: [...variants] } },
         select: { text: true },
       })
-    ).map((m) => (m.text ?? "").trim())
+    ).map((m) => comparableBotText(m.text)),
   );
-  return pool.filter((e) => !sentByBot.has(e.ownerText.trim()) && !NOT_HER_WORDS.test(e.ownerText));
+  return pool.filter((e) => !sentByBot.has(comparableBotText(e.ownerText)) && !NOT_HER_WORDS.test(e.ownerText));
 }
 
 /** Бонус образцу на языке текущего клиента: таджикской клиентке — таджикские образцы. */
@@ -163,7 +175,7 @@ export function languageBonus(example: { ownerText: string }, language: ClientLa
   return detectClientLanguage(example.ownerText) === language ? 4 : 0;
 }
 
-export async function buildStyleBlock(clientText = ""): Promise<string> {
+export async function buildStyleBlock(clientText = "", knownLanguage?: ClientLanguage): Promise<string> {
   if ((await getSetting("styleLearningEnabled")) === "false") return "";
 
   const rawPool = await prisma.styleExample.findMany({
@@ -176,26 +188,30 @@ export async function buildStyleBlock(clientText = ""): Promise<string> {
   if (pool.length === 0) return "";
 
   const ask = words(clientText);
-  const language = detectClientLanguage(clientText);
+  // Язык контакта из ai.ts (цепочка contactLanguage) точнее, чем одно сообщение: «Салом» или голосовое.
+  const language = knownLanguage ?? detectClientLanguage(clientText);
   const examples = [...pool]
     .map((e) => ({ e, s: score(e, ask) + languageBonus(e, language) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, EXAMPLES_IN_PROMPT)
     .map((x) => x.e);
 
-  const lines = examples.map((e) =>
-    e.clientText.trim() ? `Клиент: ${e.clientText.trim()}\nШирин: ${e.ownerText}` : `Ширин: ${e.ownerText}`
-  );
+  // Обращение «апачон/апа» из образцов убираем (владелец 08.11.2026: бот так не
+  // обращается), иначе модель копирует его из её же фраз, сколько ни запрещай.
+  const lines = examples.map((e) => {
+    const owner = withoutAddressWords(e.ownerText);
+    return e.clientText.trim() ? `Клиент: ${e.clientText.trim()}\nШирин: ${owner}` : `Ширин: ${owner}`;
+  });
   const tajikRule =
     language === "tg"
-      ? "\n\nПИСЬМЕННЫЙ ТАДЖИКСКИЙ: пиши так, как Ширин в образцах ниже — коротко, разговорно, на «шумо» (глагол во множественном числе: мекунед, мекнен, дорем). " +
-        "Особые буквы (ӣ ӯ қ ғ ҳ ҷ) ставь там, где она ставит их в похожей фразе, а где пишет без них — пиши без них. " +
-        "НЕ ВЫДУМЫВАЙ слов и оборотов, которых нет в образцах и в разговорнике: нет подходящего образца — скажи короче и проще, чем сомневаться в форме."
+      ? "\n\nПИСЬМЕННЫЙ ТАДЖИКСКИЙ: слова, порядок слов и длину фраз бери у Ширин из образцов ниже: коротко, разговорно, по-душанбински, на «шумо» (мекнен, мегирен, дорем). " +
+        "Буквы пиши правильные таджикские (ӣ ӯ қ ғ ҳ ҷ), даже где Ширин в образце их не ставит: под собеседника их правит код перед отправкой, а озвучке нужны правильные буквы. " +
+        "НЕ ВЫДУМЫВАЙ слов и оборотов, которых нет в образцах и в разговорнике: нет подходящего образца, скажи короче и проще."
       : "";
   return (
     tajikRule +
-    "\n\nТАК ОТВЕЧАЕТ САМА ШИРИН — ЭТО ЭТАЛОН МАНЕРЫ, НЕ ИСТОЧНИК АКТУАЛЬНЫХ ФАКТОВ. Держи её манеру: те же слова, тот же " +
-    "душанбинский говор, та же длина фразы. Эти примеры исторические: не копируй из них цены, даты, акции, состав курса, реквизиты или личные данные. " +
+    "\n\nТАК ОТВЕЧАЕТ САМА ШИРИН (её настоящие сообщения клиентам). ЭТО ЭТАЛОН МАНЕРЫ, НЕ ИСТОЧНИК АКТУАЛЬНЫХ ФАКТОВ. Держи её манеру: те же слова, тот же " +
+    "душанбинский говор, та же длина фразы, так же коротко, как в WhatsApp. Эти примеры исторические: не копируй из них цены, даты, акции, состав курса, реквизиты или личные данные. " +
     "Факты бери только из текущих правил и настроек курса; при конфликте или отсутствии подтверждения не угадывай. " +
     "Ничего не добавляй от себя: ни вежливых довесков, ни лишних вопросов.\n\n" +
     lines.join("\n\n")

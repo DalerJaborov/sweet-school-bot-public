@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { FreeLessonSettings } from "../components/FreeLessonSettings";
 import { WhatsAppSettings } from "../components/WhatsAppSettings";
+import { MetaPurchaseSettings } from "../components/MetaPurchaseSettings";
+import { VideoLibrarySettings } from "../components/VideoLibrarySettings";
 import { KnowledgeReview } from "../components/KnowledgeReview";
 
 /** Ответ живой проверки модели (POST /admin/gemini-test). */
@@ -47,7 +49,7 @@ function defineFields<const K extends string>(fields: readonly FieldDef<K>[]): r
   return fields;
 }
 
-type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "botFrozen";
+type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "offlineHandoffEnabled" | "botFrozen";
 
 /**
  * `checkable` — рядом с полем появляется кнопка «Проверить»: она спрашивает у Google
@@ -174,6 +176,9 @@ export function SettingsPage() {
   // возможность включать сюрпризом сразу после деплоя не должна, владелец
   // включает осознанно, когда готова (26.08.2026).
   const [qaAutoReplyEnabled, setQaAutoReplyEnabled] = useState(false);
+  // «Офлайн: передано Ширин» — по умолчанию ВКЛЮЧЕНО (владелец 08.11.2026):
+  // после карточки офлайн-курса помощник молчит, пока человек не напишет про онлайн.
+  const [offlineHandoffEnabled, setOfflineHandoffEnabled] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   /** Какое поле сейчас проверяется и что ответил Google по каждому — см. checkModel. */
@@ -187,12 +192,14 @@ export function SettingsPage() {
     aiEnabled: boolean;
     stuckAlertEnabled: boolean;
     qaAutoReplyEnabled: boolean;
+    offlineHandoffEnabled: boolean;
   } | null>(null);
   const dirty =
     original.current != null &&
     (aiEnabled !== original.current.aiEnabled ||
       stuckAlertEnabled !== original.current.stuckAlertEnabled ||
       qaAutoReplyEnabled !== original.current.qaAutoReplyEnabled ||
+      offlineHandoffEnabled !== original.current.offlineHandoffEnabled ||
       FIELDS.some((f) => (values[f.key] ?? "") !== (original.current!.values[f.key] ?? "")));
   useUnsavedGuard(dirty);
 
@@ -209,11 +216,13 @@ export function SettingsPage() {
         // настройки не значит "выключено".
         setStuckAlertEnabled(s.stuckAlertEnabled !== "false");
         setQaAutoReplyEnabled(s.qaAutoReplyEnabled === "true");
+        setOfflineHandoffEnabled(s.offlineHandoffEnabled !== "false");
         original.current = {
           values: s,
           aiEnabled: s.aiEnabled === "true",
           stuckAlertEnabled: s.stuckAlertEnabled !== "false",
           qaAutoReplyEnabled: s.qaAutoReplyEnabled === "true",
+          offlineHandoffEnabled: s.offlineHandoffEnabled !== "false",
         };
       })
       .catch((e) => setErr(e.message));
@@ -234,9 +243,10 @@ export function SettingsPage() {
           aiEnabled: String(aiEnabled),
           stuckAlertEnabled: String(stuckAlertEnabled),
           qaAutoReplyEnabled: String(qaAutoReplyEnabled),
+          offlineHandoffEnabled: String(offlineHandoffEnabled),
         },
       });
-      original.current = { values, aiEnabled, stuckAlertEnabled, qaAutoReplyEnabled };
+      original.current = { values, aiEnabled, stuckAlertEnabled, qaAutoReplyEnabled, offlineHandoffEnabled };
       const result = await api<CheckResult>("/admin/gemini-test", {
         method: "POST",
         body: { model: values[key] ?? "" },
@@ -260,7 +270,7 @@ export function SettingsPage() {
    * этом. Включение ответов клиентам — только после подтверждения: после него
    * помощник начинает писать настоящим людям.
    */
-  async function flip(key: "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled", next: boolean, set: (v: boolean) => void) {
+  async function flip(key: "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "offlineHandoffEnabled", next: boolean, set: (v: boolean) => void) {
     if (inFlight.current.has(key)) return;
     if (key === "aiEnabled" && next) {
       const ok = await confirmDialog({
@@ -292,10 +302,11 @@ export function SettingsPage() {
         aiEnabled: String(aiEnabled),
         stuckAlertEnabled: String(stuckAlertEnabled),
         qaAutoReplyEnabled: String(qaAutoReplyEnabled),
+        offlineHandoffEnabled: String(offlineHandoffEnabled),
       };
       for (const f of FIELDS) payload[f.key] = values[f.key] ?? "";
       await api("/admin/settings", { method: "PUT", body: payload });
-      original.current = { values, aiEnabled, stuckAlertEnabled, qaAutoReplyEnabled };
+      original.current = { values, aiEnabled, stuckAlertEnabled, qaAutoReplyEnabled, offlineHandoffEnabled };
       toast("Настройки сохранены");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Ошибка");
@@ -308,7 +319,9 @@ export function SettingsPage() {
     <div className="card">
       <h2>{Icons.settings} Настройки</h2>
       <FreeLessonSettings />
+      <VideoLibrarySettings />
       <WhatsAppSettings />
+      <MetaPurchaseSettings />
       <KnowledgeReview />
       <p className="hint">Подключения и подсказки для помощника. Секретные поля показываются как ••• — ввод нового значения заменит старое.</p>
       {err && <div className="msg err">{err}</div>}
@@ -399,6 +412,14 @@ export function SettingsPage() {
           label="Повторять ваш прошлый ответ в учебной группе"
           hint="Если вопрос почти такой же, как был раньше. На новые вопросы помощник молчит — отвечаете вы."
           testId="switch-qaAutoReplyEnabled"
+        />
+        <Switch
+          checked={offlineHandoffEnabled}
+          disabled={values.botFrozen === "true"}
+          onChange={(next) => void flip("offlineHandoffEnabled", next, setOfflineHandoffEnabled)}
+          label="Офлайн-курс: после карточки с условиями помощник молчит — дальше ведёте вы"
+          hint="Клиент спросил про офлайн — получает готовый текст с условиями, и всё. Напишет «онлайн» — помощник снова отвечает. Выключите, чтобы помощник сам просил имя и номер."
+          testId="switch-offlineHandoffEnabled"
         />
       </div>
       <button className="btn" onClick={save} disabled={saving}>

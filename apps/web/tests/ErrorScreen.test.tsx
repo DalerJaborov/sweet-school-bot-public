@@ -68,3 +68,30 @@ describe("ErrorScreen", () => {
     expect(wa.getAttribute("href")).toContain(encodeURIComponent(tg.linkBrokenWa));
   });
 });
+
+describe("ErrorScreen: публичный код покупательницы", () => {
+  afterEach(() => localStorage.clear());
+
+  it("код добавляется в готовое сообщение WhatsApp (ru)", async () => {
+    localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+    render(<ErrorScreen t={t} error={{ message: "Ссылка не действует", reason: "not_found" }} onRetry={() => undefined} />);
+    const wa = await screen.findByRole("link", { name: t.whatsapp });
+    const text = decodeURIComponent(String(wa.getAttribute("href")).split("text=")[1]);
+    expect(text).toBe(`${t.linkBrokenWa}. ${t.linkBrokenCode}: 7F3A-91C2`);
+  });
+
+  it("по-таджикски — таджикская подпись кода", async () => {
+    localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+    const tg = dict("tg");
+    render(<ErrorScreen t={tg} error={{ message: "x", reason: "not_found" }} onRetry={() => undefined} />);
+    const wa = await screen.findByRole("link", { name: tg.whatsapp });
+    expect(decodeURIComponent(String(wa.getAttribute("href")))).toContain("Рамзи ман: 7F3A-91C2");
+  });
+
+  it("мусор в хранилище (не код, например сам код ссылки) в сообщение не попадает", async () => {
+    localStorage.setItem("course.recoveryCode", "Ab3kQ9xZpm");
+    render(<ErrorScreen t={t} error={{ message: "x", reason: "not_found" }} onRetry={() => undefined} />);
+    const wa = await screen.findByRole("link", { name: t.whatsapp });
+    expect(decodeURIComponent(String(wa.getAttribute("href")))).not.toContain("Ab3kQ9xZpm");
+  });
+});

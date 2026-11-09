@@ -1,10 +1,13 @@
 import type { Contact } from "@prisma/client";
+import { deliveryMode } from "./delivery.js";
+import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { prisma, logError, recordOutgoingMessage } from "../db.js";
-import { detectClientLanguage } from "../ai/clientLanguage.js";
+import { contactLanguage } from "../ai/contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
 import type { Allocation, Course } from "../courses.js";
+import { settleChoiceIfHandedOut } from "./handedOut.js";
 
 export type CourseDeliveryChoice = "telegram" | "web";
 export function isDeliveryChoice(value: unknown): value is CourseDeliveryChoice {
@@ -12,8 +15,8 @@ export function isDeliveryChoice(value: unknown): value is CourseDeliveryChoice 
 }
 
 export const DELIVERY_QUESTION = {
-  ru: "Оплата принята. У вас есть Telegram? Ответьте «да» — пришлю приглашение в группу с уроками, или «нет» — открою уроки на сайте.",
-  tg: "Пардохт қабул шуд. Шумо Telegram доред? «Ҳа» гӯед — ссылкаи гурӯҳи дарсҳоро мефиристам, ё «не» — дарсҳоро дар сайт мекушоям.",
+  ru: "Оплата принята. У вас есть Telegram? Напишите «да», пришлю ссылку в группу с уроками. Напишите «нет», открою уроки на сайте",
+  tg: "Пардохт кабул шуд. Telegram доред? «Ха» нависен, ссылкаи группаро мефиристам. «Не» нависен, дарсхоя дар сайт мекушоям",
 };
 
 /** Only short explicit answers. An unrelated 'yes' is handled below only when
@@ -34,6 +37,10 @@ export async function deferGrantForChoice(
   verdict: { amount: number | null; currency?: string | null }, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" },
 ): Promise<boolean> {
   if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return false;
+  // Вопрос «куда прислать уроки» нужен только когда владелец выбрал «обе ссылки» (both).
+  // В режимах telegram/web человек после оплаты сразу получает одну ссылку, без вопросов
+  // (владелец 08.11.2026: «получаем деньги — бот отправляет ссылку на Телеграм, и всё»).
+  if ((await deliveryMode()) !== "both") return false;
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh) return false;
   if (isDeliveryChoice(fresh.courseDeliveryChoice)) {
@@ -42,6 +49,7 @@ export async function deferGrantForChoice(
   }
   if (fresh.accessRevokedAt || fresh.spamBlockedAt) return true;
   if (!opts.byHuman && await isBotFrozen()) return true;
+  const createdIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     for (let i = 0; i < plan.grant.length; i++) {
       const course = plan.grant[i];
@@ -52,34 +60,41 @@ export async function deferGrantForChoice(
       } else {
         const share = Math.floor(amount / plan.grant.length);
         const catalog = await tx.course.findUnique({ where: { code: course } });
-        await tx.purchase.create({ data: {
+        const created = await tx.purchase.create({ data: {
           contactId: contact.id, course, courseId: catalog?.id ?? null,
           amount: i === plan.grant.length - 1 ? amount - share * i : share,
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", deliveryAwaitingChoice: true,
         } });
+        if (created?.id) createdIds.push(created.id);
       }
     }
     await tx.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
   });
+  // Оплата подтверждена уже здесь — выбор «куда прислать уроки» её не меняет.
+  await enqueuePurchaseConversion(contact.id, createdIds);
   if (await awaitingDeliveryChoice(contact.id)) await askDeliveryChoice(fresh, opts);
   return true;
 }
 
 export async function awaitingDeliveryChoice(contactId: string): Promise<boolean> {
-  return (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
+  const waiting = (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
+  if (!waiting) return false;
+  // Ширин уже выдала доступ руками - ожидание выбора снимается, бот молчит (08.11.2026).
+  return !(await settleChoiceIfHandedOut(contactId));
 }
 
-export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<void> {
-  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice)) return;
-  if (!opts.byHuman && await isBotFrozen()) return;
+export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<boolean> {
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice)) return false;
+  if (!opts.byHuman && await isBotFrozen()) return false;
+  if (await settleChoiceIfHandedOut(contact.id)) return false;
   const claim = await prisma.contact.updateMany({
     where: { id: contact.id, courseDeliveryChoice: null, deliveryChoicePromptState: null, accessRevokedAt: null, spamBlockedAt: null },
     data: { deliveryChoicePromptState: "SENDING", deliveryChoiceAskedAt: new Date() },
   });
-  if (claim.count !== 1) return;
+  if (claim.count !== 1) return false;
   const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN" }, orderBy: { createdAt: "desc" } });
   const lang = contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
-    ? contact.preferredLanguage : detectClientLanguage(lastIn?.text ?? "") === "ru" ? "ru" : "tg";
+    ? contact.preferredLanguage : (await contactLanguage(contact.id, lastIn?.text ?? "")) === "ru" ? "ru" : "tg";
   const text = DELIVERY_QUESTION[lang];
   let sent = false;
   try {
@@ -88,6 +103,7 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
     sent = true;
     await recordOutgoingMessage(contact.id, text, mid);
     await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: mid } });
+    return true;
   } catch (err) {
     const uncertain = sent || metaFailureKind(err) === "AMBIGUOUS";
     await prisma.contact.update({ where: { id: contact.id }, data: {
@@ -95,6 +111,7 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
       ...(!uncertain ? { deliveryChoiceAskedAt: null } : {}),
     } });
     logError("deliveryChoice:question", err);
+    return false;
   }
 }
 

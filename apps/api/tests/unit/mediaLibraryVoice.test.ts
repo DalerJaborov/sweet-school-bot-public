@@ -118,7 +118,7 @@ describe("кеш и потолок трат озвучки", () => {
   });
 });
 
-describe("decorateForV3 — одна метка в начале, только для eleven_v3", () => {
+describe("decorateForV3 — одна метка в начале; v3 своя, v4 только из ELEVENLABS_TAG", () => {
   it("первый кусок получает ровно одну весёлую метку, остальные и не-v3 без меток", async () => {
     const { decorateForV3 } = await import("../../src/ai/voiceClone.js");
     const out = decorateForV3("Салом!", 0, 3, "eleven_v3");
@@ -126,7 +126,33 @@ describe("decorateForV3 — одна метка в начале, только д
     expect(decorateForV3("Салом!", 0, 3, "eleven_v3")).toBe(out);
     expect(decorateForV3("Середина.", 1, 3, "eleven_v3")).toBe("Середина.");
     expect(decorateForV3("Пишите.", 2, 3, "eleven_v3")).toBe("Пишите.");
-    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo")).toBe("Салом!");
+    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo", "")).toBe("Салом!");
+    expect(decorateForV3("Салом!", 0, 1, "eleven_v4_turbo", "[warm]")).toBe("[warm] Салом!");
+    expect(decorateForV3("Дуюм.", 1, 2, "eleven_v4", "[warm]")).toBe("Дуюм.");
     expect((out.match(/\[/g) ?? []).length).toBe(1);
+  });
+});
+
+describe("voiceFilter — темп только для озвучки бота", () => {
+  it("1.0 и мусор дают чистый фильтр, 1.07 добавляет atempo", async () => {
+    const { voiceFilter, VOICE_FILTER } = await import("../../src/ai/audioConvert.js");
+    expect(voiceFilter()).toBe(VOICE_FILTER);
+    expect(voiceFilter(1)).toBe(VOICE_FILTER);
+    expect(voiceFilter(Number.NaN)).toBe(VOICE_FILTER);
+    expect(voiceFilter(1.07)).toBe(`atempo=1.070,${VOICE_FILTER}`);
+  });
+});
+
+describe("filterArgs — телефонный эффект подмешивает шум через filter_complex", () => {
+  it("none даёт -af, light/strong дают filter_complex с темпом и выходом [out]", async () => {
+    const { filterArgs, VOICE_FILTER } = await import("../../src/ai/audioConvert.js");
+    expect(filterArgs(1, "none")).toEqual(["-af", VOICE_FILTER]);
+    const light = filterArgs(1.07, "light");
+    expect(light[0]).toBe("-filter_complex");
+    expect(light[1]).toContain("[0:a]atempo=1.070[v]");
+    expect(light[1]).toContain("anoisesrc");
+    expect(light[1].endsWith(`[m]${VOICE_FILTER}[out]`)).toBe(true);
+    expect(light.slice(2)).toEqual(["-map", "[out]"]);
+    expect(filterArgs(1, "strong")[1]).toContain("[0:a]anull[v]");
   });
 });

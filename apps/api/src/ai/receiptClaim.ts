@@ -64,16 +64,16 @@ export function claimsReceiptSent(text: string): boolean {
 export function receiptNotSeenReply(language: ClientLanguage, hasPaperclip: boolean): string {
   const texts: Record<ClientLanguage, { clip: string; plain: string }> = {
     ru: {
-      clip: "Чек пока не вижу — прикрепите фото чека скрепкой, и я сразу проверю.",
-      plain: "Чек пока не вижу — пришлите фото чека прямо сюда, и я сразу проверю.",
+      clip: "Чек пока не вижу. Прикрепите фото чека скрепкой, сразу проверю",
+      plain: "Чек пока не вижу. Пришлите фото чека прямо сюда, сразу проверю",
     },
     tg: {
-      clip: "Чекро ҳоло намебинам — сурати чекро бо скрепка замима кунед, ҳамон замон тафтиш мекунам.",
-      plain: "Чекро ҳоло намебинам — сурати чекро ҳамин ҷо фиристед, ҳамон замон тафтиш мекунам.",
+      clip: "Чек хозир намебинам. Сурати чекро бо скрепка фиристен, зуд тафтиш мекнам",
+      plain: "Чек хозир намебинам. Сурати чекро хамин чо фиристен, зуд тафтиш мекнам",
     },
     en: {
-      clip: "I don't see the receipt yet — attach a photo of it with the paperclip and I'll check right away.",
-      plain: "I don't see the receipt yet — send a photo of it right here and I'll check right away.",
+      clip: "I don't see the receipt yet. Attach a photo of it with the paperclip and I'll check right away",
+      plain: "I don't see the receipt yet. Send a photo of it right here and I'll check right away",
     },
   };
   return hasPaperclip ? texts[language].clip : texts[language].plain;

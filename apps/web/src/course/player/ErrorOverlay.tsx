@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Dict } from "../i18n";
 
-export type PlayerErrorKind = "network" | "media" | "unsupported";
+export type PlayerErrorKind = "network" | "media" | "unsupported" | "elsewhere";
 
 /**
  * Оверлей ошибки поверх видео. role=alert — читалка объявит сразу; фокус на
@@ -13,7 +13,8 @@ export function ErrorOverlay({ t, kind, onRetry }: { t: Dict; kind: PlayerErrorK
   useEffect(() => {
     btn.current?.focus();
   }, []);
-  const text = kind === "network" ? t.playerNetwork : kind === "media" ? t.playerMedia : t.playerUnsupported;
+  const text =
+    kind === "network" ? t.playerNetwork : kind === "media" ? t.playerMedia : kind === "elsewhere" ? t.playingElsewhere : t.playerUnsupported;
   return (
     <div className="player-overlay" role="alert">
       <p>{text}</p>

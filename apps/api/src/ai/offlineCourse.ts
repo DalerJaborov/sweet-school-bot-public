@@ -1,8 +1,9 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { formatCourseDate, offlineStartDate, upcomingOfflineStartDate, type CalendarDay } from "./courseDate.js";
 import { sendToContact } from "../messaging/send.js";
-import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
-import { DEFAULT_OFFLINE_FACTS, formatHours, offlineAddress, pluralRu, type OfflineFacts } from "./offlineFacts.js";
+import { type ClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
+import { DEFAULT_OFFLINE_FACTS, formatHours, offlineAddress, parseHours, pluralRu, type OfflineFacts } from "./offlineFacts.js";
 import { getOfflineFacts } from "../services/salesTextsService.js";
 import type { Contact } from "@prisma/client";
 
@@ -36,13 +37,23 @@ export { DEFAULT_OFFLINE_FACTS, type OfflineFacts } from "./offlineFacts.js";
  * Факты (время, число десертов, адрес) — те же, что на сайте: владелец
  * вычитывал текст сайта последним, и бот не должен с ним спорить.
  *
- * Строки короткие и с ведущим значком нарочно: так на экране телефона видно
- * ровно одну мысль в строке, и глаз находит цену или адрес за секунду.
+ * С 08.11.2026 — три коротких сообщения словами владельца, без значков и тире:
+ * «он пишет как бот». Абзацы разделены пустой строкой; maybeSendOfflineCard
+ * шлёт каждый отдельным сообщением (offlineCardMessages), панель показывает целиком.
  */
 export const OFFLINE_DATE_TBD: Record<"ru" | "tg", string> = {
-  ru: "📅 Дата следующего набора уточняется — напишите, сообщим первой",
-  tg: "📅 Санаи қабули оянда аниқ мешавад — нависед, аввал ба шумо мегӯем",
+  ru: "Дата следующего курса пока уточняется. Оставьте имя и номер, сообщим первой.",
+  tg: "Санаи курси оянда хануз маълум нест. Ном и номер монен, маълум шавад хабар медихем.",
 };
+
+/** Абзацы карточки — отдельные сообщения, как пишет человек (не больше трёх). */
+export const OFFLINE_CARD_MAX_MESSAGES = 3;
+
+export function offlineCardMessages(card: string): string[] {
+  const parts = card.split(/\n[ \t]*\n+/u).map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= OFFLINE_CARD_MAX_MESSAGES) return parts;
+  return [...parts.slice(0, OFFLINE_CARD_MAX_MESSAGES - 1), parts.slice(OFFLINE_CARD_MAX_MESSAGES - 1).join("\n\n")];
+}
 
 function daysRu(n: number): string {
   const mod10 = n % 10;
@@ -60,55 +71,34 @@ export function offlineCardDefault(
   start: CalendarDay | null,
   facts: OfflineFacts = DEFAULT_OFFLINE_FACTS,
 ): string {
-  const dateLine = start
-    ? `📅 ${language === "tg" ? "Оғоз" : "Начало"}: ${formatCourseDate(start, language)}`
-    : OFFLINE_DATE_TBD[language];
+  // Текст — словами владельца (его карточка 08.11.2026: «Курси ояндамон 20 ноябр сар
+  // мешавад 700 сом пули продукты наметиен…»), разбит на три коротких сообщения:
+  // когда и сколько / что готовим / где и как записаться. Без значков и тире.
+  // Числа (дата, цена, дни, часы, десерты, адрес) — из «Цены и даты», не из текста.
+  const range = parseHours(facts.hours);
+  if (language === "tg") {
+    const when = start
+      ? `Курси ояндамон ${formatCourseDate(start, "tg")} сар мешавад.`
+      : OFFLINE_DATE_TBD.tg;
+    const hours = range ? ` аз соати ${range.from} ба ${range.to}` : ` ${formatHours(facts.hours, "tg")}`;
+    const seats = facts.seats ? ` Дар группа факат ${facts.seats} чой хаст.` : "";
+    return [
+      `${when} ${facts.price} сом, пули продукты наметиен. Курс ${facts.days} руз давом дорад,${hours}.${seats}`,
+      `${facts.desserts} намуд ширини тайёр мекунем, арт десертхоям дохил мешан. Чизеки мепазем хамрох мебарен, охирда сертификат мегирен.`,
+      `Сурога: ${offlineAddress(facts, "tg")}. Барои запись ном и номер монен, запись мекнем.`,
+    ].join("\n\n");
+  }
+  const when = start ? `Следующий курс начинается ${formatCourseDate(start, "ru")}.` : OFFLINE_DATE_TBD.ru;
   // Мест — только если владелец задал число: «мест немного» без числа бот
   // говорить не должен, придуманная цифра хуже молчания.
-  const seatsLine = facts.seats
-    ? [language === "tg" ? `👥 Дар гурӯҳ ҳамагӣ ${facts.seats} ҷой` : `👥 В группе всего ${facts.seats} мест`]
-    : [];
-  const lines =
-    language === "tg"
-      ? [
-          "🍰 Курси офлайнӣ дар Душанбе",
-          "",
-          dateLine,
-          `📆 Давомнокӣ: ${facts.days} рӯз`,
-          `⏰ Ҳар рӯз ${formatHours(facts.hours, "tg")}`,
-          ...seatsLine,
-          "",
-          `💰 Нарх: ${facts.price} сомонӣ`,
-          "🛒 Маҳсулот аз мо — чизе овардан лозим нест",
-          "",
-          `🧁 ${facts.desserts} намуд ширинӣ мепазем`,
-          "🎁 Он чӣ пухтед — бо худ мебаред",
-          "📜 Дар охир сертификат мегиред",
-          "",
-          `📍 ${offlineAddress(facts, "tg")}`,
-          "",
-          "✍️ Барои сабти ном ном ва рақами телефонатонро нависед",
-        ]
-      : [
-          "🍰 Офлайн-курс в Душанбе",
-          "",
-          dateLine,
-          `📆 Длительность: ${facts.days} ${daysRu(facts.days)}`,
-          `⏰ Каждый день ${formatHours(facts.hours, "ru")}`,
-          ...seatsLine,
-          "",
-          `💰 Стоимость: ${facts.price} сомони`,
-          "🛒 Продукты наши — приносить ничего не нужно",
-          "",
-          `🧁 Готовим ${facts.desserts} ${pluralRu(facts.desserts, "вид", "вида", "видов")} десертов`,
-          "🎁 Всё, что испекли, забираете с собой",
-          "📜 В конце — сертификат",
-          "",
-          `📍 ${offlineAddress(facts, "ru")}`,
-          "",
-          "✍️ Для записи напишите имя и номер телефона",
-        ];
-  return lines.join("\n");
+  const seats = facts.seats ? ` В группе всего ${facts.seats} мест.` : "";
+  return [
+    `${when} Стоимость ${facts.price} сомони, продукты наши, приносить ничего не нужно. ` +
+      `Курс ${facts.days} ${daysRu(facts.days)}, каждый день ${formatHours(facts.hours, "ru")}.${seats}`,
+    `Готовим ${facts.desserts} ${pluralRu(facts.desserts, "вид", "вида", "видов")} десертов, арт-десерты тоже входят. ` +
+      "Всё, что испекли, забираете с собой, в конце сертификат.",
+    `Адрес: ${offlineAddress(facts, "ru")}. Для записи напишите имя и номер телефона.`,
+  ].join("\n\n");
 }
 
 /**
@@ -179,10 +169,14 @@ export async function maybeSendOfflineCard(contact: Contact, clientText: string)
   });
   if (claimed.count === 0) return false;
 
-  const text = await offlineCourseCard(detectClientLanguage(clientText));
+  const text = await offlineCourseCard(await contactLanguage(contact.id, clientText));
   try {
-    const mid = await sendToContact(contact, text);
-    await recordOutgoingMessage(contact.id, text, mid);
+    // Несколько коротких сообщений вместо одной простыни (владелец 08.11.2026).
+    // Упало посередине — отметку снимаем ниже, повтор пришлёт карточку целиком.
+    for (const part of offlineCardMessages(text)) {
+      const mid = await sendToContact(contact, part);
+      await recordOutgoingMessage(contact.id, part, mid);
+    }
     return true;
   } catch (err) {
     logError("offlineCourse:send", err);

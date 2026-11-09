@@ -4,6 +4,7 @@ import { Icons } from "../components/Brand";
 import { confirmDialog } from "../components/ConfirmDialog";
 import { confirmLeave } from "../components/UnsavedGuard";
 import { FunnelEditor } from "../components/FunnelEditor";
+import { FunnelSwitches } from "../components/BehaviorSwitches";
 import { api, type Funnel } from "../api";
 
 function emptyFunnel(trigger: "COMMENT" | "DM"): Funnel {
@@ -140,6 +141,9 @@ export function FunnelsPage() {
       <div className="row" style={{ marginTop: 14 }}>
         <button className="btn" onClick={() => setEditing(emptyFunnel("COMMENT"))}>+ С комментария</button>
         <button className="btn ghost" onClick={() => setEditing(emptyFunnel("DM"))}>+ Из директа</button>
+      </div>
+      <div style={{ marginTop: 18 }}>
+        <FunnelSwitches />
       </div>
     </div>
   );
