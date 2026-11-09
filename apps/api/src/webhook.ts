@@ -106,10 +106,14 @@ type WebhookBody = {
  * теперь виден и в ErrorLog, и в Telegram при первом появлении.
  */
 async function verifySignature(req: Request): Promise<boolean> {
-  const secret = await getSetting("appSecret");
-  if (!secret) {
-    // Pausing the bot does not disable history, echoes or funnel processing.
-    // Without an App Secret no incoming identity can be authenticated.
+  // Два приложения Meta подписывают вебхуки по-разному: Instagram-приложение
+  // (appSecret) и приложение Messenger/страницы (fbAppSecret). Принимаем любой
+  // из заданных секретов. Разбор 09.11.2026: весь /webhooks/messenger получал 403,
+  // и вместе с ним терялись сообщения людей (пересланные посты, «Курс»).
+  const secrets = (await Promise.all([getSetting("appSecret"), getSetting("fbAppSecret")])).filter(
+    (v): v is string => !!v,
+  );
+  if (secrets.length === 0) {
     logError(
       "webhook:signature",
       new Error(
@@ -125,23 +129,25 @@ async function verifySignature(req: Request): Promise<boolean> {
     logError("webhook:signature", new Error("Вебхук пришёл без заголовка подписи или без тела запроса — отклонён"));
     return false;
   }
-  const expected = "sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex");
-  try {
-    const ok = crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-    if (!ok) {
-      logError(
-        "webhook:signature",
-        new Error(
-          "Подпись вебхука не совпала с App Secret — Meta отклонён кодом 403 ещё до разбора тела. " +
-            "Проверьте App Secret в Настройках либо не привязана ли реклама к другому приложению Meta.",
-        ),
-      );
-    }
-    return ok;
-  } catch {
-    logError("webhook:signature", new Error("Подпись вебхука не сравнилась (неверная длина заголовка)"));
-    return false;
+  const got = Buffer.from(header);
+  for (const secret of secrets) {
+    const expected = Buffer.from("sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex"));
+    if (expected.length === got.length && crypto.timingSafeEqual(got, expected)) return true;
   }
+  let object = "?";
+  try {
+    object = String(JSON.parse(raw.toString("utf8"))?.object ?? "?");
+  } catch {
+    /* тело не JSON — оставляем «?» */
+  }
+  logError(
+    "webhook:signature",
+    new Error(
+      `Подпись вебхука не совпала ни с одним секретом (путь ${req.path}, object=${object}, секретов задано: ${secrets.length}) — 403. ` +
+        "Проверьте оба секрета в Настройках: Instagram-приложения и приложения Messenger."
+    )
+  );
+  return false;
 }
 
 // Проверочный запрос Meta при подключении вебхука — общий для обоих каналов
