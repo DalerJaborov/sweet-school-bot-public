@@ -190,7 +190,7 @@ describe("/api/site", () => {
       deletedAt: null,
     });
     expect(body.offline).toMatchObject({ price: 700, currency: "TJS", nextStartDate: null });
-    expect((body.offline as { info: { ru: string; tg: string } }).info.ru).toContain("Офлайн-курс");
+    expect((body.offline as { info: { ru: string; tg: string } }).info.ru).toContain("Стоимость 700 сомони");
     expect(body.contacts).toEqual({
       phone: "+992905355355",
       whatsapp: "https://api.whatsapp.com/send?phone=992905355355",
@@ -216,7 +216,7 @@ describe("/api/site", () => {
       offline: { nextStartDate: string | null; info: { ru: string } };
     };
     expect(body.offline.nextStartDate).toBe(future);
-    expect(body.offline.info.ru).toContain("Начало:");
+    expect(body.offline.info.ru).toContain("Следующий курс начинается");
 
     // Кэш каталога — 60 с; между вызовами его сбрасывает тот же тестовый хук.
     resetSiteRateLimits();
@@ -456,14 +456,14 @@ describe("/api/site/offer-fact — факты очного курса для с�
     return { status: res.status, text: await res.text(), cookie: res.headers.get("set-cookie") };
   };
 
-  it("умолчания: 700, 13:40–16:30, «21 десерт», адрес Воданасос/Рудаки 177 — без куки", async () => {
+  it("умолчания: 700, 13:40–16:30, «21 десерт», адрес Рудаки 177, ориентир Воданасос — без куки", async () => {
     expect(await fact("key=offline.price")).toEqual({ status: 200, text: "700", cookie: null });
     expect((await fact("key=offline.hours")).text).toBe("13:40–16:30");
     expect((await fact("key=offline.dessertsRu")).text).toBe("21 десерт");
-    expect((await fact("key=contact.address&lang=ru")).text).toBe("Душанбе, ориентир Воданасос, Рудаки 177");
-    expect((await fact("key=contact.address&lang=tg")).text).toBe("Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177");
-    expect((await fact("key=contact.street&lang=ru")).text).toBe("ориентир Воданасос, Рудаки 177");
-    expect((await fact("key=contact.mapsQuery&lang=tg")).text).toBe(encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177"));
+    expect((await fact("key=contact.address&lang=ru")).text).toBe("Душанбе, Рудаки 177, ориентир Воданасос");
+    expect((await fact("key=contact.address&lang=tg")).text).toBe("Душанбе, Рудаки 177, назди Воданасос");
+    expect((await fact("key=contact.street&lang=ru")).text).toBe("Рудаки 177, ориентир Воданасос");
+    expect((await fact("key=contact.mapsQuery&lang=tg")).text).toBe(encodeURIComponent("Душанбе, Рудаки 177, ориентир Воданасос"));
   });
 
   it("адрес из панели экранируется под место вставки; неизвестный ключ — 400", async () => {

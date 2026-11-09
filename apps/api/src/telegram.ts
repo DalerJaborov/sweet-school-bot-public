@@ -14,7 +14,8 @@ export async function sendTelegramMessage(
   botToken: string,
   chatId: string,
   text: string,
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  replyMarkup?: { inline_keyboard: { text: string; callback_data: string }[][] },
 ): Promise<number | null> {
   const res = await fetch(`${API}/bot${botToken}/sendMessage`, {
     method: "POST",
@@ -22,7 +23,10 @@ export async function sendTelegramMessage(
     body: JSON.stringify({
       chat_id: chatId,
       text,
-      ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } } : {}),
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      ...(replyToMessageId
+        ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } }
+        : {}),
     }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
@@ -52,7 +56,7 @@ const EXT_MIME: Record<string, string> = {
  */
 export async function downloadTelegramFile(
   botToken: string,
-  fileId: string
+  fileId: string,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
   try {
     const metaRes = await fetch(`${API}/bot${botToken}/getFile?file_id=${encodeURIComponent(fileId)}`, {
@@ -95,8 +99,10 @@ export async function sendReceiptForReview(
      *  выбор курса явно (решение владельца 25.08.2026: не угадывать 70 сомони
      *  по умолчанию). См. c50/c70/cboth в telegramWebhook.ts handleDecision. */
     needsCourseChoice?: boolean;
-  }
-): Promise<boolean> {
+    /** Курс по сумме у клиентки уже есть: вместо "Подтвердить" - "Закрыть как дубль". */
+    closeAsDuplicate?: boolean;
+  },
+): Promise<{ chatId: string; messageId: number } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const inline_keyboard = input.needsCourseChoice
@@ -113,7 +119,10 @@ export async function sendReceiptForReview(
       ]
     : [
         [
-          { text: "✅ Подтвердить", callback_data: `ok:${input.receiptId}` },
+          {
+            text: input.closeAsDuplicate ? "Закрыть как дубль" : "✅ Подтвердить",
+            callback_data: `ok:${input.receiptId}`,
+          },
           { text: "❌ Отклонить", callback_data: `no:${input.receiptId}` },
         ],
       ];
@@ -129,12 +138,15 @@ export async function sendReceiptForReview(
       }),
       signal: controller.signal,
     });
-    const data = (await res.json()) as { ok?: boolean; description?: string };
+    const data = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
-    return true;
+    // id сообщения нужен, чтобы позже закрыть карточку (receiptAlerts.ts).
+    return typeof data.result?.message_id === "number"
+      ? { chatId: ownerChatId, messageId: data.result.message_id }
+      : null;
   } catch (err) {
     logError("telegram:review", err);
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -149,7 +161,7 @@ export async function sendMessageWithButtons(
   botToken: string,
   chatId: string,
   text: string,
-  buttons: { text: string; callback_data: string }[][]
+  buttons: { text: string; callback_data: string }[][],
 ): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -178,7 +190,11 @@ export async function answerCallback(botToken: string, callbackId: string, text:
     const res = await fetch(`${API}/bot${botToken}/answerCallbackQuery`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: callbackId, text }),
+      // Лимит Telegram на всплывающую подсказку — 200 символов; длиннее — ошибка и «кнопка не работает».
+      body: JSON.stringify({
+        callback_query_id: callbackId,
+        text: text.length > 190 ? `${text.slice(0, 187)}...` : text,
+      }),
     });
     const data = (await res.json()) as { ok?: boolean; description?: string };
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
@@ -191,7 +207,7 @@ export async function editCaption(
   botToken: string,
   chatId: number | string,
   messageId: number,
-  caption: string
+  caption: string,
 ): Promise<void> {
   try {
     const res = await fetch(`${API}/bot${botToken}/editMessageCaption`, {
@@ -214,7 +230,7 @@ export async function editMessageText(
   botToken: string,
   chatId: number | string,
   messageId: number,
-  text: string
+  text: string,
 ): Promise<void> {
   try {
     const res = await fetch(`${API}/bot${botToken}/editMessageText`, {
@@ -237,7 +253,7 @@ export async function sendTelegramVoice(
   botToken: string,
   chatId: string,
   voiceUrl: string,
-  replyToMessageId?: number
+  replyToMessageId?: number,
 ): Promise<void> {
   const res = await fetch(`${API}/bot${botToken}/sendVoice`, {
     method: "POST",
@@ -245,7 +261,9 @@ export async function sendTelegramVoice(
     body: JSON.stringify({
       chat_id: chatId,
       voice: voiceUrl,
-      ...(replyToMessageId ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } } : {}),
+      ...(replyToMessageId
+        ? { reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true } }
+        : {}),
     }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
@@ -272,7 +290,7 @@ export async function createOneTimeInviteLink(
   // Было 7 дней — владелец попросил больше (25.08.2026 веч.): человек может
   // отвлечься на неделю и вернуться к ссылке, которая уже истекла. Месяц —
   // достаточный запас; после первого входа ссылку гасит бот (см. выше).
-  expireSeconds = 30 * 24 * 3600
+  expireSeconds = 30 * 24 * 3600,
 ): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -306,7 +324,7 @@ export async function sendWithMarkup(
   botToken: string,
   chatId: string,
   text: string,
-  replyMarkup: Record<string, unknown>
+  replyMarkup: Record<string, unknown>,
 ): Promise<boolean> {
   try {
     const res = await fetch(`${API}/bot${botToken}/sendMessage`, {
@@ -336,6 +354,31 @@ function parseChatIds(raw: string | null | undefined): string[] {
  * ссылка уже мертва. Одна дверь для автоматических ссылок бота: отзыв после
  * входа (groupAccess.ts) и замена ссылки при напоминании (joinReminder.ts).
  */
+/**
+ * Состоит ли человек в группе прямо сейчас. Возвращает статус Telegram
+ * ("member", "left", "kicked"…) или null, если узнать не вышло (сеть, нет прав
+ * у бота). Вызывающий код при null должен отказать, а не гадать: приглашение,
+ * выданное тому, кто уже внутри, можно переслать другому человеку.
+ */
+export async function getChatMemberStatus(botToken: string, chatId: string, userId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/getChatMember`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, user_id: Number(userId) }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = (await res.json()) as { ok?: boolean; result?: { status?: string }; description?: string };
+    // «Участника нет» Telegram отдаёт ошибкой — для нас это «не в группе».
+    if (!data.ok && /user not found|participant_id_invalid/i.test(data.description ?? "")) return "left";
+    if (!data.ok || !data.result?.status) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+    return data.result.status;
+  } catch (err) {
+    logError("telegram:getChatMember", err);
+    return null;
+  }
+}
+
 export async function revokeInviteLink(botToken: string, chatId: string, inviteLink: string): Promise<boolean> {
   try {
     const res = await fetch(`${API}/bot${botToken}/revokeChatInviteLink`, {
@@ -352,7 +395,6 @@ export async function revokeInviteLink(botToken: string, chatId: string, inviteL
     return false;
   }
 }
-
 
 /**
  * ТЕХНИЧЕСКИЕ УВЕДОМЛЕНИЯ — ТОЛЬКО ВЛАДЕЛЬЦУ (решение 08.11.2026).

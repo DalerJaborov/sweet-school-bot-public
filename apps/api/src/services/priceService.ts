@@ -40,6 +40,34 @@ export async function getPrices(): Promise<PriceTable> {
   return table;
 }
 
+/**
+ * ДОПУСК ПО СУММЕ ЧЕКА (08.11.2026, раздел «Цены и даты»).
+ *
+ * down — сколько сомони может «не дойти» из-за комиссии банка (отправила 70,
+ * получатель видит 64–70). up — на сколько сомони чек может быть больше цены:
+ * комиссия, добавленная сверху (71.45 за курс за 70), округление, пересчёт из
+ * рублей по курсу. Недоплата больше down по-прежнему уходит владельцу.
+ * Реальные чеки на проде: 70 → 70, 71, 72, 73; из рублей — до 78.
+ */
+export type PaymentTolerance = { down: number; up: number };
+export const DEFAULT_PAYMENT_TOLERANCE: PaymentTolerance = { down: 6, up: 30 };
+/** Потолки: допуск вниз шире 15 сомони — уже недоплата, вверх шире 60 — мусор. */
+export const MAX_TOLERANCE_DOWN = 15;
+export const MAX_TOLERANCE_UP = 60;
+
+function toleranceOr(raw: string | null, fallback: number, max: number): number {
+  const n = Number.parseInt((raw ?? "").trim(), 10);
+  return Number.isFinite(n) && n >= 0 && n <= max ? n : fallback;
+}
+
+export async function getPaymentTolerance(): Promise<PaymentTolerance> {
+  const [down, up] = await Promise.all([getSetting("receiptToleranceDown"), getSetting("receiptToleranceUp")]);
+  return {
+    down: toleranceOr(down, DEFAULT_PAYMENT_TOLERANCE.down, MAX_TOLERANCE_DOWN),
+    up: toleranceOr(up, DEFAULT_PAYMENT_TOLERANCE.up, MAX_TOLERANCE_UP),
+  };
+}
+
 /** Сбросить кэш — после записи и в тестах. */
 export function resetPriceCache(): void {
   cache = null;

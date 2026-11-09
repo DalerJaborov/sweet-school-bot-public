@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
 import { sendToContact } from "./messaging/send.js";
+import { humanizeForContact } from "./messaging/humanize.js";
+import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
 import {
   isBotFrozen,
   assertAutomationAllowed,
@@ -22,10 +24,12 @@ import {
   detectMenuQuestion,
 } from "./ai/offTopicGuard.js";
 import { sendMenuImages } from "./ai/menuImages.js";
+import { maybeSendVideos } from "./ai/videoLibrary.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
 import { findReusableMedia, sendReusedMedia } from "./ai/mediaReuse.js";
-import { detectClientLanguage, detectReplyLanguage, type ClientLanguage } from "./ai/clientLanguage.js";
+import { detectReplyLanguage, languageSignal, type ClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { claimsReceiptSent, receiptNotSeenReply } from "./ai/receiptClaim.js";
 import { BUDGET_FALLBACK } from "./ai/prompts.js";
 import { buildSystemPrompt, getSalesTexts, getOfflineFacts } from "./services/salesTextsService.js";
@@ -38,6 +42,7 @@ import { queuePendingAiReply } from "./aiReplyRetry.js";
 import { logAiCall } from "./ai/aiLog.js";
 import { registerOfflineSignup } from "./ai/offlineSignup.js";
 import { maybeSendOfflineCard, offlineFactsForModel } from "./ai/offlineCourse.js";
+import { offlineHandoffGate, offlineHandoffEnabled, asksOnlineNotOffline, enterOfflineHandoff } from "./ai/offlineHandoff.js";
 import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
@@ -209,6 +214,12 @@ export async function aiReply(
 
   if (text && (await handleDeliveryChoiceReply(contact, text))) return;
 
+  // «ОФЛАЙН: ПЕРЕДАНО ШИРИН» (владелец 08.11.2026, ai/offlineHandoff.ts): после
+  // карточки офлайн-курса бот с этим человеком молчит — ни текста, ни голоса —
+  // пока тот не напишет про онлайн. Воронка и запись номера на офлайн живут в
+  // webhook.ts выше и сюда не доходят, их это не трогает.
+  if ((await offlineHandoffGate(contact, text)) === "silent") return;
+
   // Побочный эффект, не влияющий на сам ответ: если человеку уже уходило
   // проверочное «как первый урок» (learningCheckIn.ts) и она хоть что-то
   // написала после этого — считаем, что учиться начала. Fire-and-forget: сбой
@@ -232,8 +243,8 @@ export async function aiReply(
   // ни от настроения модели, ни от того, включён ли консультант вообще.
   // Выдача идёт по данным (покупка + чек в базе), а не по словам — см.
   // course/recovery.ts.
-  if (text) {
-    const recovery = await maybeRestoreAccess(contact, text).catch((err) => {
+  if (text || images.length > 0) {
+    const recovery = await maybeRestoreAccess(contact, text ?? "", images.map((i) => i.hash)).catch((err) => {
       logError("ai:recovery", err);
       return { handled: false as const };
     });
@@ -252,7 +263,12 @@ export async function aiReply(
   }
   const primaryKey = apiKeys[0];
 
-  const language = detectClientLanguage(text);
+  // Голосовое WhatsApp приходит с пустым текстом, а «Салом» пишут на любом языке:
+  // язык — по единой цепочке (ai/contactLanguage.ts): сообщение → прошлые сообщения
+  // клиента → язык с сайта → русский. Проверка языка ответа включается только при
+  // явном сигнале в самом сообщении (ownLanguage).
+  const ownLanguage = languageSignal(text ?? "");
+  const language = ownLanguage ?? (await contactLanguage(contact.id));
 
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
@@ -326,6 +342,14 @@ export async function aiReply(
       return;
     }
 
+    // Библиотека видео (ai/videoLibrary.ts): ролик названного десерта, подборка или «как смотреть
+    // онлайн-урок». Рубильник videoLibraryEnabled; не больше одного показа каждого вида за разговор.
+    // Явная просьба показать — ролик вместо ответа модели; просто упомянули десерт — ролик вдобавок.
+    if ((await maybeSendVideos(contact, text, { hasAttachments: attachments.length > 0 })) === "replace") {
+      notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+      return;
+    }
+
     // Фаза 2 «максимального использования архива» — на похожий вопрос шлём её
     // реальный одобренный голос/фото/видео вместо хода модели (см. ai/mediaReuse.ts).
     // Ничего не подошло — самый частый случай, отвечает модель как обычно.
@@ -345,13 +369,21 @@ export async function aiReply(
     return;
   }
 
+  // Интерес к ОФЛАЙН-курсу: карточка с условиями уходит одна, без хода модели,
+  // и дальше разговор ведёт Ширин (ai/offlineHandoff.ts). Стоит после меню и
+  // архива, чтобы «что готовим на офлайне?» по-прежнему отвечала картинка меню.
+  if (text && (await sendOfflineCardAndHandOff(contact, text))) {
+    notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+    return;
+  }
+
   // Промт владельца + живые образцы его собственных ответов (самообучение —
   // см. ai/styleLearning.ts). Сам промт не переписывается никогда.
   // Промт владельца + незыблемые правила с текущими ценами/реквизитами из
   // раздела «Тексты и цены» (services/salesTextsService.ts).
   const prompt =
     (await buildSystemPrompt()) +
-    (await buildStyleBlock(text)) +
+    (await buildStyleBlock(text, language)) +
     (await buildInsightsBlock()) +
     (await buildObjectionsBlock()) +
     (await buildSocialProofBlock()) +
@@ -474,7 +506,7 @@ export async function aiReply(
     // Отправка обёрнута нарочно: отказ Meta (закрылось окно 24 ч, 429) не должен
     // уносить с собой разбор чека, который ждёт ниже — он дороже ответа.
     let replyText = result.text
-      ? await enforceReplyLanguage(contact, text, language, result.text, prompt, generate)
+      ? await enforceReplyLanguage(contact, ownLanguage ? text : "", language, result.text, prompt, generate)
       : null;
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
@@ -501,7 +533,10 @@ export async function aiReply(
           replyText = null;
         }
       }
-      if (replyText) replyText = cleanAutomatedReply(replyText);
+      // Обращение «апачон» и дежурный хвост — до голоса и до текста: озвучке они
+      // так же чужие. Особые буквы и тире правит уже дверь отправки (humanizeForContact):
+      // голосу нужны буквы, тексту — по стилю собеседника.
+      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanAutomatedReply(replyText)));
       // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
       if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
         replyText = maybeWarmEmoji(replyText);
@@ -527,11 +562,14 @@ export async function aiReply(
           contact,
           replyText,
           attachments.some((a) => a.kind === "audio"),
+          text,
         );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         for (const part of toSend) {
+          // В историю sendToContact сам пишет ровно то, что увидел клиент (после фильтра);
+          // запись ниже с тем же mid ничего не меняет. Пусто после фильтра — не шлёт и не пишет.
           const mid = await sendToContact(contact, part);
-          await recordOutgoingMessage(contact.id, part, mid);
+          if (mid) await recordOutgoingMessage(contact.id, part, mid);
         }
         // Реалтайм-версия «где бот застрял» — см. stuckAlert.ts. Fire-and-forget,
         // как markStartedLearningIfReplied выше: сбой здесь не должен трогать
@@ -584,6 +622,7 @@ export async function aiReply(
         receiptAt: verdict.receiptAt,
         tamperingSuspected: verdict.tamperingSuspected,
         recipientMatches: verdict.recipientMatches,
+        transactionId: verdict.transactionId,
         reason: verdict.reason,
         imageHash: firstImage.hash,
         imageUrl: firstImage.url,
@@ -623,14 +662,14 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     return;
   }
 
-  const language = detectClientLanguage(text);
+  const language = await contactLanguage(contact.id, text);
   const verdict = guardOffTopic(text);
   if (verdict) {
     // «Пустите бесплатно» и назойливое дёрганье под роликом — молчим совсем.
     if (isSilentKind(verdict.kind)) return;
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
-    const guardedText = guardReply(verdict.kind, language);
+    const guardedText = await humanizeForContact(contact.id, guardReply(verdict.kind, language), [text]);
     await withContactMessaging(contact.id, "reply", () =>
       sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
     ).catch((err) => {
@@ -695,7 +734,8 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
     throw new ReplyPolicyError(issues);
   }
-  const clean = cleanAutomatedReply(result.text);
+  const clean = await humanizeForContact(contact.id, cleanAutomatedReply(result.text), [text]);
+  if (!clean) return;
   const mid = await withContactMessaging(contact.id, "reply", () =>
     sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
   );
@@ -873,8 +913,28 @@ export async function registerOfflineIfAsked(contact: Contact, text: string | nu
   return registerOfflineSignup(contact, text);
 }
 
+/**
+ * Ход «карточка — и всё» (владелец 08.11.2026). Условие то же, что у карточки в
+ * offlineSignupBlock: офлайн в этом сообщении или в недавней переписке. Если
+ * карточка реально ушла — ставим отметку «передано Ширин» и возвращаем true:
+ * модель в этот ход не зовём. Уже слали в этом наборе (или рубильник выключен,
+ * или человек купил онлайн) — false, и дальше прежний порядок. Слово «онлайн» в
+ * сообщении — не офлайн-интерес, даже если рядом «запишите».
+ */
+async function sendOfflineCardAndHandOff(contact: Contact, text: string): Promise<boolean> {
+  if (contact.paid || !(await offlineHandoffEnabled())) return false;
+  if (asksOnlineNotOffline(text)) return false;
+  if (!WANTS_OFFLINE_RE.test(text) && !(await recentIncomingWantsOffline(contact.id))) return false;
+  if (!(await maybeSendOfflineCard(contact, text))) return false;
+  await enterOfflineHandoff(contact.id);
+  return true;
+}
+
 async function offlineSignupBlock(contact: Contact, text: string): Promise<string> {
   if (!text) return "";
+  // «Запишите на онлайн курс» совпадает с «запиш…», но это не очный курс:
+  // карточку офлайна такому человеку не шлём (см. ai/offlineHandoff.ts).
+  if (asksOnlineNotOffline(text)) return "";
   if (!WANTS_OFFLINE_RE.test(text)) {
     // Человек мог написать номер отдельным сообщением, уже после просьбы записать.
     const asked = await recentIncomingWantsOffline(contact.id);

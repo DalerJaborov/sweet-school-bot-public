@@ -193,6 +193,19 @@ model Contact {
   /// Ставится один раз: спросил повторно — не заваливаем той же простынёй,
   /// дальше разговор ведёт обычный консультант (см. ai/offlineCourse.ts).
   offlineInfoSentAt    DateTime?
+  /// «Офлайн: передано Ширин» (ai/offlineHandoff.ts). После карточки бот с этим
+  /// человеком молчит, пока тот не напишет про онлайн или не купит онлайн-курс.
+  offlineHandoffAt     DateTime?
+  /// ---- откуда пришёл: реклама Meta (metaConversions.ts, 08.11.2026) ----
+  /// Первое касание из рекламы «клик в переписку»: id объявления и click id
+  /// WhatsApp (ctwa_clid). Пишется один раз — по нему видно, какая реклама
+  /// приводит платящих, и по нему же Meta сопоставляет покупку с показом.
+  adId                 String?
+  /// ADS | SHORTLINK | … — referral.source из вебхука Meta; "whatsapp_ad" для моста.
+  adSource             String?
+  adCtwaClid           String?
+  adReferralAt         DateTime?
+  metaConversions      MetaConversion[]
   /// Ссылка с рекламы/блогера (SiteLink.id), по которой человек впервые пришёл
   /// на сайт. Ставится один раз, без внешнего ключа: строгое добавление
   /// столбца, без пересоздания большой таблицы (links/siteLinks.ts).
@@ -254,6 +267,16 @@ model ReceiptCheck {
   /// дважды (сразу и из очереди перепроверки), а сообщение должно уйти один раз.
   customerNotifiedAt DateTime?
   awaitingDeliveryChoice Boolean @default(false)
+  /// Карточки этого чека в Telegram владельцу: JSON [{chatId, messageId}]. Нужны,
+  /// чтобы закрыть карточку (убрать кнопки), когда доступ уже выдан другим путём —
+  /// иначе кнопки остаются «живыми» и нажатие ломается (08.11.2026).
+  ownerAlerts String?
+  /// Номер операции с чека (если читается): один на перевод, ловит пересохранённый старый чек.
+  transactionId String?
+  /// Когда очередь перепроверки может взять чек снова (createdAt не двигаем: он нужен как стабильная точка отсчёта).
+  retryAfter DateTime?
+
+  @@index([transactionId])
 }
 
 /// Журнал вызовов Gemini — модель, токены, оценочная стоимость (см. ai/pricing.ts).
@@ -1106,4 +1129,29 @@ model ReplyGate {
   createdAt DateTime @default(now())
   @@index([contactId, createdAt])
   @@index([createdAt])
+}
+
+/// Очередь событий «Покупка» для Meta (Conversions API for Business Messaging,
+/// metaConversions.ts — единственный писатель). Одна оплата = одна строка:
+/// eventId уникален, повторная выдача той же покупки новой строки не создаёт.
+/// pending → sent | skipped (нечем сопоставить: сайт, ручная запись, WhatsApp
+/// без официального API) | failed (Meta отказала окончательно) | expired (старше 7 дней).
+model MetaConversion {
+  id          String    @id @default(uuid())
+  eventId     String    @unique
+  contactId   String
+  contact     Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// INSTAGRAM | MESSENGER | WHATSAPP | WEB | MANUAL — канал покупателя на момент оплаты.
+  channel     String
+  /// JSON-массив id покупок (Purchase), вошедших в эту оплату.
+  purchaseIds String
+  /// Сумма в сомони, как засчитана в Purchase.amount.
+  valueTjs    Int
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError   String?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  @@index([status, nextAttemptAt])
 }

@@ -10,6 +10,9 @@ import { getSetting, setSetting } from "../db.js";
 
 export const SETTING_KEYS = [
   "freeLessonEnabled",
+  // Библиотека видео для клиентов (ai/videoLibrary.ts): рубильник (по умолчанию выключен) и JSON-список.
+  "videoLibraryEnabled",
+  "videoLibrary",
   "freeLessonId",
   "igToken",
   "appSecret",
@@ -29,6 +32,15 @@ export const SETTING_KEYS = [
   // (funnel.ts: комментарии, директ-триггеры, разносчик отложенных шагов) и
   // ответ на комментарии (aiCommentRepliesEnabled выше) НЕ гасятся этим флагом.
   "botFrozen",
+  // «Офлайн: передано Ширин» (владелец 08.11.2026, ai/offlineHandoff.ts): после
+  // карточки офлайн-курса бот с этим человеком молчит, пока тот не напишет про
+  // онлайн. По умолчанию ВКЛЮЧЕНО; "false" — прежний порядок (консультант
+  // продолжает отвечать и просит имя и номер).
+  "offlineHandoffEnabled",
+  // Публичный ответ «написали вам в директ» под комментарием, когда воронка
+  // отправила первый шаг (владелец 08.11.2026, funnel.ts). По умолчанию
+  // ВКЛЮЧЁН; "false" выключает только публичный ответ, директ идёт как раньше.
+  "commentPublicReplyEnabled",
   "aiPrompt",
   "aiModel",
   // Голосовая модель читалась кодом (ai.ts), но в этом списке её не было — то есть
@@ -110,6 +122,8 @@ export const SETTING_KEYS = [
   "priceCourse50",
   "priceCourse70",
   "priceBundle",
+  "receiptToleranceDown",
+  "receiptToleranceUp",
   // Реквизиты, условие сертификата, язык уроков, «что после оплаты» — RU и TG.
   // Бот (правила 4, 17–21 в ai/prompts.ts) читает их на каждом ходе через
   // services/salesTextsService.ts; пусто — сегодняшний текст по умолчанию.
@@ -184,6 +198,17 @@ export const SETTING_KEYS = [
   "voiceReplyEnabled",
   "voiceMonthlyCapUsd",
   "voicePricePer1kUsd",
+  // ---- покупки — в рекламу Meta (metaConversions.ts, 08.11.2026) ----
+  // Рубильник по умолчанию ВЫКЛЮЧЕН. Набор данных (dataset) и маркер с правами
+  // page_events / instagram_manage_events / whatsapp_business_manage_events.
+  // Проверочный код — из «Тестовых событий» Events Manager: пока он задан,
+  // события видны только там и в статистику рекламы не идут.
+  "metaCapiEnabled",
+  "metaCapiDatasetId",
+  "metaCapiToken",
+  "metaCapiTestEventCode",
+  "metaCapiIgAccountId",
+  "metaCapiWabaId",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -198,6 +223,7 @@ const SECRET_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   "fbPageToken",
   "r2AccessKeyId",
   "r2SecretKey",
+  "metaCapiToken",
 ]);
 
 /** Маска, которой наружу отдаётся заданный секрет. Панель шлёт её обратно
@@ -235,6 +261,8 @@ export const OFFER_SETTING_KEYS = [
   "priceCourse50",
   "priceCourse70",
   "priceBundle",
+  "receiptToleranceDown",
+  "receiptToleranceUp",
   "offlineCoursePrice",
   "offlineCourseStartDate",
   "offlineCourseHours",

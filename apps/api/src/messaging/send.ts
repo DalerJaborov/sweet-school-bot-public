@@ -1,4 +1,5 @@
 import { cleanKeepingWarmTail } from "../ai/replyPolicy.js";
+import { humanizeForContact } from "./humanize.js";
 import crypto from "node:crypto";
 import { prisma, WEB_MID_PREFIX, recordOutgoingMessage, logError } from "../db.js";
 import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
@@ -47,12 +48,24 @@ export async function sendToContact(
   buttons: QuickButton[] = [],
   opts: SendOptions = {}
 ): Promise<string | null> {
-  if (!opts.byHuman) text = cleanKeepingWarmTail(text);
+  if (!opts.byHuman) text = await humanizeForContact(contact.id, cleanKeepingWarmTail(text));
+  // После фильтра ничего не осталось (ответ был одним обращением) — не шлём и не пишем.
   if (!text.trim()) return null;
   const purpose: MessagePurpose = opts.purpose ?? (opts.byHuman ? "human" : "reply");
-  return withContactMessaging(contact.id, purpose, () => opts.byHuman && !opts.purpose
-    ? withMessagingPermission("human", () => sendContact(contact, text, buttons, opts))
-    : sendContact(contact, text, buttons, opts));
+  const shown = text;
+  const mid = await withContactMessaging(contact.id, purpose, () => opts.byHuman && !opts.purpose
+    ? withMessagingPermission("human", () => sendContact(contact, shown, buttons, opts))
+    : sendContact(contact, shown, buttons, opts));
+  // ИСТОРИЯ = ТО, ЧТО УШЛО (08.11.2026). Вызывающий код по старому договору пишет
+  // recordOutgoingMessage(исходный текст, mid) — до фильтра. Пишем здесь первыми уже
+  // отправленный текст: вторая запись с тем же mid ничего не меняет (P2002), а сравнения
+  // по истории (шаблоны, видео, образцы манеры) видят ровно то, что видел клиент, во
+  // всех каналах одинаково. Порядок «отправил → записал» для Meta тот же. Сообщения
+  // Ширин пишет эхо вебхука, не мы. Сайт свою строку уже положил (WEB_MID_PREFIX).
+  if (!opts.byHuman && mid) {
+    await recordOutgoingMessage(contact.id, shown, mid).catch((err) => logError("send:recordShown", err));
+  }
+  return mid;
 }
 
 async function sendContact(contact: Recipient, text: string, buttons: QuickButton[], opts: SendOptions): Promise<string | null> {
@@ -95,6 +108,27 @@ export async function sendAttachmentToContact(
     ? persistWebOutgoing(contact.id, { imageUrl: url })
     : persistWebOutgoing(contact.id, { text: url });
   });
+}
+
+/** Видео с подписью ОДНИМ сообщением: WhatsApp-мост принимает caption вместе с файлом (одна отправка вместо двух
+ *  — у моста лимит 8 за 10 минут на чат). В остальных каналах подписи у вложения нет — тогда текст, затем файл. */
+export async function sendVideoWithCaption(contact: Recipient, url: string, caption: string): Promise<string | null> {
+  if (channelOf(contact) === "WHATSAPP") {
+    // Подпись — тот же текст бота, что и в sendToContact: через тот же фильтр, и в
+    // историю ровно то, что ушло (вызывающий пишет исходник — запись с тем же mid не меняет).
+    const shown = await humanizeForContact(contact.id, cleanKeepingWarmTail(caption));
+    const mid = await withContactMessaging(contact.id, "reply", async () => {
+      await assertMessagingAllowed();
+      return sendWhatsAppAttachment(contact, url, "video", "reply", shown.trim() ? shown : undefined);
+    });
+    if (mid && shown.trim()) await recordOutgoingMessage(contact.id, shown, mid).catch((err) => logError("send:recordCaption", err));
+    return mid;
+  }
+  // Подпись уходит отдельным текстом и сама пишется в историю (sendToContact); возвращаем
+  // её mid, чтобы запись вызывающего не продублировала подпись на строке видео.
+  const captionMid = await sendToContact(contact, caption);
+  const videoMid = await sendAttachmentToContact(contact, url, "video");
+  return captionMid ?? videoMid;
 }
 
 export function sendImageToContact(contact: Recipient, url: string): Promise<string | null> {

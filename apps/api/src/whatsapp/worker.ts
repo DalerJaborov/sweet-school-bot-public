@@ -5,6 +5,8 @@ import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
 import { attentionError, classifyAttention } from "./attention.js";
+import { rememberOwnerReply } from "../ai/styleLearning.js";
+import { recordAdReferral } from "../metaConversions.js";
 
 let ingesting = false;
 const processing = new Set<string>();
@@ -34,9 +36,56 @@ export async function ingestWhatsAppEvents(): Promise<void> {
           humanTakenOverAt: new Date(e.timestamp), humanTakeoverMid: whatsappMessageId(e.accountId, e.messageId),
         } });
       });
+      if (e.type === "human" && e.text.trim() && !contact.personal && !contact.whatsappSavedContact && !contact.spamBlockedAt) {
+        // Не ждём: проверка идёт через паузу (см. learnFromOwner), а приём событий стоять не должен.
+        scheduleLearnFromOwner(contact.id, whatsappMessageId(e.accountId, e.messageId), e.text, new Date(e.timestamp));
+      }
+      if (e.type === "incoming" && e.ad) {
+        await recordAdReferral(contact.id, { adId: e.ad.sourceId, ctwaClid: e.ad.ctwaClid, source: e.ad.sourceType ?? "whatsapp_ad" })
+          .catch((err) => logError("whatsapp:adReferral", err));
+      }
       await bridgeRequest(`/events/${encodeURIComponent(e.id)}/ack`, {});
     }
   } finally { ingesting = false; }
+}
+
+/** Пауза перед проверкой «это правда Ширин»: событие моста может прийти раньше, чем
+ *  бот запишет mid своего же сообщения (recordOutgoingMessage снимет ложную пометку
+ *  byHuman). Тот же приём, что в Instagram (webhook.ts::handleEcho, 20 секунд). */
+export const OWNER_LEARN_DELAY_MS = 20_000;
+/** Вопрос клиента старше суток — уже не тот разговор: в пару его не берём. */
+const OWNER_LEARN_WINDOW_MS = 24 * 3_600_000;
+
+function scheduleLearnFromOwner(contactId: string, mid: string, ownerText: string, ownerAt: Date): void {
+  setTimeout(() => void learnFromOwner(contactId, mid, ownerText, ownerAt), OWNER_LEARN_DELAY_MS);
+}
+
+/**
+ * ЖИВОЕ ОБУЧЕНИЕ НА WHATSAPP. Ширин ответила сама со своего телефона — её фраза
+ * становится образцом манеры (ai/styleLearning.ts), как в Instagram (webhook.ts).
+ * До 08.11.2026 WhatsApp-ответы хозяйки в образцы не попадали вовсе, и бот учился
+ * только на старой переписке Instagram. Строка должна остаться «человеческой»:
+ * если это эхо ответа самого бота (строка уже записана как его), не учимся.
+ */
+async function learnFromOwner(contactId: string, mid: string, ownerText: string, ownerAt: Date): Promise<void> {
+  try {
+    const row = await prisma.message.findUnique({ where: { mid }, select: { byHuman: true } });
+    if (!row?.byHuman) return;
+    const lastIn = await prisma.message.findFirst({
+      where: {
+        contactId, direction: "IN", text: { not: null }, payload: null,
+        createdAt: { lte: ownerAt, gte: new Date(ownerAt.getTime() - OWNER_LEARN_WINDOW_MS) },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { text: true },
+    });
+    // Чат, где пишет только Ширин (родным, знакомым — её личный номер), — не
+    // разговор с клиентом: такие фразы в образцы манеры не берём.
+    if (!lastIn?.text) return;
+    await rememberOwnerReply(lastIn.text, ownerText, "TAKEOVER", undefined, contactId);
+  } catch (err) {
+    logError("whatsapp:learnFromOwner", err);
+  }
 }
 
 export async function processInbox(id: string): Promise<void> {

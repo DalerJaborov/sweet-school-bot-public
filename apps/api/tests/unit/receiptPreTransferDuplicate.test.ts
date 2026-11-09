@@ -22,7 +22,7 @@ vi.mock("../../src/ai/styleLearning.js", () => ({ markExamplesAsSuccessful: vi.f
 vi.mock("../../src/exchangeRates.js", () => ({ toSomoni: vi.fn(async () => null) }));
 vi.mock("../../src/courses.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/courses.js")>()),
-  allocate: vi.fn(async () => ({ grant: ["COURSE50"], note: "второй курс: Арт-десерты", discounted: false })),
+  allocate: vi.fn(async () => ({ grant: ["COURSE70"], note: "21 рецепт", discounted: false })),
 }));
 
 import { confirmRequisitesToCustomer, handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
@@ -61,7 +61,7 @@ describe("экран до перевода", () => {
     await confirmRequisitesToCustomer(contact, null);
     expect(sendToContact).toHaveBeenCalledTimes(1);
     const text = String(sendToContact.mock.calls[0][1]);
-    expect(text).toContain("Ҳа, ҳамааш дуруст");
+    expect(text).toContain("Ха, дуруст");
     expect(text).toContain("905 355 355 Чаборова Фарангис (Душанбе Сити, Алиф)");
     expect(sendReceiptForReview).not.toHaveBeenCalled();
   });
@@ -86,7 +86,7 @@ describe("несколько фото в одном сообщении", () => {
 describe("тот же перевод второй раз", () => {
   it("та же сумма уже открыла доступ за 48 ч — курс не выдаём, клиентке «уже приняли», владельцу на глаза", async () => {
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.linkSent === true && where.amount === 70 ? { createdAt: new Date() } : null
+      Array.isArray(where.OR) && typeof where.amount === "object" ? { createdAt: new Date() } : null
     );
     await handleReceiptVerdict(contact, valid70());
     expect(grantCourses).not.toHaveBeenCalled();
@@ -104,14 +104,26 @@ describe("тот же перевод второй раз", () => {
     expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
   });
   it.each([
-    { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) },
-    { receiptAt: new Date(Date.now() + 3600000) }, { recipientMatches: false },
+    { recipientMatches: false },
     { recipientMatches: undefined }, { amount: null }, { currency: null },
     { tamperingSuspected: true }, { confidence: 49 },
+    // давнишний чек и дата «из будущего» — мягкий признак, но за пределами окна это стоп
+    { receiptAt: new Date(Date.now() - 4 * 24 * 3600000) },
+    { receiptAt: new Date(Date.now() + 20 * 3600000) },
   ])("incomplete or suspicious evidence never auto-grants: %j", async (overrides) => {
     await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
     expect(grantCourses).not.toHaveBeenCalled();
     expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: false, ownerDecision: "PENDING" }) }));
+  });
+
+  // 08.11.2026: нераспознанная дата сама по себе больше не повод для проверки.
+  it.each([
+    { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) }, { receiptAt: new Date(Date.now() + 3600000) },
+  ])("дата не мешает автопринятию честного чека: %j", async (overrides) => {
+    await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+    expect(sendReceiptForReview).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
   });
 
 });

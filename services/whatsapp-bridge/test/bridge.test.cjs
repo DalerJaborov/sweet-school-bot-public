@@ -165,7 +165,7 @@ test('pacing: typing state, random gap between sends and caps that fail before d
   const sleeps = [];
   const { bridge, client } = await fixture(t, { pacing: { perChatMax: 2, hourMax: 3, dayMax: 4 }, sleep: async ms => { sleeps.push(ms); }, random: () => 0.5 });
   let typing = 0, cleared = 0;
-  client.getChatById = async () => ({ sendStateTyping: async () => { typing++; }, clearState: async () => { cleared++; } });
+  client.pupPage = { evaluate: async (_fn, _chatId, state) => { if (state === 'typing') typing++; if (state === 'stop') cleared++; return true; } };
   await prepare(bridge);
   await bridge.send(request({ operationId: 'op-a' }));
   assert.equal(client.sent.length, 1); assert.equal(typing, 1); assert.equal(cleared, 1);
@@ -177,7 +177,8 @@ test('pacing: typing state, random gap between sends and caps that fail before d
 });
 test('pacing: typing failures never block the reply, and pacing is off when not configured', async t => {
   const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0 });
-  client.getChatById = async () => { throw new Error('no chat'); };
+  client.pupPage = { evaluate: async () => { throw new Error('no page'); } };
+  client.sendSeen = async () => { throw new Error('no chat'); };
   await prepare(bridge); await bridge.send(request());
   assert.equal(client.sent.length, 1);
 });
@@ -185,7 +186,7 @@ test('pacing: typing failures never block the reply, and pacing is off when not 
 test('audio goes out as a voice note (ptt) with a recording state and no caption', async t => {
   const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0.5 });
   let typing = 0, recording = 0;
-  client.getChatById = async () => ({ sendStateTyping: async () => { typing++; }, sendStateRecording: async () => { recording++; }, clearState: async () => {} });
+  client.pupPage = { evaluate: async (_fn, _chatId, state) => { if (state === 'typing') typing++; if (state === 'recording') recording++; return true; } };
   await prepare(bridge);
   await assert.rejects(bridge.send(request({ operationId: 'op-voice-text', text: 'подпись', mediaUrl: 'https://shirinsweets.online/media/a.ogg', mediaType: 'audio' })), /voice note cannot carry text/);
   await bridge.send(request({ operationId: 'op-voice', text: undefined, mediaUrl: 'https://shirinsweets.online/media/a.ogg', mediaType: 'audio' }));
@@ -202,7 +203,8 @@ test('images keep the caption and are not sent as voice', async t => {
 test('pacing: the chat is marked as read before typing starts', async t => {
   const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0 });
   const order = [];
-  client.getChatById = async () => ({ sendSeen: async () => { order.push('seen'); }, sendStateTyping: async () => { order.push('typing'); }, clearState: async () => {} });
+  client.sendSeen = async () => { order.push('seen'); };
+  client.pupPage = { evaluate: async (_fn, _chatId, state) => { if (state !== 'stop') order.push(state); return true; } };
   await prepare(bridge); await bridge.send(request());
   assert.deepEqual(order, ['seen', 'typing']);
 });
@@ -223,7 +225,8 @@ test('react: only whitelisted emoji on a recent incoming message, idempotent, bl
 test('pacing: read mark only for ordinary replies and only when not switched off', async t => {
   const { bridge, client } = await fixture(t, { pacing: {}, sleep: async () => {}, random: () => 0 });
   let seen = 0;
-  client.getChatById = async () => ({ sendSeen: async () => { seen++; }, sendStateTyping: async () => {}, clearState: async () => {} });
+  client.sendSeen = async () => { seen++; };
+  client.pupPage = { evaluate: async () => true };
   await prepare(bridge);
   await bridge.send(request({ operationId: 'op-s1' })); assert.equal(seen, 1);
   await bridge.send(request({ operationId: 'op-s2', markSeen: false })); assert.equal(seen, 1);

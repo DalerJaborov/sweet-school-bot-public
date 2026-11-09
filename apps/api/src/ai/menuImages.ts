@@ -3,7 +3,7 @@ import { env } from "../env.js";
 import { sendToContact, sendImageToContact } from "../messaging/send.js";
 import { getPrices } from "../services/priceService.js";
 import type { PriceTable } from "../prices.js";
-import { detectClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
 import type { Contact } from "@prisma/client";
 
 /**
@@ -30,9 +30,9 @@ export function menuImageUrl(course: CourseKey, lang: "ru" | "tg"): string {
 }
 
 const CAPTION: Record<CourseKey, Record<"ru" | "tg", string>> = {
-  online70: { ru: "Вот что входит в онлайн-курс «21 рецепт»", tg: "Инҳо ба курси онлайн «21 рецепт» дохил мешаванд" },
-  online50: { ru: "Вот программа курса «Арт-десерты»", tg: "Ин барномаи курси «Арт-десерты» аст" },
-  offline: { ru: "Вот как проходит офлайн-курс в Душанбе", tg: "Курси офлайн дар Душанбе ингуна мегузарад" },
+  online70: { ru: "Вот что входит в онлайн-курс «21 рецепт»", tg: "Курси онлайн «21 рецепт», ана менюяш" },
+  online50: { ru: "Вот программа курса «Арт-десерты»", tg: "Курси «Арт-десерты», ана менюяш" },
+  offline: { ru: "Вот как проходит офлайн-курс в Душанбе", tg: "Курси офлайн дар Душанбе, ана менюяш" },
 };
 
 /** Признаки, по которым понятно, про какой курс речь. Цена курса («70 сомони») берётся
@@ -84,7 +84,7 @@ export async function sendMenuImages(contact: Contact, text: string): Promise<vo
     select: { text: true },
   });
   const courses = inferCourses(text, recent.map((m) => m.text ?? ""), await getPrices());
-  const lang = detectClientLanguage(text) === "tg" ? "tg" : "ru";
+  const lang = (await contactLanguage(contact.id, text)) === "tg" ? "tg" : "ru";
   for (const course of courses) {
     const caption = CAPTION[course][lang];
     const mid = await sendToContact(contact, caption);

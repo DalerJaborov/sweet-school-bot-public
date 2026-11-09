@@ -4,10 +4,16 @@ import { COURSE_50, COURSE_70, DEFAULT_PRICES, offerPricePhrase, priceTable, typ
 import { DEFAULT_OFFLINE_FACTS, HHMM, hoursValue, parseHours, type OfflineFacts } from "../ai/offlineFacts.js";
 import { offlineCardDefault } from "../ai/offlineCourse.js";
 import { localTodayIso, offlineStartDate, parseIsoDay, toIsoDay } from "../ai/courseDate.js";
-import { getPrices, resetPriceCache } from "./priceService.js";
+import {
+  DEFAULT_PAYMENT_TOLERANCE,
+  getPaymentTolerance,
+  getPrices,
+  MAX_TOLERANCE_DOWN,
+  MAX_TOLERANCE_UP,
+  resetPriceCache,
+} from "./priceService.js";
 import { getOfflineFacts, OFFLINE_FACT_KEYS, resetSalesTextsCache } from "./salesTextsService.js";
 import { OFFER_SETTING_KEYS } from "./settingsService.js";
-import { PAYMENT_TOLERANCE_DOWN } from "../courses.js";
 import { createHash } from "node:crypto";
 
 /**
@@ -32,6 +38,9 @@ import { createHash } from "node:crypto";
 
 export type Offer = {
   prices: { course50: number; course70: number; bundle: number };
+  /** Допуск по сумме чека, сомони: down — комиссия банка «съела» часть, up —
+   *  комиссия добавлена сверху. Необязателен во входе (старый экран его не шлёт). */
+  payment?: { toleranceDown: number; toleranceUp: number };
   offline: {
     price: number;
     /** ГГГГ-ММ-ДД или "" — «дата уточняется». */
@@ -92,6 +101,20 @@ const offerSchema = z.object({
     course70: price("21 рецепт"),
     bundle: price("Оба курса"),
   }),
+  payment: z
+    .object({
+      toleranceDown: z
+        .number({ error: "Допуск вниз: укажите число" })
+        .int("Допуск вниз: целое число сомони")
+        .min(0, "Допуск вниз: не меньше нуля")
+        .max(MAX_TOLERANCE_DOWN, `Допуск вниз: не больше ${MAX_TOLERANCE_DOWN} сомони — это уже недоплата`),
+      toleranceUp: z
+        .number({ error: "Допуск вверх: укажите число" })
+        .int("Допуск вверх: целое число сомони")
+        .min(0, "Допуск вверх: не меньше нуля")
+        .max(MAX_TOLERANCE_UP, `Допуск вверх: не больше ${MAX_TOLERANCE_UP} сомони`),
+    })
+    .optional(),
   offline: z.object({
     price: price("Очный курс"),
     startDate: z
@@ -123,6 +146,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "prices.course50": "Арт-десерты, цена",
   "prices.course70": "21 рецепт, цена",
   "prices.bundle": "Оба курса, цена",
+  "payment.toleranceDown": "Чек: допуск вниз (комиссия банка), сомони",
+  "payment.toleranceUp": "Чек: допуск вверх (комиссия сверху), сомони",
   "offline.price": "Очный курс, цена",
   "offline.startDate": "Очный курс, дата набора",
   "offline.timeFrom": "Очный курс, начало занятий",
@@ -160,11 +185,12 @@ export function offerFacts(offer: Offer): OfflineFacts {
 export async function readOffer(): Promise<{ offer: Offer; legacyHours: string | null }> {
   resetPriceCache();
   resetSalesTextsCache();
-  const [p, facts, start] = await Promise.all([getPrices(), getOfflineFacts(), offlineStartDate()]);
+  const [p, facts, start, tol] = await Promise.all([getPrices(), getOfflineFacts(), offlineStartDate(), getPaymentTolerance()]);
   const range = parseHours(facts.hours);
   return {
     offer: {
       prices: { course50: p.price[COURSE_50], course70: p.price[COURSE_70], bundle: p.bundle },
+      payment: { toleranceDown: tol.down, toleranceUp: tol.up },
       offline: {
         price: facts.price,
         startDate: start ? toIsoDay(start) : "",
@@ -188,6 +214,7 @@ export const OFFER_DEFAULTS: Offer = {
     course70: DEFAULT_PRICES.price[COURSE_70],
     bundle: DEFAULT_PRICES.bundle,
   },
+  payment: { toleranceDown: DEFAULT_PAYMENT_TOLERANCE.down, toleranceUp: DEFAULT_PAYMENT_TOLERANCE.up },
   offline: {
     price: DEFAULT_OFFLINE_FACTS.price,
     // Дату набора по умолчанию НЕ придумываем: пусто = «дата уточняется».
@@ -208,6 +235,12 @@ function flatten(offer: Offer): Flat {
     "prices.course50": String(offer.prices.course50),
     "prices.course70": String(offer.prices.course70),
     "prices.bundle": String(offer.prices.bundle),
+    ...(offer.payment
+      ? {
+          "payment.toleranceDown": String(offer.payment.toleranceDown),
+          "payment.toleranceUp": String(offer.payment.toleranceUp),
+        }
+      : {}),
     "offline.price": String(offer.offline.price),
     "offline.startDate": offer.offline.startDate,
     "offline.timeFrom": offer.offline.timeFrom,
@@ -225,6 +258,7 @@ export function diffOffer(before: Offer, after: Offer): OfferChangeRow[] {
   const a = flatten(before);
   const b = flatten(after);
   return Object.keys(b)
+    .filter((k) => k in a)
     .filter((k) => a[k] !== b[k])
     .map((field) => ({ field, before: a[field], after: b[field] }));
 }
@@ -247,6 +281,7 @@ export function checkOffer(before: Offer, after: Offer, today: string): OfferChe
   // DOWN»; если эта граница не выше самого дорогого курса, оплата одного курса
   // откроет оба. А два курса с почти одной ценой бот не различит по чеку.
   const { course50, course70, bundle } = after.prices;
+  const PAYMENT_TOLERANCE_DOWN = after.payment?.toleranceDown ?? DEFAULT_PAYMENT_TOLERANCE.down;
   const top = Math.max(course50, course70);
   if (bundle > course50 + course70)
     errors["prices.bundle"] = `Комплект дороже, чем два курса по отдельности (${course50 + course70})`;
@@ -359,6 +394,12 @@ function settingValues(offer: Offer): Record<string, string> {
     priceCourse50: String(offer.prices.course50),
     priceCourse70: String(offer.prices.course70),
     priceBundle: String(offer.prices.bundle),
+    ...(offer.payment
+      ? {
+          receiptToleranceDown: String(offer.payment.toleranceDown),
+          receiptToleranceUp: String(offer.payment.toleranceUp),
+        }
+      : {}),
     [OFFLINE_FACT_KEYS.price]: String(offer.offline.price),
     offlineCourseStartDate: offer.offline.startDate,
     [OFFLINE_FACT_KEYS.hours]: hoursValue({ from: offer.offline.timeFrom, to: offer.offline.timeTo }),
@@ -378,6 +419,8 @@ export async function saveOffer(
   const next = parsed.offer;
   const [{ offer: before }, today, version] = await Promise.all([readOffer(), localTodayIso(), offerVersion()]);
   if (version !== opts.version) return { status: "stale" };
+  // Старый экран без допуска не должен молча сбрасывать сохранённый.
+  next.payment ??= before.payment;
 
   const check = checkOffer(before, next, today);
   if (Object.keys(check.errors).length > 0) return { status: "invalid", errors: check.errors };

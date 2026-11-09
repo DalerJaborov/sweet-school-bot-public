@@ -5,7 +5,7 @@ import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: vi.fn(async () => ["owner-1"]), sendTelegramMessage: vi.fn(async () => undefined) }));
 
-import { swapOldestDevice, issuePairToken, pairDevice, describeDevice, MAX_DEVICE_SWAPS_PER_MONTH } from "../../src/course/access.js";
+import { transferToNewPhone, issuePairToken, pairDevice, describeDevice, MAX_DEVICE_SWAPS_PER_MONTH } from "../../src/course/access.js";
 import { courseTokenSecret } from "../../src/course/tokenSecret.js";
 import type { Contact, Device } from "@prisma/client";
 
@@ -26,35 +26,35 @@ function fakeRes() {
   return { setHeader: (k: string, v: unknown) => (h[k] = v), h } as never as { h: Record<string, unknown> };
 }
 
-describe("«Это мой новый телефон» — замена самого старого устройства", () => {
-  it("удаляет самое давнее незаблокированное и считает замену", async () => {
-    db.model("device").findFirst.mockResolvedValue({ id: "old" });
-    expect(await swapOldestDevice(contact)).toBe(true);
-    expect(db.model("device").delete).toHaveBeenCalledWith({ where: { id: "old" } });
-    expect(db.model("device").findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { contactId: "c1", blockedAt: null }, orderBy: { lastSeenAt: "asc" } })
-    );
+describe("«Это мой новый телефон» — перенос: старый телефон аннулируется", () => {
+  it("удаляет ВСЕ незаблокированные устройства и тратит перенос", async () => {
+    db.model("device").findMany.mockResolvedValue([{ id: "a" }, { id: "b" }]);
+    expect(await transferToNewPhone(contact)).toBe("transferred");
+    expect(db.model("device").deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["a", "b"] } } });
+    expect(db.model("device").findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { contactId: "c1", blockedAt: null } }));
     expect(db.model("contact").update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { deviceSwaps: 1, deviceSwapAt: expect.any(Date) } })
     );
   });
 
-  it("ГЛАВНОЕ: больше двух замен в месяц — отказ, дальше решает владелец", async () => {
+  it("ГЛАВНОЕ: второй перенос в месяц — отказ, дальше решает владелец", async () => {
     const busy = { ...contact, deviceSwaps: MAX_DEVICE_SWAPS_PER_MONTH, deviceSwapAt: new Date() } as Contact;
-    expect(await swapOldestDevice(busy)).toBe(false);
-    expect(db.model("device").delete).not.toHaveBeenCalled();
+    expect(MAX_DEVICE_SWAPS_PER_MONTH).toBe(1);
+    expect(await transferToNewPhone(busy)).toBe("limit");
+    expect(db.model("device").deleteMany).not.toHaveBeenCalled();
   });
 
-  it("старые замены (месяц назад) не считаются", async () => {
+  it("перенос месячной давности не считается", async () => {
     const old = { ...contact, deviceSwaps: 5, deviceSwapAt: new Date(Date.now() - 40 * 86_400_000) } as Contact;
-    db.model("device").findFirst.mockResolvedValue({ id: "old" });
-    expect(await swapOldestDevice(old)).toBe(true);
+    db.model("device").findMany.mockResolvedValue([{ id: "x" }]);
+    expect(await transferToNewPhone(old)).toBe("transferred");
     expect(db.model("contact").update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ deviceSwaps: 1 }) }));
   });
 
-  it("все устройства заблокированы — заменять нечего", async () => {
-    db.model("device").findFirst.mockResolvedValue(null);
-    expect(await swapOldestDevice(contact)).toBe(false);
+  it("переносить нечего — перенос не тратится", async () => {
+    db.model("device").findMany.mockResolvedValue([]);
+    expect(await transferToNewPhone(contact)).toBe("nothing");
+    expect(db.model("contact").update).not.toHaveBeenCalled();
   });
 
   it("подпись устройства — человеческая", () => {

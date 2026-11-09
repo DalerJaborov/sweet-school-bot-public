@@ -47,15 +47,15 @@ describe("обход правила (ревью)", () => {
 });
 
 describe("splitForVoice — нарезка на короткие голосовые", () => {
-  it("короткая реплика — один кусок, несколько предложений склеиваются до ~150 знаков", async () => {
+  it("короткая реплика — один кусок, несколько предложений склеиваются до ~280 знаков", async () => {
     const { splitForVoice } = await vi.importActual<typeof import("../../src/ai/voiceClone.js")>("../../src/ai/voiceClone.js");
     expect(splitForVoice("Здравствуйте! Рада вас видеть.")).toEqual(["Здравствуйте! Рада вас видеть."]);
-    const long = "Первое предложение довольно длинное, чтобы занять место в куске. ".repeat(3).trim();
+    const long = "Первое предложение довольно длинное, чтобы занять место в куске. ".repeat(6).trim();
     const parts = splitForVoice(long)!;
     expect(parts.length).toBeGreaterThan(1);
-    expect(parts.every((p) => p.length <= 150)).toBe(true);
+    expect(parts.every((p) => p.length <= 280)).toBe(true);
   });
-  it("слишком длинный ответ (больше 4 кусков) — null, то есть текстом", async () => {
+  it("слишком длинный ответ (больше 2 кусков) — null, то есть текстом", async () => {
     const { splitForVoice } = await vi.importActual<typeof import("../../src/ai/voiceClone.js")>("../../src/ai/voiceClone.js");
     expect(splitForVoice("Очень длинное предложение для проверки. ".repeat(40))).toBeNull();
   });

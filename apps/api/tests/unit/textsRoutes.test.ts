@@ -72,7 +72,7 @@ describe("/admin/texts — только тексты; цены и даты жи�
     expect(body.preview.priceLine).toBe(
       "Арт-десерты — 50 сомони, 21 рецепт — 70 сомони, оба курса вместе — 100 сомони",
     );
-    expect(body.preview.offlineCard.ru).toContain("Стоимость: 700 сомони");
+    expect(body.preview.offlineCard.ru).toContain("Стоимость 700 сомони");
     expect(body.preview.offlineCard.ru).toContain("уточняется");
     expect(body.preview.botRules).toContain("оба курса вместе — 100 сомони");
   });
