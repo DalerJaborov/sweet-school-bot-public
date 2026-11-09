@@ -94,6 +94,14 @@ describe.each([
     settings.appSecret = "test-app-secret";
     expect((await post(path, empty, sign(empty))).status).toBe(200);
   });
+  it("accepts a delivery signed by the second (Messenger) app secret and still rejects a wrong one", async () => {
+    settings.appSecret = "test-app-secret";
+    settings.fbAppSecret = "test-fb-secret";
+    const other = "sha256=" + createHmac("sha256", settings.fbAppSecret).update(empty).digest("hex");
+    expect((await post(path, empty, other)).status).toBe(200);
+    const bad = "sha256=" + createHmac("sha256", "nope").update(empty).digest("hex");
+    expect((await post(path, empty, bad)).status).toBe(403);
+  });
   it("does not acknowledge an event when durable storage fails", async () => {
     settings.appSecret = "test-app-secret";
     const body = JSON.stringify({ object, entry: [{ id: "page", messaging: [{ sender: { id: "customer" }, message: { mid: "one", text: "hello" } }] }] });
