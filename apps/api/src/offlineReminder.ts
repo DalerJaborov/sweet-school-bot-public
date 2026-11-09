@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
+import { everTalkedWithShirin } from "./messaging/automation.js";
 import { techChatIds, sendTelegramMessage } from "./telegram.js";
 import { offsetMs } from "./dailyReport.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
@@ -124,7 +125,9 @@ async function sweep(): Promise<void> {
     });
     const windowOpen = lastIn != null && Date.now() - lastIn.createdAt.getTime() < 24 * 3_600_000;
 
-    if (windowOpen) {
+    // Ширин хоть раз говорила с ней сама — клиентке не напоминаем никогда
+    // (владелец 09.11.2026); владельцу строка ниже уходит как раньше.
+    if (windowOpen && !(await everTalkedWithShirin(signup.contact))) {
       const language = await contactLanguage(signup.contactId, lastIn?.text ?? "");
       const text = reminderText(language === "tg" ? "tg" : "ru", signup.name, facts);
       try {

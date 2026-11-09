@@ -1,5 +1,6 @@
 import { prisma, logError, getSetting, recordOutgoingMessage } from "./db.js";
 import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
+import { everTalkedWithShirin } from "./messaging/automation.js";
 
 /**
  * Догоняющие сообщения: человек прошёл воронку, посмотрел меню — и пропал. Через
@@ -55,6 +56,9 @@ export async function runDueFollowUps(): Promise<void> {
 
       // Молчит ли бот с этим человеком прямо сейчас (хозяйка ведёт разговор сама).
       if (delivery.contact.humanSilencedUntil && delivery.contact.humanSilencedUntil.getTime() > Date.now()) continue;
+      // Ширин хоть раз говорила с этим человеком сама — догоняющих не шлём
+      // никогда (владелец 09.11.2026, messaging/automation.ts::everTalkedWithShirin).
+      if (await everTalkedWithShirin(delivery.contact)) continue;
 
       // Окно Meta считается от ПОСЛЕДНЕГО сообщения человека, а не от конца
       // воронки: если он ответил позже, окно шире, если молчал — уже закрыто.

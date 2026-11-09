@@ -5,7 +5,7 @@ import { contactLanguage } from "./ai/contactLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
-import { isBotFrozen } from "./messaging/automation.js";
+import { isBotFrozen, humanTakeoverEndsAt, loadHumanSilenceMs } from "./messaging/automation.js";
 
 /**
  * Очередь ответов, которые ИИ НИ РАЗУ не дал — все ключи/модели Gemini отказали.
@@ -82,6 +82,7 @@ export async function retryPendingAiReplies(): Promise<void> {
 
 async function runQueue(): Promise<void> {
   if (await isBotFrozen()) return;
+  await loadHumanSilenceMs();
   const due = await prisma.pendingAiReply.findMany({
     where: { nextAttemptAt: { lte: new Date() } },
     include: { contact: true },
@@ -92,8 +93,17 @@ async function runQueue(): Promise<void> {
   for (const row of due) {
     if (await isBotFrozen()) return;
     // WhatsApp retries belong to its durable inbox and require the original incoming turn.
-    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || row.contact.humanTakenOverAt)) {
+    // Пауза после живого ответа Ширин временная (messaging/automation.ts): пока
+    // она идёт — откладываем попытку на её конец, а не выбрасываем ход.
+    const takeoverEnds = humanTakeoverEndsAt(row.contact);
+    if (row.contact.channel === "WHATSAPP" || row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || takeoverEnds === Infinity) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } });
+      continue;
+    }
+    if (takeoverEnds !== null && takeoverEnds > Date.now()) {
+      await prisma.pendingAiReply
+        .update({ where: { id: row.id }, data: { nextAttemptAt: new Date(takeoverEnds) } })
+        .catch(() => null);
       continue;
     }
     // Пришло более свежее входящее с момента постановки — эта попытка устарела:

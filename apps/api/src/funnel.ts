@@ -3,7 +3,7 @@ import { sendPrivateReply, replyToComment, deleteComment, metaChannelOf, mediaPe
 import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import { isBotFrozen, withMessagingPermission, withContactMessaging, contactAutomationBlocked } from "./messaging/automation.js";
-import { silenceIfFollowedByBusiness } from "./profiles.js";
+import { silenceIfFollowedByBusiness, releaseFollowSilenceIfClient } from "./profiles.js";
 import { instagramShortcode } from "./ownMedia.js";
 import { aiReplyToComment } from "./ai.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -374,14 +374,47 @@ export async function handleComment(input: CommentInput): Promise<void> {
   if (running) return running;
   const task = (async () => {
     if (await prisma.seenComment.findUnique({ where: { commentId: input.commentId } })) return;
-    await processComment(input);
-    try { await prisma.seenComment.create({ data: { commentId: input.commentId } }); }
+    const result = await processComment(input);
+    // Итог записываем вместе с отметкой «видели»: по нему сторож unansweredWatch.ts
+    // находит комментарии, оставшиеся без ответа не по нашему решению.
+    try {
+      await prisma.seenComment.create({
+        data: { commentId: input.commentId, contactId: result.contactId ?? null, outcome: result.outcome, text: input.text.slice(0, 300) },
+      });
+    }
     catch (err) { if ((err as { code?: string })?.code !== "P2002") throw err; }
   })();
   commentTasks.set(input.commentId, task);
   try { await task; } finally { commentTasks.delete(input.commentId); }
 }
-async function processComment(input: CommentInput): Promise<void> {
+
+/**
+ * Чем кончилась обработка комментария. Хранится в SeenComment.outcome.
+ * «Ждёт ответа» (COMMENT_WAITING_OUTCOMES) — без ответа осталось НЕ по нашему
+ * решению: выключены ответы ИИ, кончился бюджет, сбой модели, Ширин ведёт
+ * переписку с этим человеком. Про такие сторож пишет владельцу в Telegram.
+ */
+export type CommentOutcome =
+  | "deleted" // флирт/оскорбление/спам — удалили
+  | "frozen" // экстренная пауза бота
+  | "emoji" // сердечко в ответ на смайлики
+  | "funnel" // воронка: первый шаг в директ (+ ответ под комментарием)
+  | "ai" // ответ ИИ в директ (+ ответ под комментарием)
+  | "public_heart" // ИИ решил, что писать в директ нечего — сердечко под комментарием
+  | "guard" // шаблонный ответ защиты (не по теме)
+  | "silent_contact" // личный/заблокированный/знакомая Ширин — молчим нарочно
+  | "silent_guard" // «пустите бесплатно» — молчим нарочно
+  | "waiting_human" // переписку с этим человеком сейчас ведёт Ширин
+  | "ai_off" // ответы ИИ под комментариями выключены
+  | "no_keys" // нет ключей Gemini
+  | "budget" // кончился дневной бюджет ИИ
+  | "ai_error"; // модель или отправка не сработали
+
+export const COMMENT_WAITING_OUTCOMES: readonly CommentOutcome[] = ["waiting_human", "ai_off", "no_keys", "budget", "ai_error"];
+
+type CommentResult = { outcome: CommentOutcome; contactId?: string };
+
+async function processComment(input: CommentInput): Promise<CommentResult> {
   const channel: MetaChannel = input.channel ?? "INSTAGRAM";
 
   // Флирт, оскорбления, рекламный спам — не отвечаем вовсе, удаляем: такому не
@@ -389,18 +422,16 @@ async function processComment(input: CommentInput): Promise<void> {
   const abuse = detectAbuse(input.text);
   if (abuse) {
     await deleteComment(input.commentId, channel);
-    return;
+    return { outcome: "deleted" };
   }
 
   // Комментарий из одних эмодзи ("❤️🔥", "😍😍😍") — не начало разговора, а реакция.
   // Публичное сердечко в ответ, без запуска всей воронки с кнопками курсов.
   if (isEmojiOnly(input.text)) {
-    if (await isBotFrozen()) return;
-    const emoji = THANK_YOU_EMOJI[Math.floor(Math.random() * THANK_YOU_EMOJI.length)];
+    if (await isBotFrozen()) return { outcome: "frozen" };
     const contact = await upsertContact(input.igUserId, input.username, channel);
-    await withContactMessaging(contact.id, "reply", () => replyToComment(input.commentId, emoji, channel));
-
-    return;
+    await replyHeartUnderComment(contact, input.commentId, channel);
+    return { outcome: "emoji", contactId: contact.id };
   }
 
   const funnels = await prisma.funnel.findMany({ where: { enabled: true, trigger: "COMMENT" } });
@@ -424,16 +455,56 @@ async function processComment(input: CommentInput): Promise<void> {
     if (!matches) continue;
 
     const contact = await upsertContact(input.igUserId, input.username, channel);
-    if (await silentForComment(contact)) return;
-    await startFunnel(funnel, contact, { commentId: input.commentId, commentText: input.text });
-    return; // одна воронка на комментарий, как в ManyChat
+    const silent = await silentForComment(contact, input.text);
+    if (silent) return { outcome: silent, contactId: contact.id };
+    if (await startFunnel(funnel, contact, { commentId: input.commentId, commentText: input.text })) {
+      return { outcome: "funnel", contactId: contact.id }; // одна воронка на комментарий, как в ManyChat
+    }
+    // Воронку этот человек уже проходил (окно повтора repeatAfterDays не
+    // прошло) или у неё нет шагов. Раньше здесь был `return` — и повторный
+    // комментарий под рекламой оставался вовсе без ответа (разбор 09.11.2026).
+    // Теперь отвечает ИИ, как под любым другим роликом.
+    return answerCommentWithAi(contact, input);
   }
 
   // Ни одна воронка не подошла (ролик не в списке продающих) — не молчим:
   // обычный тёплый ответ ИИ личным сообщением, без кнопок и без нажима на продажу.
   const contact = await upsertContact(input.igUserId, input.username, channel);
-  if (await silentForComment(contact)) return;
-  await aiReplyToComment(contact, input.commentId, input.text);
+  const silent = await silentForComment(contact, input.text);
+  if (silent) return { outcome: silent, contactId: contact.id };
+  return answerCommentWithAi(contact, input);
+}
+
+/**
+ * Ответ ИИ на комментарий + короткий публичный ответ под ним.
+ * Ответ ушёл в директ — под комментарием «написали вам в директ» (как у
+ * воронки: человек знает, куда смотреть, а запрос от незнакомого аккаунта
+ * часто лежит в «Запросах»). ИИ решил, что писать нечего ([NO_REPLY], обычно
+ * похвала вроде «Офарин!») — публичное сердечко, чтобы комментарий не висел
+ * без ответа (владелец 09.11.2026).
+ */
+async function answerCommentWithAi(contact: Contact, input: CommentInput): Promise<CommentResult> {
+  const channel: MetaChannel = input.channel ?? "INSTAGRAM";
+  const outcome = (await aiReplyToComment(contact, input.commentId, input.text)) ?? "ai";
+  if (outcome === "ai") await replyPubliclyUnderComment(contact, input.commentId);
+  if (outcome === "no_reply") {
+    // Сбой здесь — только в журнал: иначе подстраховка комментариев повторила бы
+    // и платный ход модели ради одного сердечка.
+    try {
+      await replyHeartUnderComment(contact, input.commentId, channel);
+    } catch (err) {
+      logError("funnel:commentHeart", err);
+      return { outcome: "ai_error", contactId: contact.id };
+    }
+    return { outcome: "public_heart", contactId: contact.id };
+  }
+  return { outcome, contactId: contact.id };
+}
+
+/** Публичное сердечко под комментарием (ошибку Meta отдаёт вызывающему). */
+async function replyHeartUnderComment(contact: Contact, commentId: string, channel: MetaChannel): Promise<void> {
+  const emoji = THANK_YOU_EMOJI[Math.floor(Math.random() * THANK_YOU_EMOJI.length)];
+  await withContactMessaging(contact.id, "reply", () => replyToComment(commentId, emoji, channel));
 }
 
 /**
@@ -443,10 +514,19 @@ async function processComment(input: CommentInput): Promise<void> {
  * подписана Ширин (profiles.ts, владелец 08.11.2026). Раньше комментарий
  * знакомой запускал воронку: первый шаг уходил, а на её ответ в директе бот
  * уже молчал — обрыв на полуслове хуже, чем отсутствие воронки.
+ *
+ * Исключение (владелец 09.11.2026): знакомая по подписке, которая пишет про
+ * курс или цену, — клиент, авто-отметка снимается (profiles.ts).
+ *
+ * Возвращает причину молчания или null — отвечать можно.
  */
-async function silentForComment(contact: Contact): Promise<boolean> {
-  if (contactAutomationBlocked(contact)) return true;
-  return silenceIfFollowedByBusiness(contact, { hasImage: false });
+async function silentForComment(original: Contact, text: string): Promise<CommentOutcome | null> {
+  const contact = await releaseFollowSilenceIfClient(original, { text });
+  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return "silent_contact";
+  // Переписку с этим человеком сейчас ведёт Ширин — бот не встревает, но
+  // комментарий не теряется: сторож напомнит владельцу в Telegram.
+  if (contactAutomationBlocked(contact)) return "waiting_human";
+  return (await silenceIfFollowedByBusiness(contact, { hasImage: false, text })) ? "silent_contact" : null;
 }
 
 /**
