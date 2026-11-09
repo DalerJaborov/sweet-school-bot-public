@@ -16,6 +16,7 @@ export const SETTING_KEYS = [
   "freeLessonId",
   "igToken",
   "appSecret",
+  "fbAppSecret",
   "verifyToken",
   "geminiKey",
   "geminiKeysExtra",
@@ -216,6 +217,7 @@ export type SettingKey = (typeof SETTING_KEYS)[number];
 const SECRET_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   "igToken",
   "appSecret",
+  "fbAppSecret",
   "geminiKey",
   "geminiKeysExtra",
   "telegramBotToken",
