@@ -5,7 +5,11 @@ import { contactLanguage } from "./ai/contactLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
-import { isBotFrozen } from "./messaging/automation.js";
+import { isBotFrozen, withTakeoverOverride } from "./messaging/automation.js";
+import { resolveTakeover } from "./ai/ownerTakeover.js";
+import { isPureThanks } from "./ai/reactions.js";
+import { deliberateSilenceSince } from "./ai/deliberateSilence.js";
+import { QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
 
 /**
  * Очередь ответов, которые ИИ НИ РАЗУ не дал — все ключи/модели Gemini отказали.
@@ -48,6 +52,16 @@ const DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000]; // 1, 2, 5, 10, 
 const TRAILING_DELAY_MS = 20 * 60_000;
 const TRAILING_ATTEMPTS = 40; // ещё ~13 часов
 const MAX_ATTEMPTS = DELAYS_MS.length + TRAILING_ATTEMPTS;
+
+/** Исходящее после snapshotAt, кроме уведомлений о задержке. Пустой текст (фото без подписи) — тоже ответ. */
+function outgoingAnswerSince(contactId: string, snapshotAt: Date) {
+  return {
+    contactId,
+    direction: "OUT" as const,
+    createdAt: { gt: snapshotAt },
+    OR: [{ text: null }, { text: { notIn: ALL_DELAY_NOTICES } }],
+  };
+}
 
 function delayFor(attempt: number): number {
   return DELAYS_MS[attempt] ?? TRAILING_DELAY_MS;
@@ -92,16 +106,28 @@ async function runQueue(): Promise<void> {
   for (const row of due) {
     if (await isBotFrozen()) return;
     // WhatsApp retries belong to its durable inbox and require the original incoming turn.
-    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || row.contact.humanTakenOverAt)) {
+    if (
+      row.contact.channel === "WHATSAPP" ||
+      row.contact.personal ||
+      row.contact.spamBlockedAt ||
+      row.contact.whatsappSavedContact
+    ) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } });
       continue;
     }
     // Пришло более свежее входящее с момента постановки — эта попытка устарела:
     // новое сообщение либо уже своя запись в очереди, либо на него уже ответили
     // обычным ходом. Повторять СТАРЫЙ текст поверх нового разговора нельзя.
-    const newerIn = await prisma.message.findFirst({
+    // Не считаем «новым разговором»: тихий ответ на историю (мы на него молчим осознанно)
+    // и чистое «спасибо» (вопрос под ним остаётся без ответа и должен получить его).
+    const newerRows = await prisma.message.findMany({
       where: { contactId: row.contactId, direction: "IN", createdAt: { gt: row.snapshotAt } },
+      select: { text: true, payload: true },
+      take: 20,
     });
+    const newerIn = (newerRows ?? []).some(
+      (m) => m.payload !== QUIET_STORY_PAYLOAD && !(m.text && isPureThanks(m.text)),
+    );
     if (newerIn) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
       continue;
@@ -110,7 +136,7 @@ async function runQueue(): Promise<void> {
     // Кто-то (хозяйка руками, обычный ход) уже ответил после — сдачу засчитываем
     // как успех, а не как повод пробовать снова поверх готового ответа.
     const answeredSince = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", text: { notIn: ALL_DELAY_NOTICES }, createdAt: { gt: row.snapshotAt } },
+      where: outgoingAnswerSince(row.contactId, row.snapshotAt),
     });
     if (answeredSince) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
@@ -127,12 +153,34 @@ async function runQueue(): Promise<void> {
       continue;
     }
 
+    // Умный перехват: ответ отложен, пока Ширин на связи; ушла — отвечаем сами.
+    let contactNow = row.contact;
+    let safeIntentOnly = false;
+    if (contactNow.humanTakenOverAt) {
+      const verdict = await resolveTakeover(contactNow, { text: row.text, at: row.snapshotAt });
+      if (verdict.action === "hold") {
+        if (verdict.until)
+          await prisma.pendingAiReply
+            .update({ where: { id: row.id }, data: { nextAttemptAt: verdict.until } })
+            .catch(() => null);
+        else await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
+        continue;
+      }
+      if (verdict.why === "safe_intent") safeIntentOnly = true;
+      else contactNow = { ...contactNow, humanTakenOverAt: null, humanTakeoverMid: null };
+    }
+
+    const attemptStartedAt = new Date();
     try {
-      await aiReply(row.contact, row.text, [], []);
+      // Безопасный запрос под паузой хозяйки — то же разовое разрешение, что и в webhook.ts.
+      if (safeIntentOnly) await withTakeoverOverride(contactNow.id, () => aiReply(contactNow, row.text, [], []));
+      else await aiReply(contactNow, row.text, [], []);
     } catch (err) {
       logError("aiReplyRetry:attempt", err);
       if (!canRetryMetaFailure(err)) {
-        await notifyOwnerDirect(`Ответ для ${row.contactId} остановлен. Проверьте переписку перед повтором: ${err instanceof Error ? err.message : "неповторяемая ошибка"}`);
+        await notifyOwnerDirect(
+          `Ответ для ${row.contactId} остановлен. Проверьте переписку перед повтором: ${err instanceof Error ? err.message : "неповторяемая ошибка"}`,
+        );
         await prisma.pendingAiReply.delete({ where: { id: row.id } });
         continue;
       }
@@ -140,9 +188,23 @@ async function runQueue(): Promise<void> {
 
     if (await isBotFrozen()) return;
     const sentNow = await prisma.message.findFirst({
-      where: { contactId: row.contactId, direction: "OUT", text: { notIn: ALL_DELAY_NOTICES }, createdAt: { gt: row.snapshotAt } },
+      where: outgoingAnswerSince(row.contactId, row.snapshotAt),
     });
     if (sentNow) {
+      await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
+      continue;
+    }
+
+    // Намеренное молчание (NO_REPLY, фильтр «не по делу», реакция вместо ответа) — это успех,
+    // а не провал: без «не получается подготовить ответ» и без ложной тревоги владельцу.
+    const silence =
+      deliberateSilenceSince(row.contactId, attemptStartedAt) ??
+      ((await prisma.replyGate.findFirst({
+        where: { contactId: row.contactId, action: { not: "reply" }, createdAt: { gte: attemptStartedAt } },
+      }))
+        ? "шлюз «не по делу»"
+        : null);
+    if (silence) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } }).catch(() => null);
       continue;
     }
@@ -151,14 +213,17 @@ async function runQueue(): Promise<void> {
     if (attempts >= 2 && !row.delayNoticeAt) {
       // Claim before sending: a timeout is ambiguous, so never resend this notice blindly.
       const claimed = await prisma.pendingAiReply.updateMany({
-        where: { id: row.id, delayNoticeAt: null }, data: { delayNoticeAt: new Date() },
+        where: { id: row.id, delayNoticeAt: null },
+        data: { delayNoticeAt: new Date() },
       });
       if (claimed.count) {
         const notice = DELAY_NOTICES[await contactLanguage(row.contactId, row.text)];
         try {
           const mid = await sendToContact(row.contact, notice);
           await recordOutgoingMessage(row.contactId, notice, mid);
-        } catch (error) { logError("aiReplyRetry:notice", error); }
+        } catch (error) {
+          logError("aiReplyRetry:notice", error);
+        }
         await giveUp(row.contactId, row.text, true);
       }
     }
@@ -185,7 +250,9 @@ async function giveUp(contactId: string, text: string, early = false): Promise<v
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const who = contact?.username ? `@${contact.username}` : contact?.igUserId;
   const message =
-    (early ? "ИИ дважды не смог ответить. Вопрос сохранён, нужен человек.\n" : "ИИ не смог ответить за всё время повтора (~13 часов).\n") +
+    (early
+      ? "ИИ дважды не смог ответить. Вопрос сохранён, нужен человек.\n"
+      : "ИИ не смог ответить за всё время повтора (~13 часов).\n") +
     `Человек: ${who}\n` +
     `Последнее: «${text.slice(0, 200)}»\n` +
     `Ответьте, пожалуйста, вручную.`;

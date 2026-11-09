@@ -1,5 +1,12 @@
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
-import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError, CONTEXT_ONLY_AMOUNT, COURSE_DATE_FACT } from "./ai/replyPolicy.js";
+import {
+  replyPolicyIssues,
+  cleanAutomatedReply,
+  REPLY_POLICY_INSTRUCTION,
+  ReplyPolicyError,
+  CONTEXT_ONLY_AMOUNT,
+  COURSE_DATE_FACT,
+} from "./ai/replyPolicy.js";
 import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
@@ -11,6 +18,7 @@ import {
   isBotFrozen,
   assertAutomationAllowed,
   contactAutomationBlocked,
+  takeoverOverrideActive,
   withContactMessaging,
 } from "./messaging/automation.js";
 import {
@@ -61,7 +69,7 @@ import { maybeRestoreAccess } from "./course/recovery.js";
 import { maybeWarmEmoji } from "./voice.js";
 import { splitHumanLike, splitOptionsFor } from "./ai/replySplit.js";
 import { passesRelevanceGate } from "./ai/relevanceGate.js";
-import { reactInsteadOfReply } from "./ai/reactions.js";
+import { reactInsteadOfReply, isPureThanks } from "./ai/reactions.js";
 import type { Contact } from "@prisma/client";
 
 const TIMEOUT_MS = 60_000;
@@ -279,6 +287,12 @@ export async function aiReply(
     noteDeliberateSilence(contact.id, "реакция вместо ответа");
     return;
   }
+  // «Спасибо» под паузой хозяйки (разовое разрешение): разрешена только реакция. Не ушла —
+  // полный ответ ИИ под паузой не нужен.
+  if (takeoverOverrideActive(contact.id) && attachments.length === 0 && images.length === 0 && isPureThanks(text)) {
+    noteDeliberateSilence(contact.id, "«спасибо» под паузой хозяйки, реакция не ушла");
+    return;
+  }
 
   // «Я отправила чек» — а картинки в сообщении нет и в этот ход ничего не
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
@@ -391,7 +405,9 @@ export async function aiReply(
     (await coldLeadNudge(contact, text)) +
     (await offlineSignupBlock(contact, text)) +
     (await freeLessonBlock()) +
-    webChannelBlock(contact) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
+    webChannelBlock(contact) +
+    (await deliveryPrompt(contact)) +
+    REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).
   let model = (await getSetting("aiModel")) || "gemini-3.6-flash";
@@ -1079,14 +1095,18 @@ async function buildSocialProofBlock(): Promise<string> {
 import { confirmRequisitesToCustomer, handleReceiptVerdict } from "./ai/receiptVerdict.js";
 export { handleReceiptVerdict };
 
-
 /** Факты, по которым replyPolicy проверяет ответ перед отправкой: суммы,
  *  телефон и дата набора. Сумма двух курсов по отдельности разрешена ТОЛЬКО
  *  рядом с «вместо»/«по отдельности» («100 вместо 120» — правда, «за оба 120»
  *  — нет, решение владельца 05.09.2026). Дата набора — та, что в «Цены и
  *  даты», или никакая: другая дата в ответе про курс задерживает его. */
 export async function trustedSalesFacts(): Promise<string> {
-  const [texts, offline, prices, date] = await Promise.all([getSalesTexts(), getOfflineFacts(), getPrices(), courseDateLabel("ru")]);
+  const [texts, offline, prices, date] = await Promise.all([
+    getSalesTexts(),
+    getOfflineFacts(),
+    getPrices(),
+    courseDateLabel("ru"),
+  ]);
   return (
     `${texts.priceLineRu}. ${CONTEXT_ONLY_AMOUNT} ${prices.bundleFull} сомони. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони. ` +
     `${COURSE_DATE_FACT} ${date}.`

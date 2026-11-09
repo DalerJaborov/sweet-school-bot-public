@@ -5,6 +5,7 @@ import { shouldSendAlert } from "./alertGate.js";
 import { deliberateSilenceSince } from "./ai/deliberateSilence.js";
 import { isPureThanks } from "./ai/reactions.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
+import { releaseExpiredTakeovers, loadTakeoverConfig, ownerAnchor, decideTakeover } from "./ai/ownerTakeover.js";
 import { healFalseTakeovers } from "./ai/takeoverHeal.js";
 
 /**
@@ -104,6 +105,8 @@ export const UNANSWERED_AFTER_MS = 2 * 60_000;
 /** Начало текста, с которого site/router.ts записывает заявку на офлайн-курс как входящее. */
 const SITE_SIGNUP_PREFIX = "Заявка на офлайн-курс:";
 const LOOKBACK_MS = 24 * 3_600_000;
+/** Запас после конца паузы хозяйки, прежде чем молчание считается сбоем. */
+const TAKEOVER_GRACE_MS = 4 * 60_000;
 const PROCESS_STARTED_AT = Date.now();
 const MAX_ALERTS_PER_TICK = 5;
 
@@ -149,7 +152,28 @@ export async function explainUnanswered(
     const cause = contact.humanTakeoverMid
       ? await prisma.message.findUnique({ where: { mid: contact.humanTakeoverMid } })
       : null;
-    if (cause?.text) return { skip: true, why: "живая пауза хозяйки" };
+    if (cause?.text) {
+      // Согласовано с умным перехватом (ai/ownerTakeover.ts): пауза должна была закончиться — бот обязан был ответить.
+      const config = await loadTakeoverConfig();
+      const anchor = await ownerAnchor(contact);
+      if (!config.enabled || !anchor) return { skip: true, why: "живая пауза хозяйки" };
+      const d = decideTakeover({ config, anchor, incomingAt: lastIn.createdAt, safeIntent: false, now });
+      if (d.action === "hold") return { skip: true, why: "живая пауза хозяйки" };
+      // Запас к концу паузы: очередь ответов отвечает по тику, сторож не должен гоняться с ней.
+      if (d.why === "idle" || d.why === "cold") {
+        const dueAt = Math.min(
+          anchor.getTime() + config.liveWindowMin * 60_000,
+          lastIn.createdAt.getTime() + config.idleReplyMin * 60_000,
+        );
+        if (now.getTime() - dueAt < TAKEOVER_GRACE_MS)
+          return { skip: true, why: "пауза хозяйки только что закончилась, ответ в очереди" };
+      }
+      return {
+        skip: false,
+        reason: "перехват хозяйки уже должен был закончиться (" + d.why + "), но бот не ответил",
+        dedupeKey: "takeover-due:" + contactId + ":" + lastIn.createdAt.getTime(),
+      };
+    }
     // Подозрение «это наше эхо» бывает только в Instagram/Messenger (эхо приходит вебхуком Meta) и только
     // если незадолго до причины бот сам слал вложение или пустое сообщение. Иначе это голос/фото хозяйки.
     const ourMediaBefore =
@@ -223,6 +247,7 @@ export async function checkUnansweredInbound(now = new Date()): Promise<number> 
 
   // Самолечение раньше сторожа: ложная пауза от нашего же эха снимается сама.
   await healFalseTakeovers().catch((err) => logError("takeoverHeal", err));
+  await releaseExpiredTakeovers(now).catch((err) => logError("ownerTakeover:expire", err));
 
   // Окно начинается за 15 минут до старта: сообщение, потерянное при выкатке, тоже ловим.
   const since = new Date(Math.max(now.getTime() - LOOKBACK_MS, PROCESS_STARTED_AT - 15 * 60_000));

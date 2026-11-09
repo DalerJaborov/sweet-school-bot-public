@@ -181,6 +181,11 @@ export const SETTING_KEYS = [
   // Сторож входящих (inboundWatch.ts): сколько часов тишины в рабочее время
   // считать поломкой. Пусто — 4.
   "inboundSilenceHours",
+  // Умный перехват хозяйки (ai/ownerTakeover.ts): рубильник и числа в минутах/часах.
+  "smartTakeoverEnabled",
+  "takeoverLiveWindowMin",
+  "takeoverIdleReplyMin",
+  "takeoverExpireHours",
   // ---- домашняя страница платформы ----
   // Владелец 03.09.2026: «пусть при нажатии ссылки выходит главная страница
   // школы — все уроки, контакты учителей, группа в телеграме». Ссылки живут в

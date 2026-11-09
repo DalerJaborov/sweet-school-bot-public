@@ -3,7 +3,7 @@ const mocks = vi.hoisted(() => {
   const prisma = {
     contact: { findUnique: vi.fn(), upsert: vi.fn(), update: vi.fn() },
     whatsAppInbox: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
-    message: { upsert: vi.fn(), update: vi.fn() },
+    message: { upsert: vi.fn(), update: vi.fn(), findFirst: vi.fn() },
     $transaction: vi.fn(),
   };
   return { prisma, aiReply: vi.fn(), rescueImage: vi.fn(), getSetting: vi.fn() };

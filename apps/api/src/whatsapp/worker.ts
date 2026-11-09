@@ -4,6 +4,9 @@ import { bridgeRequest, bridgeEventSchema, whatsappConfigured, whatsappMessageId
 import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
+import { isListedPersonal } from "../ai/personalList.js";
+import { withTakeoverOverride } from "../messaging/automation.js";
+import { resolveTakeover } from "../ai/ownerTakeover.js";
 import { attentionError, classifyAttention } from "./attention.js";
 import { rememberOwnerReply } from "../ai/styleLearning.js";
 import { recordAdReferral } from "../metaConversions.js";
@@ -107,6 +110,10 @@ export async function processInbox(id: string): Promise<void> {
   if (!check.identityResolved) throw attentionError("contact_check", "Не удалось проверить контакт WhatsApp");
   const phone = check.aliases?.find(alias => /^\d{7,15}@c\.us$/.test(alias))?.split("@")[0];
   if (phone && !contact.name) await prisma.contact.update({ where: { id: contact.id }, data: { name: `+${phone}` } });
+  if (phone && !contact.personal && (await isListedPersonal(phone))) {
+    await prisma.contact.update({ where: { id: contact.id }, data: { personal: true, personalReason: "Список личных контактов (добавлен владельцем)" } });
+    contact.personal = true;
+  }
   const stamp = event.timestamp;
   if (Date.now() - stamp > 86400000 || stamp > Date.now() + 60000) {
     await prisma.whatsAppInbox.update({ where: { id }, data: { status: "expired", payload: JSON.stringify({ ...payload, media: undefined }) } });
@@ -137,8 +144,24 @@ export async function processInbox(id: string): Promise<void> {
     }
     // Owner takeover suppresses ordinary conversation but image intake remains
     // durable: the existing verified receipt worker can deliver paid access.
-    const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-    if (!fresh || fresh.humanTakenOverAt || check.takenOver) return;
+    let safeAnswer = false;
+    let fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
+    if (!fresh) return;
+    if (fresh.humanTakenOverAt || check.takenOver) {
+      // Умный перехват (ai/ownerTakeover.ts): пока Ширин на связи — откладываем, ушла — отвечаем.
+      const verdict = await resolveTakeover(fresh, { text: event.text, at: new Date(event.timestamp) });
+      if (verdict.action === "hold") {
+        if (verdict.until) {
+          // Строка вернётся в очередь тиком dispatchWhatsAppInbox и будет решена заново.
+          await prisma.whatsAppInbox.update({ where: { id }, data: { status: "held", attempts: { decrement: 1 } } });
+        }
+        return;
+      }
+      safeAnswer = verdict.why === "safe_intent";
+      // Мост сам запрещает отправку после ручной реплики — снимаем его флаг перед ответом.
+      if (check.takenOver) await bridgeRequest("/takeover/reset", { chatId: row.chatId });
+      fresh = (await prisma.contact.findUnique({ where: { id: contact.id } })) ?? fresh;
+    }
     if (event.media && !event.media.mimeType.startsWith("image/")) {
       if (!event.media.mimeType.startsWith("audio/")) throw attentionError("attachment", "Вложение требует ответа хозяйки");
       const buffer = Buffer.from(event.media.data, "base64");
@@ -147,7 +170,9 @@ export async function processInbox(id: string): Promise<void> {
       if (!url) throw attentionError("save_failed", "Не удалось сохранить голосовое");
       attachments.push({ url, kind: "audio" });
     }
-    await aiReply(fresh, event.text, attachments, images);
+    // Безопасный запрос: пауза хозяйки остаётся, но разовое разрешение даёт ответить (ai/ownerTakeover.ts).
+    if (safeAnswer) await withTakeoverOverride(fresh.id, () => aiReply(fresh!, event.text, attachments, images));
+    else await aiReply(fresh, event.text, attachments, images);
   });
   // updateMany + условие: если шлюз «не по делу» уже перевёл строку в attention («нужен человек»),
   // статус done её не затрёт.
@@ -159,6 +184,8 @@ export async function dispatchWhatsAppInbox(): Promise<void> {
   if (!whatsappConfigured() || await getSetting("botFrozen") === "true") return;
   const connection = await bridgeRequest<{ enabled?: boolean; contactsReady?: boolean }>("/status");
   if (!connection.enabled || !connection.contactsReady) return;
+  // Отложенные умным перехватом: раз в минуту решаем заново (ответили руками — строка закроется сама).
+  await prisma.whatsAppInbox.updateMany({ where: { status: "held", updatedAt: { lte: new Date(Date.now() - 60_000) } }, data: { status: "pending" } });
   const rows = await prisma.whatsAppInbox.findMany({
     where: { status: "pending", updatedAt: { lte: new Date(Date.now() - 2500) } }, orderBy: { createdAt: "asc" }, take: 30,
   });

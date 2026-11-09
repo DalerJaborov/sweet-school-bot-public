@@ -1,4 +1,5 @@
 import { prisma, getSetting, logError } from "./db.js";
+import { isListedPersonal, readPersonalList, LIST_REASON } from "./ai/personalList.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { env } from "./env.js";
 
@@ -64,6 +65,49 @@ async function fetchProfile(igUserId: string, channel: string): Promise<Profile 
   }
 }
 
+/**
+ * Первое сообщение родни приходит раньше, чем фоновый тик узнаёт ник контакта, и бот успел бы
+ * ответить. Для Instagram без ника, при непустом списке, профиль запрашивается сразу (с таймаутом);
+ * совпало со списком — контакт помечается личным. Возвращает true, если пометили.
+ */
+const profileTried = new Map<string, number>();
+const PROFILE_RETRY_MS = 30 * 60_000;
+
+export async function markListedPersonalNow(contact: {
+  id: string;
+  igUserId: string;
+  channel: string;
+  username: string | null;
+  personal: boolean;
+  profileAt?: Date | null;
+}): Promise<boolean> {
+  if (contact.personal || contact.username || contact.channel !== "INSTAGRAM") return false;
+  // Профиль уже запрашивали (тик или прошлое сообщение) — на каждое сообщение в Graph не ходим.
+  if (contact.profileAt) return false;
+  const lastTry = profileTried.get(contact.id);
+  if (lastTry && Date.now() - lastTry < PROFILE_RETRY_MS) return false;
+  try {
+    if ((await readPersonalList()).length === 0) return false;
+    profileTried.set(contact.id, Date.now());
+    if (profileTried.size > 5000) profileTried.clear();
+    const profile = await fetchProfile(contact.igUserId, contact.channel);
+    if (!profile?.username || !(await isListedPersonal(profile.username))) return false;
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: {
+        personal: true,
+        personalReason: LIST_REASON,
+        username: profile.username,
+        name: profile.name ?? undefined,
+      },
+    });
+    return true;
+  } catch (err) {
+    logError("profiles:markListedNow", err);
+    return false;
+  }
+}
+
 /** Догружает профили тем, у кого их ещё нет или они устарели. Дёргается общим тиком. */
 export async function refreshProfiles(): Promise<void> {
   // Один прогон за раз, с предохранителем от вечного «занято» (singleFlight.ts).
@@ -73,19 +117,24 @@ export async function refreshProfiles(): Promise<void> {
 async function refreshProfilesOnce(): Promise<void> {
   try {
     const stale = await prisma.contact.findMany({
-      where: { channel: { in: ["INSTAGRAM", "MESSENGER"] }, OR: [{ profileAt: null }, { profileAt: { lt: new Date(Date.now() - MAX_AGE_MS) } }] },
+      where: {
+        channel: { in: ["INSTAGRAM", "MESSENGER"] },
+        OR: [{ profileAt: null }, { profileAt: { lt: new Date(Date.now() - MAX_AGE_MS) } }],
+      },
       orderBy: { updatedAt: "desc" },
       take: BATCH,
     });
 
     for (const contact of stale) {
       const profile = await fetchProfile(contact.igUserId, contact.channel);
+      const listed = !contact.personal && (await isListedPersonal(profile?.username ?? contact.username));
       await prisma.contact.update({
         where: { id: contact.id },
         data: {
           // Отметку ставим всегда, даже когда профиль не отдали: иначе такие
           // контакты будут перезапрашиваться каждый тик, вечно.
           profileAt: new Date(),
+          ...(listed ? { personal: true, personalReason: "Список личных контактов (добавлен владельцем)" } : {}),
           name: profile?.name ?? contact.name,
           username: profile?.username ?? contact.username,
           avatarUrl: profile?.profile_pic ?? profile?.profile_picture_url ?? contact.avatarUrl,

@@ -2,6 +2,7 @@ import { silenceIfFollowedByBusiness } from "./profiles.js";
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
+import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
 import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
@@ -10,7 +11,10 @@ import { sendToContact } from "./messaging/send.js";
 import { recordAdReferral, referralFromMeta } from "./metaConversions.js";
 import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
-import { looksPersonal } from "./ai/personalContact.js";
+import { storyReplyWorthAnswer, QUIET_STORY_PAYLOAD } from "./ai/storyRelevance.js";
+import { noteDeliberateSilence } from "./ai/deliberateSilence.js";
+import { markListedPersonalNow } from "./profiles.js";
+import { looksPersonal, startsWithFamilyAddress } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
 import { type ClientLanguage } from "./ai/clientLanguage.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
@@ -22,6 +26,8 @@ import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
 import { classifyUnknownEcho } from "./ai/ownSendLedger.js";
+import { resolveTakeover, scheduleHeldReply } from "./ai/ownerTakeover.js";
+import { withTakeoverOverride, takeoverOverrideActive } from "./messaging/automation.js";
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
  *  Instagram, а не наш код: написала текстом, ответила голосом или просто
@@ -395,6 +401,11 @@ const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> =
   spam: "рекламный спам",
 };
 
+/** Пауза по таймеру (реакция хозяйки, просьба позвать человека) — отдельно от перехвата. */
+function timerSilenced(contact: { humanSilencedUntil: Date | null }): boolean {
+  return !!contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now();
+}
+
 function isHumanSilenced(contact: { humanSilencedUntil: Date | null; humanTakenOverAt?: Date | null }): boolean {
   return (
     Boolean(contact.humanTakenOverAt) ||
@@ -492,6 +503,27 @@ export async function handleMessage(
       return null;
     });
     if (!own) return; // чужой ролик — молчим, даже если к нему что-то написали
+    // Ответ на НАШУ историю: молчим только на эмодзи и короткие комплименты, остальное решает модель.
+    // Голосовое и другие вложения не теряем.
+    if (
+      msg.reply_to?.story &&
+      !storyReplyWorthAnswer({ storyCaption: own.caption, replyText: text, hasMedia: attachments.length > 0 })
+    ) {
+      const quietContact = await upsertContact(senderId, null, channel);
+      if (msg.mid && text) {
+        // Метка нужна очереди повторов: тихий ответ на историю не должен стирать отложенный ответ на вопрос.
+        await prisma.message
+          .create({
+            data: { contactId: quietContact.id, direction: "IN", mid: msg.mid, text, payload: QUIET_STORY_PAYLOAD },
+          })
+          .catch((err) => {
+            if ((err as { code?: string })?.code !== "P2002") logError("webhook:storyRecord", err);
+          });
+      }
+      // Молчим сознательно: сторож неотвеченных не должен поднимать тревогу.
+      noteDeliberateSilence(quietContact.id, "ответ на историю не про курсы");
+      return;
+    }
     // Обложку отдаём модели глазами, подпись — текстом: вместе они объясняют,
     // о чём спрашивает человек, лучше, чем сам ролик без подписи.
     const preview = viewableUrl(own);
@@ -549,6 +581,8 @@ export async function handleMessage(
   // То же для заблокированных за спам/флирт (владелец 05.09.2026) — снять
   // блок можно из панели «Ученицы».
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return;
+  // Первое сообщение родни приходит раньше, чем фоновый тик узнаёт ник: сверяем со списком сразу.
+  if (await markListedPersonalNow(contact)) return;
   if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
 
   // На кого подписана Ширин (знакомые, родня, поставщики) — бот молчит; платящих
@@ -572,6 +606,18 @@ export async function handleMessage(
         .catch((err) => logError("webhook:spamBlock", err));
       return;
     }
+  }
+
+  // Первое сообщение, начатое обращением к родне («мама, ...»), — личная переписка.
+  if (textOrVoice && (await isFirstIncoming(contact.id)) && startsWithFamilyAddress(textOrVoice)) {
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: {
+        personal: true,
+        personalReason: `Первое сообщение начато обращением к родне: «${textOrVoice.slice(0, 100)}»`,
+      },
+    });
+    return;
   }
 
   if (textOrVoice && looksPersonal(textOrVoice)) {
@@ -640,9 +686,75 @@ export async function handleMessage(
 
   // Хозяйка сама ведёт разговор — бот не встревает, даже если пришли кнопка или
   // ключевое слово воронки. Постоянную паузу снимает только владелец.
-  if (isHumanSilenced(contact)) return;
+  // Умный перехват (ai/ownerTakeover.ts): пока Ширин на связи — молчим и откладываем ответ
+  // на случай, если она не успеет; безопасные запросы и «ушла» обслуживаются сразу.
+  let safeOverride = false;
+  if (isHumanSilenced(contact)) {
+    const gate = await gateHumanTakeover(contact, textOrVoice, attachments.length > 0);
+    if (gate === "hold") return;
+    safeOverride = gate === "safe";
+    if (gate === "free") {
+      const refreshed = await prisma.contact.findUnique({ where: { id: contact.id } });
+      if (!refreshed || isHumanSilenced(refreshed)) return; // реакция/просьба позвать человека всё ещё действуют
+      Object.assign(contact, refreshed);
+    }
+  }
+  // Разовое разрешение даёт только ответ ИИ (доступ купившей, реакция на «спасибо»):
+  // воронка по ключевому слову под паузой хозяйки не запускается.
+  return safeOverride
+    ? withTakeoverOverride(contact.id, () =>
+        replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint, true),
+      )
+    : replyToClient(contact, textOrVoice, payload, attachments, rescuedImages, ownMediaHint);
+}
 
-  const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload);
+/**
+ * Решение о паузе хозяйки на одно входящее. "hold" — молчим (ответ при необходимости
+ * отложен в очередь), "safe" — отвечаем разово, перехват остаётся, "free" — перехват
+ * снят (в базе), отвечаем как обычно.
+ */
+async function isFirstIncoming(contactId: string): Promise<boolean> {
+  return (await prisma.message.count({ where: { contactId, direction: "IN" } })) <= 1;
+}
+
+/** Текст отложенного ответа на сообщение без текста (фото без подписи). */
+const MEDIA_ONLY_PLACEHOLDER = "[клиентка прислала фото без подписи]";
+
+async function gateHumanTakeover(
+  contact: Contact,
+  text: string | null,
+  hasMedia = false,
+): Promise<"hold" | "safe" | "free"> {
+  // Пауза по таймеру (реакция хозяйки, просьба «позови человека») не из этой цепочки.
+  if (!contact.humanTakenOverAt) return "hold";
+  // Реакция хозяйки / «позови человека» (таймер) разовым разрешением не обходится.
+  if (timerSilenced(contact)) return "hold";
+  const lastIn = await prisma.message.findFirst({
+    where: { contactId: contact.id, direction: "IN" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  const at = lastIn?.createdAt ?? new Date();
+  const decision = await resolveTakeover(contact, { text, at });
+  if (decision.action === "hold") {
+    // Фото без подписи тоже откладываем (картинка спасена выше): иначе после паузы вопрос потеряется.
+    const heldText = text || (hasMedia ? MEDIA_ONLY_PLACEHOLDER : null);
+    if (decision.until && heldText) await scheduleHeldReply(contact.id, heldText, decision.until, at);
+    return "hold";
+  }
+  return decision.why === "safe_intent" ? "safe" : "free";
+}
+
+async function replyToClient(
+  contact: Contact,
+  textOrVoice: string | null,
+  payload: string | null,
+  attachments: Attachment[],
+  rescuedImages: RescuedImage[],
+  ownMediaHint: string | undefined,
+  skipFunnel = false,
+): Promise<void> {
+  const handledByFunnel = skipFunnel ? false : await handleIncomingDm(contact, textOrVoice, payload);
   if (handledByFunnel || (!textOrVoice && attachments.length === 0)) return;
 
   // Человеческий тайминг: ждём, вдруг человек допишет ещё пузырь — отвечаем на
@@ -658,7 +770,11 @@ export async function handleMessage(
     rescuedImages,
     async (mergedText, mergedAttachments, mergedRescued) => {
       const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-      if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
+      if (!fresh) return;
+      // За время ожидания подключилась хозяйка — картинки уже спасены выше. Безопасный
+      // запрос (разовое разрешение выше) под её паузу не подпадает.
+      if (timerSilenced(fresh)) return;
+      if (isHumanSilenced(fresh) && !takeoverOverrideActive(fresh.id)) return;
       await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
     },
   );

@@ -79,9 +79,16 @@ describe("сторож неотвеченных: тревога, когда бо
   });
 
   it("настоящая пауза хозяйки (причина с текстом) НЕ тревожит: она ведёт разговор сама", async () => {
-    setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 3_600_000), humanTakeoverMid: "m-x" } });
+    setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 60_000), humanTakeoverMid: "m-x" } });
     db.model("message").findUnique.mockResolvedValue({ text: "Приходите на курс, всё расскажу" });
     expect(await checkUnansweredInbound(now)).toBe(0);
+  });
+
+  it("старая пауза хозяйки (остыла, бот обязан был ответить) тревожит", async () => {
+    setup({ contact: { humanTakenOverAt: new Date(inAt.getTime() - 3_600_000), humanTakeoverMid: "m-x" } });
+    db.model("message").findUnique.mockResolvedValue({ text: "Приходите на курс, всё расскажу" });
+    await checkUnansweredInbound(now);
+    expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("перехват хозяйки уже должен был закончиться");
   });
 
   it("подозрительная пауза (причина без текста, вложение) тревожит один раз на паузу", async () => {
