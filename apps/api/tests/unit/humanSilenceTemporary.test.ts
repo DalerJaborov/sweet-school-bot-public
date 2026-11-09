@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 import {
   contactAutomationBlocked,
+  everTalkedWithShirin,
   humanSilenceActive,
   humanTakeoverActive,
   humanTakeoverEndsAt,
@@ -78,7 +79,6 @@ describe("одна дверь для паузы", () => {
     "messaging/automation.ts",
     "webhook.ts", // пишет отметку в handleEcho
     "db.ts", // чинит ложную отметку от нашего же эха
-    "followUp.ts", // напоминание не шлём тем, с кем Ширин говорила сама
     "whatsapp/routes.ts",
     "whatsapp/worker.ts",
   ]);
@@ -91,11 +91,43 @@ describe("одна дверь для паузы", () => {
     });
   }
 
+  /** Рассылки-напоминания (не ответы на вопрос): каждая обязана спросить дверь. */
+  const REMINDERS = ["followUp.ts", "joinReminder.ts", "offlineReminder.ts", "learningCheckIn.ts"];
+  it.each(REMINDERS)("напоминание %s спрашивает everTalkedWithShirin", (file) => {
+    expect(fs.readFileSync(path.join(SRC, file), "utf8")).toContain("everTalkedWithShirin(");
+  });
+
   it("никто, кроме двери, не читает humanTakenOverAt", () => {
     const offenders = walk(SRC)
       .map((f) => path.relative(SRC, f).split(path.sep).join("/"))
       .filter((rel) => !ALLOWED.has(rel))
       .filter((rel) => fs.readFileSync(path.join(SRC, rel), "utf8").includes("humanTakenOverAt"));
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * НАПОМИНАНИЯ — НИКОГДА ТЕМ, С КЕМ ШИРИН ГОВОРИЛА САМА (владелец 09.11.2026),
+ * даже когда 3-часовая пауза давно кончилась.
+ */
+describe("everTalkedWithShirin", () => {
+  it("ГЛАВНОЕ: отметка паузы когда-либо стояла — да, даже если пауза кончилась неделю назад", async () => {
+    expect(await everTalkedWithShirin({ id: "c", humanTakenOverAt: new Date(Date.now() - 7 * 24 * HOUR) })).toBe(true);
+    expect(db.model("message").findFirst).not.toHaveBeenCalled();
+  });
+
+  it("отметки нет, но в истории есть её сообщение — да", async () => {
+    db.model("message").findFirst.mockResolvedValue({ id: "m" });
+    expect(await everTalkedWithShirin({ id: "c", humanTakenOverAt: null })).toBe(true);
+    expect(db.model("message").findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { contactId: "c", direction: "OUT", byHuman: true } }),
+    );
+  });
+
+  it("ни отметки, ни её сообщений — нет; сбой базы — считаем «да» (лучше не напомнить)", async () => {
+    db.model("message").findFirst.mockResolvedValue(null);
+    expect(await everTalkedWithShirin({ id: "c" })).toBe(false);
+    db.model("message").findFirst.mockRejectedValue(new Error("db"));
+    expect(await everTalkedWithShirin({ id: "c" })).toBe(true);
   });
 });

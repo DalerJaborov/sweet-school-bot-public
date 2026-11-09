@@ -392,7 +392,7 @@ export async function handleComment(input: CommentInput): Promise<void> {
  * Чем кончилась обработка комментария. Хранится в SeenComment.outcome.
  * «Ждёт ответа» (COMMENT_WAITING_OUTCOMES) — без ответа осталось НЕ по нашему
  * решению: выключены ответы ИИ, кончился бюджет, сбой модели, Ширин ведёт
- * переписку с этим человеком. Про такие сторож пишет в Telegram.
+ * переписку с этим человеком. Про такие сторож пишет владельцу в Telegram.
  */
 export type CommentOutcome =
   | "deleted" // флирт/оскорбление/спам — удалили
@@ -524,7 +524,7 @@ async function silentForComment(original: Contact, text: string): Promise<Commen
   const contact = await releaseFollowSilenceIfClient(original, { text });
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return "silent_contact";
   // Переписку с этим человеком сейчас ведёт Ширин — бот не встревает, но
-  // комментарий не теряется: сторож напомнит ей в Telegram.
+  // комментарий не теряется: сторож напомнит владельцу в Telegram.
   if (contactAutomationBlocked(contact)) return "waiting_human";
   return (await silenceIfFollowedByBusiness(contact, { hasImage: false, text })) ? "silent_contact" : null;
 }

@@ -93,6 +93,31 @@ export function humanSilenceActive(contact: ContactPolicy, now = Date.now()): bo
   return humanTakeoverActive(contact, now) || Boolean(contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > now);
 }
 
+/**
+ * С ЭТИМ ЧЕЛОВЕКОМ ШИРИН ХОТЬ РАЗ ГОВОРИЛА САМА — НАПОМИНАНИЙ НЕ ШЛЁМ НИКОГДА
+ * (решение владельца 09.11.2026). Пауза после её ответа временная (3 часа), но
+ * напоминания — «вступите в группу», «завтра офлайн-курс», «как первый урок?»,
+ * догоняющие — поверх её живого разговора неуместны навсегда, а не на 3 часа.
+ * Ответы бота на вопросы клиента это НЕ касается: на вопрос отвечаем всегда.
+ *
+ * Признак: отметка паузы когда-либо стояла (humanTakenOverAt) или в истории
+ * есть её исходящее (byHuman). Одна дверь для всех рассылок-напоминаний;
+ * сторож в CI (tests/unit/humanSilenceTemporary.test.ts) проверяет, что каждая
+ * из них её вызывает. Сбой базы — считаем «говорила»: лучше не напомнить.
+ */
+export async function everTalkedWithShirin(contact: { id: string; humanTakenOverAt?: Date | null }): Promise<boolean> {
+  if (contact.humanTakenOverAt) return true;
+  try {
+    const human = await prisma.message.findFirst({
+      where: { contactId: contact.id, direction: "OUT", byHuman: true },
+      select: { id: true },
+    });
+    return Boolean(human);
+  } catch {
+    return true;
+  }
+}
+
 export function contactAutomationBlocked(contact: ContactPolicy, purpose: MessagePurpose = "reply"): boolean {
   if (purpose === "human") return false;
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return true;

@@ -319,7 +319,7 @@ setInterval(ownerReminderTick, 10 * 60_000);
 
 // СТОРОЖ «БЕЗ ОТВЕТА» (unansweredWatch.ts, владелец 09.11.2026): клиент в
 // Instagram ждёт ответа дольше 15 минут — бот отвечает сам после паузы Ширин
-// или напоминает ей в Telegram. Рубильник unansweredWatchdogEnabled.
+// или напоминает владельцу в Telegram. Рубильник unansweredWatchdogEnabled.
 const unansweredTick = () =>
   void singleFlight("unansweredWatch", () => runUnansweredWatch()).catch((err) => logError("unansweredWatch", err));
 setTimeout(unansweredTick, 4 * 60_000);

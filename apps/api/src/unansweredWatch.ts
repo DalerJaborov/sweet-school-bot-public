@@ -1,7 +1,7 @@
 import type { Contact, Message } from "@prisma/client";
 import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { offsetMs } from "./dailyReport.js";
-import { sendTelegramMessage, summaryChatIds } from "./telegram.js";
+import { sendTelegramMessage, techChatIds } from "./telegram.js";
 import { isTrivialMessage } from "./trivialMessage.js";
 import { codeRelevance } from "./ai/relevance.js";
 import { guardOffTopic, isSilentKind } from "./ai/offTopicGuard.js";
@@ -27,7 +27,7 @@ import { COMMENT_WAITING_OUTCOMES } from "./funnel.js";
  *    (humanSilenceHours, 3 ч) — бот отвечает сам на всё, что пришло за паузу.
  *  - Любая другая причина (офлайн передан Ширин, «знакомая», клиент просил
  *    человека, пауза ещё идёт, ИИ выключен, неизвестно) — бот НЕ отвечает, а
- *    пишет Ширин и владельцу в Telegram: кто ждёт, сколько, что написал и почему
+ *    пишет ВЛАДЕЛЬЦУ в Telegram (не Ширин — решение 09.11.2026): кто ждёт, сколько, что написал и почему
  *    бот молчит. Одно напоминание на каждое ожидание (Contact.unansweredAlertAt).
  * Комментарии: те, что остались без ответа не по нашему решению
  * (SeenComment.outcome — выключены ответы ИИ, бюджет, сбой, Ширин ведёт
@@ -210,13 +210,13 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
 
     if (!mayNotify) continue; // ночью Telegram не будим — утром напомним
     let reason: string;
-    if (offline) reason = "офлайн-курс: после карточки разговор ведёте вы";
-    else if (contact.personal) reason = "отмечен знакомым (вы подписаны) — если это клиент, снимите отметку в «Ученицы»";
+    if (offline) reason = "офлайн-курс: после карточки разговор ведёт Ширин";
+    else if (contact.personal) reason = "отмечен знакомым (Ширин подписана) — если это клиент, снимите отметку в «Ученицы»";
     else if (askedHuman) reason = "просил(а) живого человека";
     else if (takeoverEnds !== null && !pauseOver) {
       reason = takeoverEnds === Infinity
-        ? "вы ведёте переписку сами, бот выключен для этого человека"
-        : `вы недавно отвечали сами — бот молчит до ${clock(takeoverEnds, offset)}, потом ответит сам`;
+        ? "переписку ведут вручную, бот выключен для этого человека"
+        : `Ширин недавно отвечала сама — бот молчит до ${clock(takeoverEnds, offset)}, потом ответит сам`;
     } else if (frozen) reason = "бот на экстренной паузе";
     else if (!aiOn) reason = "ответы помощника выключены";
     else reason = "бот не ответил, причина неизвестна — загляните в «Журнал»";
@@ -231,7 +231,7 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
 }
 
 const COMMENT_REASON: Record<string, string> = {
-  waiting_human: "вы сейчас ведёте переписку с этим человеком",
+  waiting_human: "Ширин сейчас ведёт переписку с этим человеком",
   ai_off: "ответы помощника под комментариями выключены",
   no_keys: "у помощника нет ключа ИИ",
   budget: "кончился дневной лимит ИИ, человеку ушло «напишите чуть позже»",
@@ -273,16 +273,29 @@ function capped(lines: string[]): string[] {
   return lines.length > MAX_LINES ? [...lines.slice(0, MAX_LINES), `…и ещё ${lines.length - MAX_LINES}`] : lines;
 }
 
-/** Ширин и владельцу (чат сводок): это не техника, а живые клиенты. */
+/**
+ * КОМУ: ТОЛЬКО ВЛАДЕЛЬЦУ, НЕ ШИРИН (решение владельца 09.11.2026).
+ * Получатель — `telegramOwnerChatId`; пусто — технический чат владельца
+ * (techChatIds). Чат сводок (`telegramSummaryChatIds`) не используем: в нём и
+ * Ширин. Страховка: её Telegram-id (`telegramQaOwnerId`) вычёркивается всегда,
+ * даже если по ошибке окажется в настройке выше.
+ */
+export async function unansweredRecipients(): Promise<string[]> {
+  const owner = (await getSetting("telegramOwnerChatId"))?.trim();
+  const ids = owner ? [owner] : await techChatIds();
+  const shirin = (await getSetting("telegramQaOwnerId"))?.trim();
+  return [...new Set(ids.filter((id) => id && id !== shirin))];
+}
+
 async function notifyWaiting(dmLines: string[], commentLines: string[]): Promise<void> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return;
-  const recipients = await summaryChatIds();
+  const recipients = await unansweredRecipients();
   if (recipients.length === 0) return;
   const parts: string[] = [];
   if (dmLines.length) parts.push("⏳ Ждут ответа в директе Instagram:", ...capped(dmLines));
   if (commentLines.length) parts.push(...(parts.length ? [""] : []), "💬 Комментарии без ответа:", ...capped(commentLines));
-  parts.push("", "Ответьте, пожалуйста, в Instagram. Об одном ожидании напоминаю один раз.");
+  parts.push("", "Нужен ответ в Instagram. Об одном ожидании напоминаю один раз.");
   const text = parts.join("\n");
   for (const chatId of recipients) {
     await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("unansweredWatch:notify", err));

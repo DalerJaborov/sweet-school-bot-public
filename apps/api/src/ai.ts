@@ -639,7 +639,7 @@ export async function aiReply(
  */
 /**
  * Чем кончился ответ на комментарий (funnel.ts пишет это в SeenComment.outcome,
- * сторож unansweredWatch.ts напоминает Ширин о тех, что остались без ответа).
+ * сторож unansweredWatch.ts напоминает владельцу о тех, что остались без ответа).
  *  ai — ответ ушёл в директ; no_reply — модель решила, что отвечать нечего;
  *  guard — шаблон защиты; silent_guard — нарочно молчим («пустите бесплатно»);
  *  остальное — без ответа НЕ по нашему решению.
@@ -687,7 +687,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     return "guard";
   }
   // Бюджет кончился — раньше тишина. Теперь честное «напишите чуть позже» в
-  // директ (тот же текст, что в переписке), а сторож напомнит Ширин.
+  // директ (тот же текст, что в переписке), а сторож напомнит владельцу.
   if (await isBudgetExceeded(contact.id)) {
     const fallback = BUDGET_FALLBACK[language];
     try {

@@ -10,11 +10,11 @@ vi.mock("../../src/ai.js", () => ({ aiReply: (...a: unknown[]) => aiReply(...(a 
 const sendTelegramMessage = vi.fn(async () => undefined);
 vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...(a as [])),
-  summaryChatIds: vi.fn(async () => ["shirin-chat"]),
+  techChatIds: vi.fn(async () => ["tech-chat"]),
 }));
 vi.mock("../../src/funnel.js", () => ({ COMMENT_WAITING_OUTCOMES: ["waiting_human", "ai_off", "no_keys", "budget", "ai_error"] }));
 
-import { runUnansweredWatch, needsAnswer } from "../../src/unansweredWatch.js";
+import { runUnansweredWatch, needsAnswer, unansweredRecipients } from "../../src/unansweredWatch.js";
 import { resetHumanSilenceMs } from "../../src/messaging/automation.js";
 import { FOLLOW_PERSONAL_REASON } from "../../src/profiles.js";
 
@@ -51,7 +51,7 @@ beforeEach(() => {
   resetHumanSilenceMs();
   aiReply.mockClear();
   sendTelegramMessage.mockClear();
-  settings = { aiEnabled: "true", telegramBotToken: "bot", timezoneOffsetHours: "5" };
+  settings = { aiEnabled: "true", telegramBotToken: "bot", timezoneOffsetHours: "5", telegramOwnerChatId: "owner-chat" };
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
     settings[where.key] !== undefined ? { key: where.key, value: settings[where.key] } : null,
   );
@@ -89,7 +89,7 @@ describe("сторож: директ Instagram", () => {
     ]);
     await runUnansweredWatch(NOON);
     expect(aiReply).not.toHaveBeenCalled();
-    expect(sendTelegramMessage).toHaveBeenCalledWith("bot", "shirin-chat", expect.any(String));
+    expect(sendTelegramMessage).toHaveBeenCalledWith("bot", "owner-chat", expect.any(String));
     expect(telegramText()).toContain("@client");
     expect(telegramText()).toContain("Кай сар мешавад?");
     expect(telegramText()).toContain("до 14:00");
@@ -160,6 +160,24 @@ describe("сторож: директ Instagram", () => {
     await runUnansweredWatch(NOON);
     expect(sendTelegramMessage).not.toHaveBeenCalled();
     expect(db.model("contact").updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("кому уходит напоминание (владелец 09.11.2026: только владельцу, не Ширин)", () => {
+  it("ГЛАВНОЕ: только telegramOwnerChatId, чат сводок с Ширин не используется", async () => {
+    settings.telegramSummaryChatIds = "owner-chat,893446307";
+    expect(await unansweredRecipients()).toEqual(["owner-chat"]);
+  });
+
+  it("владелец не задан — технический чат владельца", async () => {
+    delete settings.telegramOwnerChatId;
+    expect(await unansweredRecipients()).toEqual(["tech-chat"]);
+  });
+
+  it("id Ширин (telegramQaOwnerId) вычёркивается, даже если попал в настройку владельца", async () => {
+    settings.telegramOwnerChatId = "893446307";
+    settings.telegramQaOwnerId = "893446307";
+    expect(await unansweredRecipients()).toEqual([]);
   });
 });
 

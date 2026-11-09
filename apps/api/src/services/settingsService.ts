@@ -45,7 +45,7 @@ export const SETTING_KEYS = [
   // Сторож «без ответа» (владелец 09.11.2026, unansweredWatch.ts): клиент в
   // Instagram ждёт дольше unansweredAfterMinutes (15) или комментарий без
   // ответа дольше unansweredCommentMinutes (30) — бот отвечает сам после паузы
-  // или напоминает Ширин в Telegram. По умолчанию ВКЛЮЧЁН; "false" выключает.
+  // или напоминает владельцу в Telegram. По умолчанию ВКЛЮЧЁН; "false" выключает.
   "unansweredWatchdogEnabled",
   "unansweredAfterMinutes",
   "unansweredCommentMinutes",
