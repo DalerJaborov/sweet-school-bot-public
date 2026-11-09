@@ -49,7 +49,7 @@ export type RelevanceAction = "reply" | "clarify" | "attention" | "silent";
 /** Отвечаем по сути только на эти классы. */
 export const ANSWERABLE: ReadonlySet<RelevanceClass> = new Set(["on_topic", "greeting"]);
 
-import { looksLikeHumanRequest, mentionsPayment } from "./offTopicGuard.js";
+import { looksLikeHumanRequest, mentionsPayment, ABOUT_COURSE } from "./offTopicGuard.js";
 import { claimsReceiptSent } from "./receiptClaim.js";
 
 const rx = (parts: string[]): RegExp => new RegExp(parts.join("|"), "iu");
@@ -144,6 +144,22 @@ export function codeRelevance(textRaw: string, hasMedia = false): RelevanceVerdi
   // «Салом апа, как дела?», «У вас есть магазин?» — это покупательницы. Молчание решает модель
   // с историей переписки; правила дают ей только подсказку (см. suspectedClass).
   return null;
+}
+
+/**
+ * ЧЕЛОВЕК ПИШЕТ ПРО КУРС, ЦЕНУ, ОПЛАТУ ИЛИ ЗАПИСЬ — признак клиента.
+ *
+ * Одна дверь для «это покупательница, молчать нельзя» (владелец 09.11.2026):
+ * знакомые Ширин (profiles.ts), чужая пересланная публикация (webhook.ts).
+ * Новых слов здесь нет — это те же правила, что уже решают «по делу»:
+ * codeRelevance (курс, оплата, чек, просьба позвать человека) и ABOUT_COURSE
+ * из offTopicGuard (цена, сомони, запись, доступ). Ошибка в сторону «клиент»
+ * не страшна: лишний ответ знакомой лучше, чем молчание покупательнице.
+ */
+export function showsCourseInterest(textRaw: string | null | undefined): boolean {
+  const text = (textRaw ?? "").trim();
+  if (!text) return false;
+  return codeRelevance(text)?.cls === "on_topic" || ABOUT_COURSE.test(text);
 }
 
 /** Подозрение правил — не решение, а подсказка модели. */

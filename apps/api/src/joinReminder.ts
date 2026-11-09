@@ -3,6 +3,7 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { metaFailureKind } from "./messaging/metaErrors.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
+import { everTalkedWithShirin } from "./messaging/automation.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
 import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
 import { rememberInviteLink } from "./groupAccess.js";
@@ -143,7 +144,10 @@ async function sweep(): Promise<void> {
       select: { createdAt: true, text: true },
     });
     const pendingUncertain = (await prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null, accessDeliveryUncertainAt: { not: null } } })) > 0;
-    const windowOpen = !pendingUncertain &&
+    // Ширин хоть раз говорила с ней сама — клиентке не напоминаем никогда
+    // (владелец 09.11.2026); владелец узнаёт о ней ниже, как раньше.
+    const shirinTalked = await everTalkedWithShirin(contact);
+    const windowOpen = !pendingUncertain && !shirinTalked &&
       (contact.channel === "WEB" || (lastIn != null && (Date.now() - lastIn.createdAt.getTime()) / 3_600_000 < META_WINDOW_HOURS));
 
     // Пришедшая с сайта получает платформу при любом режиме (deliveryModeFor).
@@ -199,7 +203,9 @@ async function sweep(): Promise<void> {
     if (botToken && sisterChat) {
       const who = contact.username ? `@${contact.username}` : contact.igUserId;
       const linkNote = delivered && links.length > 0 ? " Ссылка доставлена." : "";
-      const note = uncertain ? "Доставка ссылки или напоминания неизвестна. Автоповтор остановлен; проверьте переписку вручную." : windowOpen
+      const note = uncertain ? "Доставка ссылки или напоминания неизвестна. Автоповтор остановлен; проверьте переписку вручную." : shirinTalked
+        ? "бот не напоминал: Ширин переписывалась с ней сама — напомните, если нужно."
+        : windowOpen
         ? delivered ? `бот напомнил.${linkNote}` : "Напоминание НЕ доставлено — нужна ручная помощь; оплаченный доступ сохранён."
         : `написать боту уже нельзя — окно Instagram закрыто.${linkNote}`;
       const where = mode === "web" ? "не открыл(а) уроки" : "не зашёл(шла) в группу";

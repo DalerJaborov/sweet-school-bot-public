@@ -6,6 +6,7 @@ import { deliberateSilenceSince } from "./ai/deliberateSilence.js";
 import { isPureThanks } from "./ai/reactions.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { healFalseTakeovers } from "./ai/takeoverHeal.js";
+import { humanTakeoverEndsAt, humanTakeoverActive } from "./messaging/automation.js";
 
 /**
  * СТОРОЖ ВХОДЯЩИХ: «БОТ ЗАМОЛЧАЛ» — САМЫЙ ТИХИЙ ИЗ ОТКАЗОВ.
@@ -145,7 +146,10 @@ export async function explainUnanswered(
   // «умного перехвата» — отдельная задача). Подозрительной считаем только паузу, причину
   // которой не видно: нет сообщения-причины или у него нет текста (вложение) — так выглядит
   // и ложное эхо нашей картинки. Одна тревога на паузу (ключ — mid причины).
-  if (contact.humanTakenOverAt) {
+  if (humanTakeoverEndsAt(contact) !== null) {
+    // Пауза после ответа Ширин временная (messaging/automation.ts). Кончилась — дальше работает сторож
+    // «без ответа» (unansweredWatch.ts): он сам ответит или предупредит владельца, дублировать его нечем.
+    if (!humanTakeoverActive(contact, now.getTime())) return { skip: true, why: "пауза после Ширин кончилась (дальше сторож без ответа)" };
     const cause = contact.humanTakeoverMid
       ? await prisma.message.findUnique({ where: { mid: contact.humanTakeoverMid } })
       : null;
@@ -167,7 +171,7 @@ export async function explainUnanswered(
     if (!ourMediaBefore) return { skip: true, why: "живая пауза хозяйки (фото или голос)" };
     return {
       skip: false,
-      reason: `бот на паузе с ${fmt(contact.humanTakenOverAt, await offsetMs())}, а причина паузы — сообщение без текста (вложение): возможно, это было наше же эхо`,
+      reason: `бот на паузе с ${fmt(cause?.createdAt ?? now, await offsetMs())}, а причина паузы — сообщение без текста (вложение): возможно, это было наше же эхо`,
       dedupeKey: `takeover:${contact.humanTakeoverMid ?? contactId}`,
     };
   }

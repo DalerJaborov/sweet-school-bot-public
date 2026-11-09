@@ -112,7 +112,10 @@ export async function releaseTakeoverCausedBy(contactId: string, mid: string): P
       direction: "OUT",
       byHuman: true,
       mid: { not: mid },
-      createdAt: { gte: contact.humanTakenOverAt },
+      // Instagram/Messenger: отметка паузы обновляется на КАЖДОМ эхе (пауза временная, webhook.ts::handleEcho),
+      // поэтому настоящий ответ Ширин мог быть РАНЬШЕ отметки, которую поставило наше же эхо: возвращаем
+      // отметку на её последний настоящий ответ. WhatsApp — как было.
+      ...(contact.channel === "INSTAGRAM" || contact.channel === "MESSENGER" ? {} : { createdAt: { gte: contact.humanTakenOverAt } }),
     },
     orderBy: { createdAt: "desc" },
   });

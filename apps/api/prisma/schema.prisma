@@ -205,6 +205,10 @@ model Contact {
   adSource             String?
   adCtwaClid           String?
   adReferralAt         DateTime?
+  /// Сторож «без ответа» (unansweredWatch.ts): когда в последний раз разобрали
+  /// ожидание этого человека (напомнили Ширин или ответил бот). Входящие
+  /// раньше этой отметки повторно не поднимаются — одно напоминание на ожидание.
+  unansweredAlertAt    DateTime?
   metaConversions      MetaConversion[]
   /// Ссылка с рекламы/блогера (SiteLink.id), по которой человек впервые пришёл
   /// на сайт. Ставится один раз, без внешнего ключа: строгое добавление
@@ -649,8 +653,19 @@ model Delivery {
 
 /// Обработанные комментарии — чтобы повторная доставка вебхука не слала второй ответ.
 model SeenComment {
-  commentId String   @id
-  createdAt DateTime @default(now())
+  commentId String    @id
+  createdAt DateTime  @default(now())
+  /// Автор комментария (Contact.id) — чтобы понять, ответили ли ему потом в директ.
+  contactId String?
+  /// Начало текста комментария — для напоминания Ширин.
+  text      String?
+  /// Чем кончилась обработка (funnel.ts::CommentOutcome): funnel, ai, emoji,
+  /// ai_off, budget… null — строка старше этой правки.
+  outcome   String?
+  /// Когда сторож напомнил о комментарии без ответа (один раз).
+  alertedAt DateTime?
+
+  @@index([outcome, createdAt])
 }
 
 /// Сырой лог сообщений учебной Telegram-группы (владелец 24.08.2026: хочет
