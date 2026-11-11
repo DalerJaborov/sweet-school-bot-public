@@ -107,9 +107,12 @@ export async function handleTelegramUpdate(rawBody: unknown, secretHeader: strin
     if (await secretOk(secretHeader)) {
       await handleChatMember(member).catch((err) => logError("telegram:chatMember", err));
     } else {
-      // Настоящие события о входе приходят от Telegram с верным секретом; чужой
-      // POST в журнал-ошибок не пишем (он будил владельца), только в лог процесса.
-      logWarn("telegram:webhook", "chat_member отклонён: неверный секрет заголовка");
+      // Настоящие события о входе приходят от Telegram с верным секретом. Если секрет
+      // не сошёлся — либо чужой POST, либо вебхук настроен криво и ученицы не получают
+      // доступ к группе: пишем в журнал (ревью 11.11.2026). Тревога владельцу — только
+      // если так идёт дольше 30 минут и не чаще раза в 6 часов (alertGate.ts), поэтому
+      // одиночный чужой POST никого не будит.
+      logError("telegram:webhook", new Error("chat_member отклонён: неверный секрет заголовка. Нажмите «Подключить вебхук» в Настройках"));
     }
     return;
   }

@@ -14,12 +14,14 @@ export type OwnerIntent =
   | { type: "unmute"; kinds: NotifyKind[] }
   | { type: "unmuteAll" }
   | { type: "whatOff" }
-  | { type: "ai"; on: boolean }
-  | { type: "freeze"; on: boolean }
-  | { type: "funnels"; on: boolean }
-  | { type: "comments"; on: boolean }
+  | { type: "askUnmute"; kinds: NotifyKind[] }
+  | { type: "ai"; on: false }
+  | { type: "freeze"; on: true }
+  | { type: "funnels"; on: false }
+  | { type: "comments"; on: false }
+  /** ВКЛЮЧЕНИЕ ответов клиентам — только через кнопку «Да, включить» (ревью 11.11.2026): одна фраза не должна оживить бота. */
+  | { type: "askBotOn"; what: "ai" | "freeze" | "funnels" | "comments" | "all" }
   | { type: "askBotOff" }
-  | { type: "botOn" }
   | { type: "menu" };
 
 function norm(text: string): string {
@@ -38,12 +40,12 @@ export function kindsInText(text: string): NotifyKind[] {
 }
 
 const NO_SEND =
-  /(^| )(не (присылай|присылать|отправляй|отправлять|шли|слать|пиши|писать|показывай|показывать|уведомляй|уведомлять|беспокой)|хватит (присылать|слать|писать|отправлять)|перестан\w+ (присылать|слать|писать|отправлять)|больше не (присылай|присылать|пиши|писать|отправляй))/;
+  /(^| )(не (присылай|присылать|отправляй|отправлять|шли|слать|пиши|писать|показывай|показывать|уведомляй|уведомлять|беспокой)|хватит (присылать|слать|писать|отправлять)|перестан[\p{L}]+ (присылать|слать|писать|отправлять)|больше не (присылай|присылать|пиши|писать|отправляй))(?![\p{L}])/u;
 const TURN_OFF = /(^| )(выключи|отключи|убери|вырубь|заглуши|останови|остановить|выключить|отключить|стоп|хватит)( |$)/;
 const TURN_ON = /(^| )(включи|включить|запусти|запустить|верни|вернуть|возобнови|продолжи|сними|снять|разреши)( |$)/;
 const NOTIF_WORD = /уведомлен|сообщен|присыл|такое|это |этого|такие|нотификаци/;
 const BOT_WORD = /(^| )(бот|бота|боту|ботом|бот-?а)( |$)/;
-const AI_WORD = /(^| )(ии|ai|ответы|ответ|автоответ\w*|помощник\w*|консультант\w*)( |$)|нейросет/;
+const AI_WORD = /(^| )(ии|ai|ответы|ответ|автоответ[\p{L}]*|помощник[\p{L}]*|консультант[\p{L}]*)( |$)|нейросет/u;
 const FUNNEL_WORD = /воронк|рилс|рекламу|рекламн/;
 const PAUSE_WORD = /пауз/;
 const COMMENT_WORD = /комментар|коммент/;
@@ -53,7 +55,7 @@ export function parseOwnerCommand(raw: string): OwnerIntent | null {
   if (!t || t.length > 160) return null;
 
   if (/^(меню|menu|управление|кнопки|пульт)$/.test(t)) return { type: "menu" };
-  if (/что (у меня )?выключено|какие (уведомлен\w+ )?(у меня )?выключен|что я выключил|покажи выключенное/.test(t))
+  if (/что (у меня )?выключено|какие (уведомлен[\p{L}]+ )?(у меня )?выключен|что я выключил|покажи выключенное/u.test(t))
     return { type: "whatOff" };
 
   const off = TURN_OFF.test(t) || NO_SEND.test(t);
@@ -65,26 +67,26 @@ export function parseOwnerCommand(raw: string): OwnerIntent | null {
   const notifish = NOTIF_WORD.test(t);
   if (botish && !(notifish && !BOT_WORD.test(t))) {
     if (PAUSE_WORD.test(t)) {
-      if (/сними|снять|убери|выключи|отключи|продолжи|возобнови|без пауз/.test(t)) return { type: "freeze", on: false };
+      if (/сними|снять|убери|выключи|отключи|продолжи|возобнови|без пауз/.test(t)) return { type: "askBotOn", what: "freeze" };
       if (/постав|включи|на пауз|сделай|нужна/.test(t) || /(^| )пауза( |$)/.test(t)) {
         return FUNNEL_WORD.test(t) ? { type: "funnels", on: false } : { type: "freeze", on: true };
       }
     }
     if (COMMENT_WORD.test(t)) {
       if (off || /не отвечай/.test(t)) return { type: "comments", on: false };
-      if (on) return { type: "comments", on: true };
+      if (on) return { type: "askBotOn", what: "comments" };
     }
     if (FUNNEL_WORD.test(t)) {
       if (off) return { type: "funnels", on: false };
-      if (on) return { type: "funnels", on: true };
+      if (on) return { type: "askBotOn", what: "funnels" };
     }
     if (/не отвечай( людям| клиентам| им| больше)?$/.test(t) || (AI_WORD.test(t) && off && !BOT_WORD.test(t)))
       return { type: "ai", on: false };
-    if (AI_WORD.test(t) && on && !BOT_WORD.test(t)) return { type: "ai", on: true };
+    if (AI_WORD.test(t) && on && !BOT_WORD.test(t)) return { type: "askBotOn", what: "ai" };
     if (BOT_WORD.test(t)) {
       // «не отправляй бот ...» без уведомлений — всё равно про бота
       if (off) return { type: "askBotOff" };
-      if (on) return { type: "botOn" };
+      if (on) return { type: "askBotOn", what: "all" };
     }
   }
 
@@ -98,8 +100,13 @@ export function parseOwnerCommand(raw: string): OwnerIntent | null {
     return kinds.length > 0 ? { type: "mute", kinds } : { type: "askMute" };
   }
   if (on || /(^| )(присылай|отправляй|пиши)( |$)/.test(t)) {
+    // «верни доступ @имя» — про человека, а не про уведомления: такое не наша команда.
+    if (/@/.test(t)) return null;
     const kinds = kindsInText(t);
-    if (kinds.length > 0 && (notifish || on || /присылай|отправляй|пиши/.test(t))) return { type: "unmute", kinds };
+    const clearlyNotifications = notifish || /(^| )(присылай|отправляй|пиши)( |$)/.test(t);
+    if (kinds.length > 0 && clearlyNotifications) return { type: "unmute", kinds };
+    // Без слов «уведомления/присылай» фраза неоднозначна («верни доступ», «включи оплаты») — переспросим кнопкой.
+    if (kinds.length > 0) return { type: "askUnmute", kinds };
     if (/обратно|уведомлен|как раньше|назад/.test(t)) return { type: "unmuteAll" };
   }
   return null;

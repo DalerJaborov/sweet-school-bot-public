@@ -14,7 +14,7 @@ vi.mock("../../src/telegram.js", async () => {
   return { ...actual, sendTelegramMessage: (...a: unknown[]) => sendTelegramMessageMock(...a) };
 });
 
-import { techChatIds, summaryChatIds, trustedChatIds } from "../../src/telegram.js";
+import { chatsForKind, summaryChatIds, trustedChatIds } from "../../src/telegram.js";
 import { shouldSendAlert, ALERT_SUSTAINED_MS, ALERT_COOLDOWN_MS } from "../../src/alertGate.js";
 import { notifyOwnerDirect, notifyOwnerOfSystemError, notifyFunnelGaveUp } from "../../src/systemAlerts.js";
 
@@ -46,17 +46,17 @@ afterEach(() => {
 
 describe("получатели", () => {
   it("техника: по умолчанию только владелец (чат сводок), сестра — никогда", async () => {
-    expect(await techChatIds()).toEqual([OWNER]);
+    expect(await chatsForKind("failure")).toEqual([OWNER]);
   });
 
   it("техника: явная настройка telegramTechChatId главнее", async () => {
     settings.telegramTechChatId = "111, 222";
-    expect(await techChatIds()).toEqual(["111", "222"]);
+    expect(await chatsForKind("failure")).toEqual(["111", "222"]);
   });
 
   it("техника: нет ни настройки, ни чата сводок — никому", async () => {
     delete settings.telegramReportChatId;
-    expect(await techChatIds()).toEqual([]);
+    expect(await chatsForKind("failure")).toEqual([]);
   });
 
   it("карточки чеков (summaryChatIds): ТОЛЬКО владелец, Ширин — никогда (11.11.2026)", async () => {
@@ -67,7 +67,7 @@ describe("получатели", () => {
 
   it("telegramAdminIds (вход в панель) не влияет на получателей", async () => {
     settings.telegramAdminIds = "999";
-    expect(await techChatIds()).toEqual([OWNER]);
+    expect(await chatsForKind("failure")).toEqual([OWNER]);
     expect(await summaryChatIds()).not.toContain("999");
   });
 
@@ -105,20 +105,20 @@ describe("технические уведомления идут только в
     const t0 = 1_800_000_000_000;
     const spy = vi.spyOn(Date, "now");
     spy.mockReturnValue(t0);
-    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai:reply", "ECONNREFUSED");
     spy.mockReturnValue(t0 + 10 * 60_000);
-    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai:reply", "ECONNREFUSED");
     expect(sendTelegramMessageMock).not.toHaveBeenCalled(); // мост перезапустился — тишина
 
     spy.mockReturnValue(t0 + 20 * 60_000);
-    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai:reply", "ECONNREFUSED");
     spy.mockReturnValue(t0 + 31 * 60_000);
-    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai:reply", "ECONNREFUSED");
     expect(sendTelegramMessageMock).toHaveBeenCalledTimes(1);
     expect(sendTelegramMessageMock.mock.calls[0]?.[1]).toBe(OWNER);
 
     spy.mockReturnValue(t0 + 41 * 60_000);
-    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai:reply", "ECONNREFUSED");
     expect(sendTelegramMessageMock).toHaveBeenCalledTimes(1); // дедуп 6 часов
   });
 });

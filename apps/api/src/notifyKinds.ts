@@ -11,7 +11,7 @@
  * (файл читают и telegram.ts, и панель, и разбор команд, цикла быть не должно).
  * Новый вид уведомления сначала заводится тут, иначе sendKind его не отправит.
  */
-export const NOTIFY_KINDS = ["payment", "offline", "day", "review", "human", "failure", "security"] as const;
+export const NOTIFY_KINDS = ["payment", "offline", "day", "decision", "review", "human", "failure", "security"] as const;
 export type NotifyKind = (typeof NOTIFY_KINDS)[number];
 
 /** Кто вообще может получать вид: «main» — владелец и Ширин, «owner» — только владелец. */
@@ -27,6 +27,13 @@ export type NotifyKindInfo = {
   words: RegExp;
   /** Первый значок сообщения — чтобы понять, про какой вид ответ реплаем на сообщение. */
   icons: string[];
+  /**
+   * НЕВЫКЛЮЧАЕМЫЙ ВИД (ревью 11.11.2026). Карточка, где без нажатия кнопки дело
+   * встаёт (чек на проверку, «разрешить перенос телефона»): выключишь — деньги и
+   * доступ молча зависнут. Приходит только владельцу, кнопки «🔕» под ней нет,
+   * в списках тумблеров и командах «не присылай» её нет.
+   */
+  locked?: boolean;
 };
 
 export const NOTIFY_INFO: Record<NotifyKind, NotifyKindInfo> = {
@@ -51,11 +58,19 @@ export const NOTIFY_INFO: Record<NotifyKind, NotifyKindInfo> = {
     words: /итог|сводк|вечерн|отчёт|отчет/i,
     icons: ["🌙"],
   },
-  review: {
-    label: "Чек, который бот не смог проверить",
-    hint: "Карточка с кнопками «Подтвердить» и «Отклонить». Только настоящие сомнения.",
+  decision: {
+    label: "Нужно ваше решение",
+    hint: "Чек, который бот не смог проверить, и перенос на новый телефон: нужна кнопка. Выключить нельзя.",
     audience: "owner",
-    words: /чек|проверк|карточк/i,
+    words: /(?!)/,
+    icons: [],
+    locked: true,
+  },
+  review: {
+    label: "Чек: один скриншот у двух людей",
+    hint: "Текстовое сообщение без кнопок: доступ не выдан, проверьте вручную.",
+    audience: "owner",
+    words: /чек|проверк|скриншот/i,
     icons: ["🧾"],
   },
   human: {
@@ -81,6 +96,9 @@ export const NOTIFY_INFO: Record<NotifyKind, NotifyKindInfo> = {
   },
 };
 
+/** Виды, которые человек вправе выключать (без невыключаемых). */
+export const MUTABLE_KINDS: readonly NotifyKind[] = NOTIFY_KINDS.filter((k) => !NOTIFY_INFO[k].locked);
+
 export function isNotifyKind(v: string): v is NotifyKind {
   return (NOTIFY_KINDS as readonly string[]).includes(v);
 }
@@ -91,6 +109,8 @@ export function kindFromMessageText(text: string): NotifyKind | null {
   for (const k of NOTIFY_KINDS) {
     if (NOTIFY_INFO[k].icons.some((i) => t.startsWith(i))) return k;
   }
+  // Карточка с кнопками — невыключаемая; текст «Чек требует проверки: этот же скриншот…» — обычный вид.
+  if (/^Чек требует проверки(?:\n|$)/.test(t)) return "decision";
   if (/^Чек требует проверки/.test(t)) return "review";
   return null;
 }

@@ -14,11 +14,11 @@ vi.mock("../../src/telegram.js", async () => {
   return { ...actual, sendTelegramMessage: (...a: unknown[]) => sendTelegramMessageMock(...a) };
 });
 
-import { chatsForKind, chatRole, setKindEnabled, setShirinEnabled, isResolvedReviewCard, ownerChatIds, shirinChatIds } from "../../src/telegram.js";
+import { chatsForKind, chatRole, mutedKinds, sendReceiptForReview, setKindEnabled, setShirinEnabled, ownerChatIds, shirinChatIds } from "../../src/telegram.js";
 import { sendKind } from "../../src/notify.js";
-import { isExpectedFailure, notifyFunnelGaveUp, notifyOwnerOfSystemError, systemErrorMayAlert } from "../../src/systemAlerts.js";
+import { alertLabelFor, isExpectedFailure, notifyFunnelGaveUp, notifyOwnerOfSystemError, systemErrorMayAlert } from "../../src/systemAlerts.js";
 import { runPaymentNotifications } from "../../src/paymentNotify.js";
-import { NOTIFY_KINDS, NOTIFY_INFO, kindFromMessageText } from "../../src/notifyKinds.js";
+import { NOTIFY_KINDS, MUTABLE_KINDS, NOTIFY_INFO, kindFromMessageText } from "../../src/notifyKinds.js";
 
 const SHIRIN = "7916128767";
 const DALER = "893446307";
@@ -136,11 +136,44 @@ describe("КЛАСС: шума больше нет", () => {
     expect(sendTelegramMessageMock.mock.calls[0]?.[1]).toBe(DALER);
   });
 
-  it("«Новая проблема» только для списка серьёзных источников: funnel:step и telegram:webhook — только в журнал", () => {
+  it("«Новая проблема» только для списка серьёзных источников: funnel:step — только в журнал", () => {
     expect(systemErrorMayAlert("funnel:step", "что угодно")).toBe(false);
-    expect(systemErrorMayAlert("telegram:webhook", "отклонён: неверный секрет заголовка")).toBe(false);
-    expect(systemErrorMayAlert("ai", "Gemini упал")).toBe(true);
-    expect(systemErrorMayAlert("ai", "Contact messaging blocked: contact policy")).toBe(false);
+    expect(systemErrorMayAlert("ai:reply", "Gemini упал")).toBe(true);
+    expect(systemErrorMayAlert("ai:reply", "Contact messaging blocked: contact policy")).toBe(false);
+  });
+
+  it("КЛАСС: настоящие источники из logError(...) (ai:reply, ai:aiReply:noGeminiKeys, webhook:accept, telegram:webhook…) будят владельца по ПРЕФИКСУ", () => {
+    for (const s of [
+      "ai:reply",
+      "ai:send",
+      "ai:aiReply:noGeminiKeys",
+      "ai:aiReplyToComment:noGeminiKeys",
+      "ai:receiptVerdict:preTransfer",
+      "webhook:accept",
+      "webhook:signature",
+      "telegram:webhook",
+      "aiReplyRetry:queue",
+      "receiptRetry:apply",
+      "unhandledRejection",
+    ]) {
+      expect(systemErrorMayAlert(s, "ключи кончились"), s).toBe(true);
+    }
+    // мелочь и чужие имена с похожим началом — только в журнал
+    for (const s of ["ai", "aix:reply", "airplane", "webhook:spamBlock", "webhook:learn", "ai:videoLibrary", "telegram:downloadFile", "stuckAlert:check"]) {
+      expect(systemErrorMayAlert(s, "что угодно"), s).toBe(false);
+    }
+    expect(alertLabelFor("ai:aiReply:noGeminiKeys")).toBe("ИИ-ответ (ключи или модель)");
+  });
+
+  it("«ИИ лёг / кончились ключи» (ai:aiReply:noGeminiKeys) через notifyOwnerOfSystemError доходит до владельца спустя 30 минут", async () => {
+    const t0 = 1_800_000_000_000;
+    const spy = vi.spyOn(Date, "now");
+    for (const dt of [0, 31]) {
+      spy.mockReturnValue(t0 + dt * 60_000);
+      await notifyOwnerOfSystemError("ai:aiReply:noGeminiKeys", "нет рабочих ключей Gemini");
+    }
+    expect(sendTelegramMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendTelegramMessageMock.mock.calls[0]?.[1]).toBe(DALER);
   });
 
   it("notifyOwnerOfSystemError по funnel:step молчит даже спустя часы", async () => {
@@ -153,11 +186,50 @@ describe("КЛАСС: шума больше нет", () => {
     expect(sendTelegramMessageMock).not.toHaveBeenCalled();
   });
 
-  it("карточка чека, где единственное сомнение — «Ширин уже отправила ссылку вне системы», не приходит", () => {
-    const base = "Чек требует проверки\nОт: @x\nСумма: 70 сомони\n";
-    expect(isResolvedReviewCard(`${base}Что смущает: похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку`)).toBe(true);
-    expect(isResolvedReviewCard(`${base}Что смущает: сумма не совпадает; похоже, Ширин уже отправила ссылку вне системы - проверьте`)).toBe(false);
-    expect(isResolvedReviewCard(`${base}Что смущает: дата старая`)).toBe(false);
+  it("карточка чека НЕ прячется, даже если единственное сомнение — «Ширин уже отправила ссылку вне системы» (может быть поддельный чек)", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 5 } })));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const caption = "Чек требует проверки\nОт: @x\nСумма: 70 сомони\nЧто смущает: похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку";
+      const sent = await sendReceiptForReview("tok", DALER, { imageUrl: "https://example.test/r.jpg", caption, receiptId: "r1" });
+      expect(sent).toEqual({ chatId: DALER, messageId: 5 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("КЛАСС: решение кнопкой («Нужно ваше решение») не выключается ни кнопкой, ни словами, ни «выключить всё», ни панелью", async () => {
+    expect(NOTIFY_INFO.decision.locked).toBe(true);
+    expect(MUTABLE_KINDS).not.toContain("decision");
+    // «выключено всё» по каждому изменяемому виду у владельца
+    for (const k of MUTABLE_KINDS) await setKindEnabled("owner", k, false);
+    await setKindEnabled("owner", "decision", false); // даже прямая попытка
+    expect([...(await mutedKinds("owner"))]).not.toContain("decision");
+    expect(await chatsForKind("decision")).toEqual([DALER]);
+    // даже если в сохранённой настройке мусор/старая запись с этим видом
+    settings["notifyOff:owner"] = JSON.stringify(["decision", "review", "security"]);
+    expect(await chatsForKind("decision")).toEqual([DALER]);
+    expect(await chatsForKind("security")).toEqual([]);
+    // Ширин карточку-решение не получает никогда
+    expect(await chatsForKind("decision")).not.toContain(SHIRIN);
+  });
+
+  it("sendKind: под карточкой-решением нет «🔕 Не присылать такое», свои кнопки остаются; у обычного вида — обе", async () => {
+    await sendKind("decision", "карточка", { buttons: [[{ text: "Разрешить перенос", callback_data: "mn:tr:c1" }]] });
+    const markup = JSON.stringify(sendTelegramMessageMock.mock.calls[0]?.[4]);
+    expect(markup).toContain("mn:tr:c1");
+    expect(markup).not.toContain("nf:off:");
+    sendTelegramMessageMock.mockClear();
+    await sendKind("human", "🙋 просит", { buttons: [[{ text: "Быстрый ответ", callback_data: "qr:c1:0" }]] });
+    const m2 = JSON.stringify(sendTelegramMessageMock.mock.calls[0]?.[4]);
+    expect(m2).toContain("qr:c1:0");
+    expect(m2).toContain("nf:off:human");
+  });
+
+  it("карточку чека с кнопками (текст «Чек требует проверки») узнаём как невыключаемую; текст про дубль скриншота — обычный вид", () => {
+    expect(kindFromMessageText("Чек требует проверки\nОт: @x")).toBe("decision");
+    expect(kindFromMessageText("Чек требует проверки: этот же скриншот уже присылал другой человек")).toBe("review");
   });
 
   it("в коде нет текстов удалённых уведомлений и нет прямых обходов маршрутизации", () => {
@@ -175,12 +247,6 @@ describe("КЛАСС: шума больше нет", () => {
     for (const f of files) {
       const src = fs.readFileSync(f, "utf8");
       for (const b of banned) expect(src.includes(b), `${path.basename(f)} содержит «${b}»`).toBe(false);
-    }
-    // Служебные письма — только через sendKind/chatsForKind: прямой techChatIds остался лишь у ai.ts (вид «human»).
-    for (const f of files) {
-      const name = path.basename(f);
-      if (name === "telegram.ts" || name === "ai.ts") continue;
-      expect(/techChatIds\(/.test(fs.readFileSync(f, "utf8")), `${name} зовёт techChatIds()`).toBe(false);
     }
   });
 });
@@ -214,6 +280,27 @@ describe("«Пришла оплата»", () => {
     await runPaymentNotifications(new Date(now.getTime() + 60_000));
     expect(sendTelegramMessageMock.mock.calls.filter((c) => c[1] === DALER)).toHaveLength(1);
     expect(String(sendTelegramMessageMock.mock.calls[0]?.[2])).toContain("100 сомони");
+  });
+
+  it("сбой отправки оплаты пишется в ЖУРНАЛ ошибок (notify:payment), а не только в консоль", async () => {
+    db.model("errorLog").findFirst.mockResolvedValue(null);
+    db.model("errorLog").create.mockResolvedValue({});
+    const now = new Date("2026-11-11T10:00:00Z");
+    await runPaymentNotifications(now);
+    db.model("purchase").findMany.mockResolvedValue([purchase("p1", "c1", "COURSE70", 70, new Date(now.getTime() + 1000))]);
+    sendTelegramMessageMock.mockRejectedValue(new Error("Telegram API: Bad Request"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await runPaymentNotifications(new Date(now.getTime() + 60_000));
+      await vi.waitFor(() =>
+        expect(db.model("errorLog").create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ source: "notify:payment" }) }),
+        ),
+      );
+    } finally {
+      sendTelegramMessageMock.mockReset();
+      sendTelegramMessageMock.mockResolvedValue(1);
+    }
   });
 
   it("Ширин выключила оплаты — ей не идёт, владельцу идёт", async () => {

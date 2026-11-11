@@ -31,22 +31,37 @@ describe("простые слова владельца → действие", ()
     ["выключи бота", { type: "askBotOff" }],
     ["не пиши клиентам", { type: "askBotOff" }],
     ["выключи ии", { type: "ai", on: false }],
-    ["включи ии", { type: "ai", on: true }],
-    ["включи бота", { type: "botOn" }],
+    ["включи ии", { type: "askBotOn", what: "ai" }],
+    ["включи бота", { type: "askBotOn", what: "all" }],
+    ["верни бота", { type: "askBotOn", what: "all" }],
     ["пауза", { type: "freeze", on: true }],
-    ["сними паузу", { type: "freeze", on: false }],
+    ["сними паузу", { type: "askBotOn", what: "freeze" }],
     ["выключи воронку", { type: "funnels", on: false }],
-    ["включи воронку", { type: "funnels", on: true }],
+    ["включи воронку", { type: "askBotOn", what: "funnels" }],
+    ["включи ответы под комментариями", { type: "askBotOn", what: "comments" }],
     ["поставь воронку на паузу", { type: "funnels", on: false }],
     ["не отвечай под комментариями", { type: "comments", on: false }],
     ["что у меня выключено", { type: "whatOff" }],
     ["включи обратно", { type: "unmuteAll" }],
-    ["включи оплаты", { type: "unmute", kinds: ["payment"] }],
+    ["включи оплаты", { type: "askUnmute", kinds: ["payment"] }],
+    ["включи уведомления про оплаты", { type: "unmute", kinds: ["payment"] }],
+    ["присылай мне оплаты", { type: "unmute", kinds: ["payment"] }],
     ["меню", { type: "menu" }],
   ];
   for (const [text, expected] of cases) {
     it(`«${text}»`, () => expect(parseOwnerCommand(text)).toEqual(expected));
   }
+  it("«не пишите» / «не пишет» — слова с продолжением не ловятся как «не пиши»", () => {
+    for (const t of ["не пишите мне про оплаты", "не пишет в сообщения", "не присылаете оплаты"]) {
+      expect(parseOwnerCommand(t), t).toBeNull();
+    }
+    expect(parseOwnerCommand("не пиши мне про оплаты")).toEqual({ type: "mute", kinds: ["payment"] });
+    expect(parseOwnerCommand("перестань присылать оплаты")).toEqual({ type: "mute", kinds: ["payment"] });
+  });
+  it("«верни доступ @имя» — про человека, а не про уведомления: не включает вид «безопасность»", () => {
+    expect(parseOwnerCommand("верни доступ @anna")).toBeNull();
+    expect(parseOwnerCommand("верни доступ")).toEqual({ type: "askUnmute", kinds: ["security"] });
+  });
   it("обычная речь и вопросы ученицам — не команда", () => {
     for (const t of ["Спасибо, Малика!", "Выдай ссылку @anna", "привет", "курс 70 сомони, пришлите реквизиты", ""]) {
       expect(parseOwnerCommand(t), t).toBeNull();
@@ -107,6 +122,27 @@ describe("чат: слова и кнопки", () => {
     expect(String(sendTelegramMessage.mock.calls[0]?.[2])).toContain("только владелец");
     await handleOwnerWords(dm("выключи ии", DALER), "tok", DALER);
     expect(settings.aiEnabled).toBe("false");
+  });
+
+  it("«включи бота» / «включи ии» / «сними паузу» ничего не включают, а спрашивают кнопкой «Да, включить»", async () => {
+    settings.aiEnabled = "false";
+    settings.botFrozen = "true";
+    for (const t of ["включи бота", "включи ии", "сними паузу"]) {
+      sendWithMarkup.mockClear();
+      expect(await handleOwnerWords(dm(t, DALER), "tok", DALER)).toBe(true);
+      expect(JSON.stringify(sendWithMarkup.mock.calls[0]?.[3]), t).toContain("Да, включить");
+    }
+    expect(settings.aiEnabled).toBe("false");
+    expect(settings.botFrozen).toBe("true");
+  });
+
+  it("пересланное сообщение не разбирается как команда («не пиши клиентам» из чужого текста)", async () => {
+    const fwd = { ...dm("не присылай мне оплаты", DALER), forward_origin: { type: "user" }, forward_date: 1_800_000_000 };
+    expect(await handleOwnerWords(fwd, "tok", DALER)).toBe(false);
+    expect((await chatsForKind("payment")).sort()).toEqual([DALER, SHIRIN].sort());
+    for (const extra of [{ forward_from: { id: 1 } }, { forward_sender_name: "Скрыто" }, { forward_date: 1 }]) {
+      expect(await handleOwnerWords({ ...dm("выключи бота", DALER), ...extra }, "tok", DALER)).toBe(false);
+    }
   });
 
   it("ответ реплаем на чужое сообщение (вопрос ученицы) — не команда", async () => {

@@ -17,6 +17,13 @@ const MAIN: MainSummary = {
 };
 
 describe("Сегодня: главное сверху", () => {
+  it("новые данные с сервера обновляют тумблеры (бота выключили из Telegram)", () => {
+    const { rerender } = render(<MainSummaryBlock main={MAIN} onGetLink={() => undefined} />);
+    expect((screen.getByTestId("switch-bot-ai") as HTMLInputElement).checked).toBe(true);
+    rerender(<MainSummaryBlock main={{ ...MAIN, bot: { ...MAIN.bot, ai: false } }} onGetLink={() => undefined} />);
+    expect((screen.getByTestId("switch-bot-ai") as HTMLInputElement).checked).toBe(false);
+  });
+
   it("деньги, оплаты, офлайн-записи, последние события и кнопка «Получить ссылку» на виду", () => {
     const onGetLink = vi.fn();
     render(<MainSummaryBlock main={MAIN} onGetLink={onGetLink} />);

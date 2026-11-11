@@ -46,7 +46,7 @@ import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { buildStyleBlock } from "./ai/styleLearning.js";
-import { techChatIds, sendMessageWithButtons } from "./telegram.js";
+import { sendKind } from "./notify.js";
 import { getQuickReplies } from "./quickReplies.js";
 import { saveReceiptImage } from "./upload.js";
 import { generateWithFallback, thinkingConfigFor } from "./gemini.js";
@@ -812,25 +812,21 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
       logError("ai:callOwnerToChat:silence", err);
     });
 
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
-  if (!botToken || !chatId) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   // Кнопки быстрых ответов под уведомлением — чтобы не набирать с телефона,
   // достаточно нажать (см. quickReplies.ts, telegramWebhook.ts ветка `qr:`).
   // callback_data короткий (индекс, не текст) — лимит Telegram 64 байта.
   const quickReplies = await getQuickReplies();
   const buttons = quickReplies.map((qr, i) => [{ text: qr.label, callback_data: `qr:${contact.id}:${i}` }]);
-  await sendMessageWithButtons(
-    botToken,
-    chatId,
+  await sendKind(
+    "human",
     `🙋 ${who} просит поговорить с вами лично.
 
 Последнее сообщение: «${lastText.slice(0, 200)}»
 
 Бот замолчал, ждёт вас. Можно ответить одной из кнопок ниже — уйдёт клиенту сразу:`,
-    buttons,
-  );
+    { buttons },
+  ).catch((err) => logError("ai:callOwnerToChat:notify", err));
 }
 
 /** Сколько бот молчит, если клиент попросил живого человека. Дольше обычной паузы:

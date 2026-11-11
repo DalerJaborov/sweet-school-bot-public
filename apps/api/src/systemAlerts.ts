@@ -44,18 +44,39 @@ export function isExpectedFailure(message: string | null | undefined): boolean {
  * сообщения, Telegram отклонил чужой запрос. Список короткий и осознанный.
  */
 const ALERTING_SOURCES: Record<string, string> = {
-  ai: "ИИ-ответ",
+  // Источники в журнале — «область:операция[:подробность]», поэтому сверяем по ПРЕФИКСУ
+  // (раньше сверка была на полное совпадение, и ни один настоящий источник не подходил:
+  // «ИИ лёг / кончились ключи» владельцу не приходило — ревью 11.11.2026).
+  "ai:reply": "ИИ-ответ",
+  "ai:send": "отправка ответа ИИ",
+  "ai:aiReply": "ИИ-ответ (ключи или модель)",
+  "ai:aiReplyToComment": "ИИ-ответ на комментарий",
+  "ai:recovery": "восстановление ответа ИИ",
+  "ai:receiptVerdict": "проверка чека ИИ",
+  "webhook:accept": "приём сообщения",
   "webhook:message": "приём сообщения",
   "webhook:comment": "приём комментария",
   "webhook:signature": "подпись вебхука Meta",
-  "aiReplyRetry:queue": "очередь повторов ИИ",
-  "receiptRetry": "проверка чеков",
+  "webhook:invalidPayload": "приём вебхука Meta",
+  "webhook:rescue": "спасение пропущенных сообщений",
+  "telegram:webhook": "вход в Telegram-бота",
+  aiReplyRetry: "очередь повторов ИИ",
+  receiptRetry: "повтор проверки чеков",
+  receiptCheck: "проверка чеков",
   unhandledRejection: "необработанная ошибка",
   uncaughtException: "падение процесса",
 };
 
+/** Подпись источника, если он из списка: само имя или имя + «:подробность». Иначе null. */
+export function alertLabelFor(source: string): string | null {
+  for (const [prefix, label] of Object.entries(ALERTING_SOURCES)) {
+    if (source === prefix || source.startsWith(`${prefix}:`)) return label;
+  }
+  return null;
+}
+
 export function systemErrorMayAlert(source: string, message: string): boolean {
-  return source in ALERTING_SOURCES && !isExpectedFailure(message);
+  return alertLabelFor(source) !== null && !isExpectedFailure(message);
 }
 
 export async function notifyOwnerOfSystemError(source: string, message: string): Promise<void> {
@@ -63,7 +84,7 @@ export async function notifyOwnerOfSystemError(source: string, message: string):
     if (!systemErrorMayAlert(source, message)) return;
     // Только если сбой длится дольше 30 минут (перезапуск моста, обрыв сети — не
     // повод будить); один и тот же сбой — не чаще раза в 6 часов.
-    await sendKind("failure", `⚠️ Новая проблема в боте (${ALERTING_SOURCES[source]})\n${message.slice(0, 300)}`, {
+    await sendKind("failure", `⚠️ Новая проблема в боте (${alertLabelFor(source) ?? source})\n${message.slice(0, 300)}`, {
       dedupeKey: `sys:${source}:${message.slice(0, 80)}`,
       sustainedMs: ALERT_SUSTAINED_MS,
       // В журнал нельзя: тот снова позвал бы этот же крючок, и при мёртвом Telegram получился бы бесконечный круг.

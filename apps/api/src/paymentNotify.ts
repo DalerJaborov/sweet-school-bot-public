@@ -75,7 +75,9 @@ export async function runPaymentNotifications(now = new Date()): Promise<number>
     const manual = list.every((p) => p.source === "MANUAL") ? " (выдано вручную)" : "";
     const text = `💰 Оплата: ${who} — ${courses}, ${sum} сомони${manual}`;
     try {
-      sent += await sendKind("payment", text, { quietErrors: true });
+      // Сбой отправки идёт в журнал ошибок (sendKind → logError), а не только в консоль:
+      // деньги — главное, пропавшее сообщение об оплате должно быть видно в панели.
+      sent += await sendKind("payment", text);
     } catch (err) {
       logError("paymentNotify", err);
     }

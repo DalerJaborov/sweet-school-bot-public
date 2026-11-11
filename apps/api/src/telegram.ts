@@ -86,23 +86,6 @@ export async function downloadTelegramFile(
   }
 }
 
-/**
- * КАРТОЧКА ЧЕКА, КОТОРАЯ НЕ ПОВОД ТРЕВОЖИТЬ (11.11.2026, фильтр маршрутизации).
- *
- * Если единственное, что «смущает», — «Ширин уже отправила ссылку вне системы»,
- * человек доступ получил: карточка с кнопками только пугала («Чек требует
- * проверки», хотя всё выдано). Такой чек остаётся в панели («Чеки» и «Сегодня»),
- * а в Telegram не приходит. Любое другое сомнение рядом с этим — карточка идёт.
- */
-const RESOLVED_DOUBTS = [/Ширин уже отправила ссылку вне системы/i];
-
-export function isResolvedReviewCard(caption: string): boolean {
-  const m = /Что смущает:[ ]*([^\n]*)/.exec(caption);
-  if (!m) return false;
-  const doubts = m[1].split(";").map((d) => d.trim()).filter(Boolean);
-  return doubts.length > 0 && doubts.every((d) => RESOLVED_DOUBTS.some((re) => re.test(d)));
-}
-
 /** Карточка сомнительного чека владельцу — с фото и двумя кнопками. Дёргаем
  *  ТОЛЬКО когда бот сам не разобрался (не читается сумма/дата или подозрение на
  *  подделку): чёткий чек уходит клиенту автоматически, владельца не трогаем. */
@@ -121,7 +104,6 @@ export async function sendReceiptForReview(
     closeAsDuplicate?: boolean;
   },
 ): Promise<{ chatId: string; messageId: number } | null> {
-  if (isResolvedReviewCard(input.caption)) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const inline_keyboard = input.needsCourseChoice
@@ -472,15 +454,6 @@ export async function ownerChatIds(): Promise<string[]> {
   return [...new Set(ids.filter((id) => id && id !== shirinSelf))];
 }
 
-/**
- * Прежнее имя. Остался один вызывающий — ai.ts (клиент просит живого человека),
- * поэтому это получатели вида «human»: только владелец и только пока вид не
- * выключен. Новый код берёт chatsForKind(вид) или sendKind (notify.ts).
- */
-export async function techChatIds(): Promise<string[]> {
-  return chatsForKind("human");
-}
-
 /** Чаты Ширин: личный чат хозяйки и её Telegram-id, без чатов владельца. */
 export async function shirinChatIds(): Promise<string[]> {
   const owners = new Set(await ownerChatIds());
@@ -510,7 +483,11 @@ export async function mutedKinds(role: ChatRole): Promise<Set<NotifyKind>> {
   try {
     const raw = await getSetting(OFF_KEY[role]);
     const list = raw ? (JSON.parse(raw) as unknown) : [];
-    return new Set(Array.isArray(list) ? list.filter((v): v is NotifyKind => typeof v === "string" && isNotifyKind(v)) : []);
+    return new Set(
+      Array.isArray(list)
+        ? list.filter((v): v is NotifyKind => typeof v === "string" && isNotifyKind(v) && !NOTIFY_INFO[v].locked)
+        : [],
+    );
   } catch {
     return new Set();
   }
@@ -518,6 +495,7 @@ export async function mutedKinds(role: ChatRole): Promise<Set<NotifyKind>> {
 
 /** Включить/выключить вид для роли. Виды «только владельцу» Ширин не трогает. */
 export async function setKindEnabled(role: ChatRole, kind: NotifyKind, enabled: boolean): Promise<void> {
+  if (NOTIFY_INFO[kind].locked) return; // «нужно решение»: выключить нельзя
   const off = await mutedKinds(role);
   if (enabled) off.delete(kind);
   else off.add(kind);
@@ -526,6 +504,8 @@ export async function setKindEnabled(role: ChatRole, kind: NotifyKind, enabled: 
 
 /** Кому слать вид уведомления прямо сейчас — с учётом ролей, «только владельцу» и выключенных видов. */
 export async function chatsForKind(kind: NotifyKind): Promise<string[]> {
+  // Невыключаемый вид (карточка с кнопкой решения): только владелец и мимо любых «выключено».
+  if (NOTIFY_INFO[kind].locked) return ownerChatIds();
   const out: string[] = [];
   if (!(await mutedKinds("owner")).has(kind)) out.push(...(await ownerChatIds()));
   if (NOTIFY_INFO[kind].audience === "main" && (await shirinEnabled()) && !(await mutedKinds("shirin")).has(kind)) {
@@ -535,11 +515,12 @@ export async function chatsForKind(kind: NotifyKind): Promise<string[]> {
 }
 
 /**
- * Карточки сомнительных чеков и тексты про них — ТОЛЬКО владельцу (11.11.2026,
- * раньше уходили и Ширин). Имя осталось прежним ради вызывающих мест.
+ * Карточки сомнительных чеков с кнопками — ТОЛЬКО владельцу и без возможности
+ * выключить (вид «decision»): иначе чек и оплата молча зависнут. Имя осталось
+ * прежним ради вызывающих мест.
  */
 export async function summaryChatIds(): Promise<string[]> {
-  return chatsForKind("review");
+  return chatsForKind("decision");
 }
 
 /** Все свои чаты: кому разрешено нажимать кнопки и писать боту. */

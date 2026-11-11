@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type BotState, type MainSummary } from "../api";
 import { money, plural, timeAgo } from "../format";
 import { Switch } from "./Switch";
@@ -17,6 +17,12 @@ import { toast } from "./Toast";
 export function MainSummaryBlock(props: { main: MainSummary; onGetLink: () => void }) {
   const { main, onGetLink } = props;
   const [bot, setBot] = useState<BotState>(main.bot);
+  // Свежие данные с сервера (панель опрашивает «Сегодня», бота могли выключить из Telegram)
+  // перекрывают локальную копию: иначе тумблеры показывали бы устаревшее состояние.
+  const { ai, frozen, comments, funnelsOn, funnelsPaused } = main.bot;
+  useEffect(() => {
+    setBot({ ai, frozen, comments, funnelsOn, funnelsPaused });
+  }, [ai, frozen, comments, funnelsOn, funnelsPaused]);
 
   async function act(action: string, optimistic: Partial<BotState>) {
     const before = bot;

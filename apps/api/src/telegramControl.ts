@@ -11,7 +11,7 @@ import {
   shirinEnabled,
   type ChatRole,
 } from "./telegram.js";
-import { NOTIFY_INFO, NOTIFY_KINDS, isNotifyKind, kindFromMessageText, type NotifyKind } from "./notifyKinds.js";
+import { NOTIFY_INFO, MUTABLE_KINDS, isNotifyKind, kindFromMessageText, type NotifyKind } from "./notifyKinds.js";
 import {
   describeBotState,
   getBotState,
@@ -150,7 +150,7 @@ async function refreshControlMenu(
 
 /** Какие виды роль вообще может получать: Ширин — только «главное». */
 function kindsFor(role: ChatRole): NotifyKind[] {
-  return NOTIFY_KINDS.filter((k) => role === "owner" || NOTIFY_INFO[k].audience === "main");
+  return MUTABLE_KINDS.filter((k) => role === "owner" || NOTIFY_INFO[k].audience === "main");
 }
 
 async function notifyMenu(role: ChatRole): Promise<{ text: string; markup: Markup }> {
@@ -204,6 +204,7 @@ export async function handleControlCallback(botToken: string, query: ControlQuer
   if (data.startsWith("nf:")) {
     const toggle = /^nf:t:([a-z]+)$/.exec(data);
     const mute = /^nf:off:([a-z]+)$/.exec(data);
+    const unmute = /^nf:on:([a-z]+)$/.exec(data);
     if (data === "nf:sh") {
       if (role !== "owner") return void (await answerCallback(botToken, query.id, "Это может только владелец"));
       await setShirinEnabled(!(await shirinEnabled()));
@@ -220,6 +221,12 @@ export async function handleControlCallback(botToken: string, query: ControlQuer
       await setKindEnabled(role, k, (await mutedKinds(role)).has(k));
       await answerCallback(botToken, query.id, (await mutedKinds(role)).has(k) ? "Выключено" : "Включено");
       return showNotifyMenu(botToken, chatId, role, query);
+    }
+    if (unmute && isNotifyKind(unmute[1]) && kindsFor(role).includes(unmute[1])) {
+      await setKindEnabled(role, unmute[1], true);
+      await answerCallback(botToken, query.id, "Включено");
+      await sendTelegramMessage(botToken, chatId, `✅ Включил: ${labels([unmute[1]])}.`).catch((err) => logError("telegramControl:unmute", err));
+      return;
     }
     if (mute && isNotifyKind(mute[1])) {
       await answerCallback(botToken, query.id, "Не буду присылать");
@@ -292,13 +299,45 @@ type TgMessageLike = {
   text?: string;
   chat?: { id?: number | string; type?: string };
   reply_to_message?: { text?: string };
+  // Пересланное сообщение — чужие слова, не команда нам (поля Bot API, старые и новые).
+  forward_origin?: unknown;
+  forward_date?: number;
+  forward_from?: unknown;
+  forward_from_chat?: unknown;
+  forward_sender_name?: string;
 };
+
+export function isForwardedMessage(m: TgMessageLike): boolean {
+  return Boolean(m.forward_origin || m.forward_date || m.forward_from || m.forward_from_chat || m.forward_sender_name);
+}
 
 async function askWhichMute(botToken: string, chatId: string, role: ChatRole): Promise<void> {
   const rows = kindsFor(role).map((k) => [{ text: NOTIFY_INFO[k].label, callback_data: `nf:off:${k}` }]);
   rows.push([{ text: "Выключить всё", callback_data: "nf:offall" }]);
   rows.push(CANCEL);
   await sendWithMarkup(botToken, chatId, "Что именно больше не присылать?", { inline_keyboard: rows });
+}
+
+const BOT_ON_QUESTION: Record<"ai" | "freeze" | "funnels" | "comments" | "all", { text: string; data: string }> = {
+  ai: { text: "Включить ответы людям?", data: "ct:ai:1" },
+  freeze: { text: "Снять паузу? Бот снова начнёт отвечать.", data: "ct:fr:0" },
+  funnels: { text: "Вернуть воронку с рилсов?", data: "ct:fn:1" },
+  comments: { text: "Включить ответы под комментариями?", data: "ct:cm:1" },
+  all: { text: "Включить бота полностью: ответы людям, воронку, снять паузу?", data: "ct:all:1" },
+};
+
+/** Включение — только после нажатия кнопки: фраза словами могла быть сказана не про это. */
+async function askBotOn(botToken: string, chatId: string, what: keyof typeof BOT_ON_QUESTION): Promise<void> {
+  const q = BOT_ON_QUESTION[what];
+  await sendWithMarkup(botToken, chatId, q.text, {
+    inline_keyboard: [[{ text: "Да, включить", callback_data: q.data }], CANCEL],
+  });
+}
+
+async function askUnmute(botToken: string, chatId: string, kinds: NotifyKind[]): Promise<void> {
+  await sendWithMarkup(botToken, chatId, `Включить уведомления: ${labels(kinds)}?`, {
+    inline_keyboard: [...kinds.map((k) => [{ text: `Да, включить: ${NOTIFY_INFO[k].label}`, callback_data: `nf:on:${k}` }]), CANCEL],
+  });
 }
 
 async function askWhichBotOff(botToken: string, chatId: string): Promise<void> {
@@ -321,7 +360,7 @@ async function applyOwnerIntent(
   replyKind: NotifyKind | null,
 ): Promise<void> {
   const say = (t: string) => sendTelegramMessage(botToken, chatId, t);
-  const botIntent = ["ai", "freeze", "funnels", "comments", "askBotOff", "botOn", "menu"].includes(intent.type);
+  const botIntent = ["ai", "freeze", "funnels", "comments", "askBotOff", "askBotOn", "menu"].includes(intent.type);
   if (botIntent && role !== "owner") {
     await say("Управлять ботом может только владелец.");
     return;
@@ -338,6 +377,12 @@ async function applyOwnerIntent(
       const allowed = intent.kinds.filter((k) => kindsFor(role).includes(k));
       for (const k of allowed) await setKindEnabled(role, k, true);
       await say(allowed.length > 0 ? `✅ Включил: ${labels(allowed)}.` : "Такого вам и не приходило.");
+      return;
+    }
+    case "askUnmute": {
+      const allowed = intent.kinds.filter((k) => kindsFor(role).includes(k));
+      if (allowed.length === 0) await say("Такого вам и не приходило.");
+      else await askUnmute(botToken, chatId, allowed);
       return;
     }
     case "unmuteAll": {
@@ -358,31 +403,22 @@ async function applyOwnerIntent(
       return;
     }
     case "ai":
-      await setAiReplies(intent.on);
-      return sendControlMenu(botToken, chatId, `✔ Ответы людям ${intent.on ? "включены" : "выключены"}.`);
+      await setAiReplies(false);
+      return sendControlMenu(botToken, chatId, "✔ Ответы людям выключены.");
     case "freeze":
-      await setFrozen(intent.on);
-      return sendControlMenu(
-        botToken,
-        chatId,
-        intent.on ? "✔ Пауза включена: воронка работает, остальное стоит." : "✔ Пауза снята.",
-      );
+      await setFrozen(true);
+      return sendControlMenu(botToken, chatId, "✔ Пауза включена: воронка работает, остальное стоит.");
     case "funnels": {
-      const n = intent.on ? await resumeFunnels() : await pauseFunnels();
-      return sendControlMenu(
-        botToken,
-        chatId,
-        n > 0 ? `✔ Воронка ${intent.on ? "снова работает" : "на паузе"}.` : "Воронки уже в нужном состоянии.",
-      );
+      const n = await pauseFunnels();
+      return sendControlMenu(botToken, chatId, n > 0 ? "✔ Воронка на паузе." : "Воронки уже в нужном состоянии.");
     }
     case "comments":
-      await setCommentReplies(intent.on);
-      return sendControlMenu(botToken, chatId, `✔ Ответы под комментариями ${intent.on ? "включены" : "выключены"}.`);
+      await setCommentReplies(false);
+      return sendControlMenu(botToken, chatId, "✔ Ответы под комментариями выключены.");
     case "askBotOff":
       return askWhichBotOff(botToken, chatId);
-    case "botOn":
-      await startEverything();
-      return sendControlMenu(botToken, chatId, "✔ Всё включено: ответы, пауза снята, воронка.");
+    case "askBotOn":
+      return askBotOn(botToken, chatId, intent.what);
     case "menu":
       return sendControlMenu(botToken, chatId);
   }
@@ -397,6 +433,7 @@ async function applyOwnerIntent(
 export async function handleOwnerWords(message: TgMessageLike, botToken: string, chatId: string): Promise<boolean> {
   const text = (message.text ?? "").trim();
   if (!text || text.startsWith("/")) return false;
+  if (isForwardedMessage(message)) return false;
   const replyText = message.reply_to_message?.text;
   const replyKind = replyText ? kindFromMessageText(replyText) : null;
   if (replyText && !replyKind) return false;

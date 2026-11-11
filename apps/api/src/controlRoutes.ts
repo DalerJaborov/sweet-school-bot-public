@@ -12,7 +12,7 @@ import {
   startEverything,
   stopEverything,
 } from "./botControl.js";
-import { NOTIFY_INFO, NOTIFY_KINDS, isNotifyKind } from "./notifyKinds.js";
+import { NOTIFY_INFO, MUTABLE_KINDS, isNotifyKind } from "./notifyKinds.js";
 import { mutedKinds, setKindEnabled, setShirinEnabled, shirinEnabled } from "./telegram.js";
 import { resetTodayCache } from "./today.js";
 
@@ -91,7 +91,7 @@ async function notificationsResponse() {
   const [owner, shirin, shirinOn] = await Promise.all([mutedKinds("owner"), mutedKinds("shirin"), shirinEnabled()]);
   return {
     shirinEnabled: shirinOn,
-    kinds: NOTIFY_KINDS.map((id) => ({
+    kinds: MUTABLE_KINDS.map((id) => ({
       id,
       label: NOTIFY_INFO[id].label,
       hint: NOTIFY_INFO[id].hint,
@@ -124,6 +124,10 @@ controlRouter.put("/admin/v1/notifications", async (req, res) => {
     const { role, kind, enabled } = parsed.data;
     if (!isNotifyKind(kind)) {
       res.status(400).json({ error: "Неизвестный вид уведомления" });
+      return;
+    }
+    if (NOTIFY_INFO[kind].locked) {
+      res.status(400).json({ error: "Это выключить нельзя: без вашей кнопки дело встанет" });
       return;
     }
     if (role === "shirin" && NOTIFY_INFO[kind].audience !== "main") {

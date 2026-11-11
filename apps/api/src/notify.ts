@@ -1,7 +1,7 @@
 import { getSetting, logError } from "./db.js";
 import { sendTelegramMessage, chatsForKind } from "./telegram.js";
 import { shouldSendAlert } from "./alertGate.js";
-import type { NotifyKind } from "./notifyKinds.js";
+import { NOTIFY_INFO, type NotifyKind } from "./notifyKinds.js";
 
 /**
  * ОДНА ДВЕРЬ ДЛЯ УВЕДОМЛЕНИЙ В TELEGRAM (11.11.2026).
@@ -29,7 +29,16 @@ export type SendKindOptions = {
   sustainedMs?: number;
   /** Ошибки отправки — в консоль, а не в журнал: журнал сам зовёт уведомление о сбоях, получился бы круг. */
   quietErrors?: boolean;
+  /** Свои кнопки под сообщением (быстрые ответы, «Разрешить перенос»); «🔕» добавляется ниже, кроме невыключаемых видов. */
+  buttons?: { text: string; callback_data: string }[][];
 };
+
+type Markup = { inline_keyboard: { text: string; callback_data: string }[][] };
+
+function markupFor(kind: NotifyKind, buttons: SendKindOptions["buttons"]): Markup | undefined {
+  const rows = [...(buttons ?? []), ...(NOTIFY_INFO[kind].locked ? [] : muteMarkup(kind).inline_keyboard)];
+  return rows.length > 0 ? { inline_keyboard: rows } : undefined;
+}
 
 /** Отправить уведомление нужного вида. Возвращает, скольким чатам ушло. */
 export async function sendKind(kind: NotifyKind, text: string, opts: SendKindOptions = {}): Promise<number> {
@@ -49,7 +58,7 @@ export async function sendKind(kind: NotifyKind, text: string, opts: SendKindOpt
   let sent = 0;
   for (const chatId of recipients) {
     try {
-      await sendTelegramMessage(botToken, chatId, text, undefined, muteMarkup(kind));
+      await sendTelegramMessage(botToken, chatId, text, undefined, markupFor(kind, opts.buttons));
       sent += 1;
     } catch (err) {
       if (opts.quietErrors) console.error(`[notify:${kind}] ${err instanceof Error ? err.message : String(err)}`);
