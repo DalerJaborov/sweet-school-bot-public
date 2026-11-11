@@ -70,6 +70,44 @@ export function menuKeyboard(role: ChatRole = "owner"): Record<string, unknown> 
   return { keyboard: rows.filter((r) => r.length > 0), resize_keyboard: true, is_persistent: true };
 }
 
+/**
+ * КНОПКИ БЕЗ «/menu» (владелец 12.11.2026: «почему кнопок нет, я должен писать меню?»).
+ * Постоянная клавиатура Telegram появляется в чате только с сообщением бота, а раньше
+ * её присылал лишь ответ на /start или /menu. Теперь при запуске сервера бот сам
+ * присылает клавиатуру владельцу и Ширин — один раз на версию меню (MENU_VERSION),
+ * чтобы выкатки не плодили сообщения. Только личные чаты (id > 0): в группе
+ * клавиатуру увидели бы все. Плюс команда /menu в кнопке «Меню» Telegram.
+ */
+export const MENU_VERSION = "2026-11-11";
+export const MENU_PUSHED_SETTING = "telegramMenuPushedVersion";
+
+export async function pushMenuOnce(botToken: string, ids: { owner: string[]; shirin: string[] }): Promise<number> {
+  if ((await getSetting(MENU_PUSHED_SETTING)) === MENU_VERSION) return 0;
+  const targets: [string, ChatRole][] = [
+    ...ids.owner.map((id): [string, ChatRole] => [id, "owner"]),
+    ...ids.shirin.map((id): [string, ChatRole] => [id, "shirin"]),
+  ].filter(([id]) => /^\d+$/u.test(id));
+  let sent = 0;
+  for (const [id, role] of [...new Map(targets)]) {
+    const ok = await sendWithMarkup(
+      botToken,
+      id,
+      "Кнопки бота — внизу чата: «Сегодня», «Выдать ссылку» и другие. Пропали — нажмите значок с квадратиками рядом с полем ввода.",
+      menuKeyboard(role),
+    );
+    if (ok) sent += 1;
+  }
+  // Отметку ставим, только если дошло хоть до одного: сбой сети — повторим при следующем запуске.
+  if (sent > 0) await setSetting(MENU_PUSHED_SETTING, MENU_VERSION);
+  await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ commands: [{ command: "menu", description: "Кнопки бота" }], scope: { type: "all_private_chats" } }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch((err) => logError("telegramMenu:setMyCommands", err));
+  return sent;
+}
+
 /** Какие группы можно пригласить: только те, у которых в настройках есть ID. */
 async function inviteGroups(): Promise<{ key: string; label: string; chatId: string }[]> {
   const defs = [

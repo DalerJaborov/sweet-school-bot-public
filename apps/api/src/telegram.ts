@@ -464,6 +464,11 @@ export async function shirinChatIds(): Promise<string[]> {
   return [...new Set(raw.filter((id) => !owners.has(id)))];
 }
 
+/** Кому при запуске прислать кнопки бота (telegramMenu.ts::pushMenuOnce). */
+export async function menuChats(): Promise<{ owner: string[]; shirin: string[] }> {
+  return { owner: await ownerChatIds(), shirin: await shirinChatIds() };
+}
+
 export async function chatRole(chatId: string): Promise<ChatRole | null> {
   if ((await ownerChatIds()).includes(chatId)) return "owner";
   if ((await shirinChatIds()).includes(chatId)) return "shirin";
