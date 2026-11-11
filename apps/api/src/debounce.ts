@@ -18,6 +18,7 @@
  * между инстансами, которые решает Postgres-версия в основной CRM.
  */
 import { logError } from "./db.js";
+import { releaseInboxSlot } from "./webhookInbox.js";
 
 /**
  * 11.11.2026 (владелец): «быстро, но дождаться пачки». Разбор 48 часов: люди
@@ -160,5 +161,9 @@ export function debounceMessage<TRescued>(
   timer.unref?.();
 
   pending.set(contactId, { completions, texts, firstAt, attachments: merged, rescued: mergedRescued, timer, onFlush } as Pending<unknown>);
+  // Сообщение уже в окне — дальше только ожидание. Место в потолке очереди вебхуков
+  // отдаём сразу, иначе следующий пузырь этого же человека ждал бы места и не попал
+  // бы в это окно (webhookInbox.ts, повторное ревью 11.11.2026).
+  releaseInboxSlot();
   return done;
 }

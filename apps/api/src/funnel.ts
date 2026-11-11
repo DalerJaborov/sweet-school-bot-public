@@ -77,10 +77,13 @@ async function retryOrGiveUp(delivery: Delivery, contact: Contact, err: unknown)
   if (failCount >= RETRY_MAX_ATTEMPTS || !canRetryMetaFailure(err)) {
     // Условно: цепочку, которую за время отправки отменили (клиент написал сам),
     // не превращаем обратно в «сбой» и не воскрешаем.
-    await prisma.delivery.updateMany({
+    const failed = await prisma.delivery.updateMany({
       where: { id: delivery.id, state: "ACTIVE" },
       data: { state: "FAILED", failCount, lastError: message, nextRunAt: null },
     });
+    // Цепочку уже отменили (клиент написал сам, Ширин ответила) — она не «сдалась»,
+    // тревогу «воронка N раз не смогла» не шлём (повторное ревью 11.11.2026).
+    if ((failed?.count ?? 0) === 0) return;
     const who = contact.username ? `@${contact.username}` : contact.igUserId;
     await notifyFunnelGaveUp(who, failCount, message);
     return;
@@ -267,7 +270,9 @@ export async function startFunnel(
   });
   // Отложенная воронка (settleDeferredFunnel): строка — не прошлый проход, а место,
   // занятое на время ответа ИИ. Захват атомарный — два хода не отправят меню дважды.
-  const claimDeferred = Boolean(opts.claimDeferredId && previous?.id === opts.claimDeferredId && previous?.lastError === FUNNEL_DEFERRED);
+  const claimDeferred = Boolean(
+    opts.claimDeferredId && previous?.id === opts.claimDeferredId && previous?.lastError === FUNNEL_DEFERRED,
+  );
   if (previous && !claimDeferred) {
     if (funnel.repeatAfterDays <= 0) return false; // повтор запрещён совсем
     const daysSince = (Date.now() - previous.createdAt.getTime()) / 86_400_000;
@@ -535,10 +540,7 @@ export async function settleDeferredFunnel(contactId: string, since: Date): Prom
  * паузе («всё, кроме воронки»), ключи есть — и сообщение не пустяк («рахмат», «ок»).
  * Иначе отмена оставляла человека без следующего шага и без ответа.
  */
-export async function clientMessageStopsFunnel(
-  text: string | null,
-  attachments: readonly unknown[],
-): Promise<boolean> {
+export async function clientMessageStopsFunnel(text: string | null, attachments: readonly unknown[]): Promise<boolean> {
   const meaningful = text?.trim() ? !isTrivialMessage(text) : attachments.length > 0;
   if (!meaningful) return false;
   if (await isBotFrozen()) return false;
@@ -582,7 +584,14 @@ async function markFunnelSkipped(funnel: Funnel, contact: Contact, reason: strin
   const where = { funnelId_contactId: { funnelId: funnel.id, contactId: contact.id } };
   try {
     await prisma.delivery.create({
-      data: { funnelId: funnel.id, contactId: contact.id, state: "DONE", nextOrder: 0, nextRunAt: null, lastError: reason },
+      data: {
+        funnelId: funnel.id,
+        contactId: contact.id,
+        state: "DONE",
+        nextOrder: 0,
+        nextRunAt: null,
+        lastError: reason,
+      },
     });
   } catch (err) {
     if ((err as { code?: string })?.code !== "P2002") {

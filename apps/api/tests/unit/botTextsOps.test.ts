@@ -24,11 +24,16 @@ type Ops = {
   MARKER: string;
   BACKUP_PREFIX: string;
   planBotTexts(db: PrismaClient): Promise<Plan>;
-  main(opts: { db: PrismaClient; apply: boolean; log?: (s: string) => void }): Promise<{ plan: Plan; backupKey: string | null }>;
+  main(opts: {
+    db: PrismaClient;
+    apply: boolean;
+    log?: (s: string) => void;
+  }): Promise<{ plan: Plan; backupKey: string | null }>;
 };
 let ops: Ops;
 
-const OLD_PROMPT = "Старый промпт владельца.\nАдрес: Рудаки 156, доми Додо Пицца.\nhttps://www.instagram.com/stories/highlights/1234567890/";
+const OLD_PROMPT =
+  "Старый промпт владельца.\nАдрес: Рудаки 156, доми Додо Пицца.\nhttps://www.instagram.com/stories/highlights/1234567890/";
 
 beforeAll(async () => {
   execSync("npx prisma db push --skip-generate --accept-data-loss", {

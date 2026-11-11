@@ -18,15 +18,16 @@ vi.mock("../../src/whatsapp/transport.js", () => ({
 }));
 
 import { explicitOfflineInterest } from "../../src/ai/offlineHandoff.js";
-import { stripServiceMarkers, humanizeBotText } from "../../src/ai/humanText.js";
-import { cleanAutomatedReply, REPLY_POLICY_INSTRUCTION } from "../../src/ai/replyPolicy.js";
+import { stripServiceMarkers, humanizeBotText, SERVICE_MARKERS } from "../../src/ai/humanText.js";
+import { cleanAutomatedReply, cleanGeneratedReply, REPLY_POLICY_INSTRUCTION } from "../../src/ai/replyPolicy.js";
 import { withoutRepeats, accessCovers, regenerateAfterFilters, type RepeatContext } from "../../src/ai/repeatGuard.js";
 import { sendAttachmentToContact, mediaAlreadySent, SENT_MEDIA_PREFIX } from "../../src/messaging/send.js";
 import { sendWhatsAppAttachment } from "../../src/whatsapp/transport.js";
 import { DEFAULT_OFFLINE_FACTS, DEFAULT_OFFLINE_ADDRESS_TG } from "../../src/ai/offlineFacts.js";
 import { ALWAYS_RULES } from "../../src/ai/prompts.js";
 import { guardReply } from "../../src/ai/offTopicGuard.js";
-import { processWebhookInbox, MAX_PARALLEL_HANDLERS, type InboxEvent } from "../../src/webhookInbox.js";
+import { processWebhookInbox, releaseInboxSlot, MAX_PARALLEL_HANDLERS, type InboxEvent } from "../../src/webhookInbox.js";
+import { debounceMessage, flushAllPending } from "../../src/debounce.js";
 import * as database from "../../src/db.js";
 
 let db: PrismaMock;
@@ -42,10 +43,13 @@ afterEach(() => {
 });
 
 describe("п.2 ложный офлайн", () => {
-  it.each(["адрес сайта какой?", "сайтатон адресш чи?", "Як савол назди шумо дорам", "ба назди ман фиристед", "Скиньте адрес страницы в инстаграме"])(
-    "«%s» — не офлайн",
-    (q) => expect(explicitOfflineInterest(q)).toBe(false),
-  );
+  it.each([
+    "адрес сайта какой?",
+    "сайтатон адресш чи?",
+    "Як савол назди шумо дорам",
+    "ба назди ман фиристед",
+    "Скиньте адрес страницы в инстаграме",
+  ])("«%s» — не офлайн", (q) => expect(explicitOfflineInterest(q)).toBe(false));
   it.each([
     "Офлайн курс кай?",
     "очно можно?",
@@ -59,16 +63,26 @@ describe("п.2 ложный офлайн", () => {
 });
 
 describe("п.3 служебные метки клиенту не уходят", () => {
-  it("любая [МЕТКА] в скобках режется, обычные скобки и «[1]» — нет", () => {
+  it("режутся только известные метки модели; «[21 РЕЦЕПТ]», «[ДАР НАЗДИ МАН]», «[1]» остаются", () => {
     expect(stripServiceMarkers("Сейчас уточню [ASK_SHIRIN]")).toBe("Сейчас уточню");
     expect(stripServiceMarkers("[NO_REPLY]")).toBe("");
-    expect(stripServiceMarkers("Курс [OFFLINE CARD] 70 сомони")).toBe("Курс 70 сомони");
     expect(stripServiceMarkers("[ask_shirin] хорошо")).toBe("хорошо");
+    expect(stripServiceMarkers("Курс [21 РЕЦЕПТ] 70 сомони")).toBe("Курс [21 РЕЦЕПТ] 70 сомони");
+    expect(stripServiceMarkers("Нажмите [ДАР НАЗДИ МАН]")).toBe("Нажмите [ДАР НАЗДИ МАН]");
     expect(stripServiceMarkers("Шаг [1] из меню (если удобно)")).toBe("Шаг [1] из меню (если удобно)");
   });
-  it("обе двери бота режут метки: cleanAutomatedReply и humanizeBotText", () => {
-    expect(cleanAutomatedReply("Хуб [ASK_SHIRIN]")).toBe("Хуб");
-    expect(humanizeBotText("Хуб [МЕТКА]", { keepTajikLetters: false })).toBe("Хуб");
+  it("метки режет только чистка ответа модели; тексты воронки и шаблоны владельца не трогаются", () => {
+    expect(cleanGeneratedReply("Хуб [ASK_SHIRIN]")).toBe("Хуб");
+    expect(cleanAutomatedReply("Курс [21 РЕЦЕПТ] 70 сомони")).toBe("Курс [21 РЕЦЕПТ] 70 сомони");
+    expect(humanizeBotText("Нажмите [ДАР НАЗДИ МАН]", { keepTajikLetters: false })).toBe("Нажмите [ДАР НАЗДИ МАН]");
+  });
+  it("сторож: каждая метка [ЗАГЛАВНЫМИ_С_ПОДЧЁРКИВАНИЕМ] из промптов и скрипта текстов есть в списке SERVICE_MARKERS", () => {
+    const root = path.resolve(__dirname, "../../../..");
+    const files = ["apps/api/src/ai/prompts.ts", "apps/api/src/ai/replyPolicy.ts", "apps/api/src/ai.ts", "ops/2026-11-11-bot-texts.mjs"];
+    const found = new Set<string>();
+    for (const f of files) for (const m of fs.readFileSync(path.join(root, f), "utf8").matchAll(/\[([A-Z][A-Z]*_[A-Z_]+)\]/g)) found.add(m[1]);
+    expect(found.size).toBeGreaterThan(0);
+    for (const marker of found) expect(SERVICE_MARKERS as readonly string[], marker).toContain(marker);
   });
 });
 
@@ -95,7 +109,9 @@ describe("п.4 реквизиты оплатившему и чек — по ку
   });
   it("после фильтра пусто — повторный ход; снова пусто или ошибка — null (зовём человека), [NO_REPLY] — законное молчание", async () => {
     const ctx = { ...base, receiptAskedRecently: true };
-    expect(await regenerateAfterFilters(["receipt_ask"], async () => "Курс 70 сомони, навсегда", ctx, "ru")).toBe("Курс 70 сомони, навсегда");
+    expect(await regenerateAfterFilters(["receipt_ask"], async () => "Курс 70 сомони, навсегда", ctx, "ru")).toBe(
+      "Курс 70 сомони, навсегда",
+    );
     expect(await regenerateAfterFilters(["receipt_ask"], async () => "Пришлите чек, пожалуйста", ctx, "ru")).toBeNull();
     expect(await regenerateAfterFilters(["receipt_ask"], async () => null, ctx, "ru")).toBeNull();
     expect(await regenerateAfterFilters(["receipt_ask"], async () => "[NO_REPLY]", ctx, "ru")).toBe("");
@@ -111,7 +127,9 @@ describe("п.7 WhatsApp: отправленное вложение помнит�
     db.model("contact").findUnique.mockResolvedValue(fakeContact({ channel: "WHATSAPP" }));
     await sendAttachmentToContact(wa, "https://example.test/menu.jpg", "image");
     expect(sendWhatsAppAttachment).toHaveBeenCalledWith(wa, "https://example.test/menu.jpg", "image");
-    expect(db.model("message").create).toHaveBeenCalledWith({ data: { contactId: "contact-1", direction: "OUT", text: "", mid: "wa:att-1" } });
+    expect(db.model("message").create).toHaveBeenCalledWith({
+      data: { contactId: "contact-1", direction: "OUT", text: "", mid: "wa:att-1" },
+    });
     expect(db.model("message").updateMany).toHaveBeenCalledWith({
       where: { mid: "wa:att-1", direction: "OUT" },
       data: { payload: `${SENT_MEDIA_PREFIX}https://example.test/menu.jpg` },
@@ -147,8 +165,17 @@ describe("п.10 бот не пишет о Ширин в третьем лице"
 
 describe("п.11 потолок параллельности очереди вебхуков", () => {
   it(`одновременно в работе не больше ${MAX_PARALLEL_HANDLERS}, остальные берутся по мере освобождения, ни одно не теряется`, async () => {
-    const ev = (mid: string): InboxEvent => ({ channel: "INSTAGRAM", selfId: "page", kind: "message", event: { sender: { id: mid }, message: { mid, text: mid } } });
-    const rows = Array.from({ length: 10 }, (_, i) => ({ id: `r${i}`, payload: JSON.stringify(ev(`m${i}`)), attempts: 0 }));
+    const ev = (mid: string): InboxEvent => ({
+      channel: "INSTAGRAM",
+      selfId: "page",
+      kind: "message",
+      event: { sender: { id: mid }, message: { mid, text: mid } },
+    });
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      id: `r${i}`,
+      payload: JSON.stringify(ev(`m${i}`)),
+      attempts: 0,
+    }));
     const claimed = new Set<string>();
     db.model("webhookInbox").findMany.mockImplementation(async (args: unknown) => {
       const take = (args as { take: number }).take;
@@ -190,5 +217,71 @@ describe("п.11 потолок параллельности очереди ве�
     await first;
     expect(peak).toBeLessThanOrEqual(MAX_PARALLEL_HANDLERS);
     expect(new Set(seen).size).toBe(rows.length);
+  });
+});
+
+describe("повторное ревью: потолок очереди держит только быструю часть", () => {
+  const ev = (contact: string, mid: string): InboxEvent => ({
+    channel: "INSTAGRAM",
+    selfId: "page",
+    kind: "message",
+    event: { sender: { id: contact }, message: { mid, text: mid } },
+  });
+  function queue(rows: { id: string; payload: string; attempts: number }[]) {
+    const claimed = new Set<string>();
+    db.model("webhookInbox").findMany.mockImplementation(async (args: unknown) => {
+      const take = (args as { take: number }).take;
+      return rows.filter((r) => !claimed.has(r.id)).slice(0, take);
+    });
+    db.model("webhookInbox").updateMany.mockImplementation(async (args: unknown) => {
+      const id = (args as { where: { id: string } }).where.id;
+      if (claimed.has(id)) return { count: 0 };
+      claimed.add(id);
+      return { count: 1 };
+    });
+  }
+  const tick = async (n = 4) => {
+    for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  it("обработчик отдал место (ждёт) — следующие события берутся сверх потолка, ни одно не стоит в очереди", async () => {
+    const rows = Array.from({ length: 3 * MAX_PARALLEL_HANDLERS }, (_, i) => ({ id: `r${i}`, payload: JSON.stringify(ev(`c${i}`, `m${i}`)), attempts: 0 }));
+    queue(rows);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const seen: string[] = [];
+    const done = processWebhookInbox(async (e) => {
+      seen.push((e.event.message as { mid: string }).mid);
+      releaseInboxSlot(); // дальше — только ожидание (окно дебаунса, пауза эха)
+      await gate;
+    });
+    await tick(10);
+    expect(seen).toHaveLength(rows.length);
+    release();
+    await done;
+  });
+
+  it("ГЛАВНОЕ: под нагрузкой (заняты все места) второй пузырь клиента всё равно попадает в его окно — один ответ на оба", async () => {
+    const others = Array.from({ length: MAX_PARALLEL_HANDLERS + 2 }, (_, i) => ({ id: `o${i}`, payload: JSON.stringify(ev(`busy${i}`, `busy${i}`)), attempts: 0 }));
+    const rows = [
+      { id: "x1", payload: JSON.stringify(ev("client-x", "Нархаш чанд?")), attempts: 0 },
+      ...others,
+      { id: "x2", payload: JSON.stringify(ev("client-x", "Ва кай сар мешавад?")), attempts: 0 },
+    ];
+    queue(rows);
+    const replies: { contact: string; text: string }[] = [];
+    const done = processWebhookInbox(async (e) => {
+      const contact = (e.event.sender as { id: string }).id;
+      const text = (e.event.message as { text: string }).text;
+      await debounceMessage(contact, text, [], [], async (merged) => {
+        replies.push({ contact, text: merged });
+      });
+    });
+    await tick(10);
+    await flushAllPending();
+    await done;
+    const forX = replies.filter((r) => r.contact === "client-x");
+    expect(forX).toHaveLength(1);
+    expect(forX[0].text).toBe("Нархаш чанд?\nВа кай сар мешавад?");
   });
 });

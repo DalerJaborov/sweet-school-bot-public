@@ -246,3 +246,24 @@ describe("ревью 11.11: когда сообщение клиента отм�
     expect(await clientMessageStopsFunnel(null, [{ kind: "image" }])).toBe(true);
   });
 });
+
+describe("повторное ревью: «воронка сдалась» — только если цепочку правда закрыли сбоем", () => {
+  it("отказ Meta, но цепочку уже отменили (клиент написал сам) — тревоги нет", async () => {
+    const { MetaDeliveryError } = await import("../../src/messaging/metaErrors.js");
+    db.model("delivery").findMany.mockResolvedValue([{ id: "d1", funnelId: "funnel-1", nextOrder: 21, failCount: 0, contact, funnel: fakeFunnel() }]);
+    db.model("funnelStep").findUnique.mockResolvedValue(fakeStep({ order: 21, text: "видео" }));
+    // захват — прошёл; запись FAILED — ничего не изменила (уже DONE после отмены)
+    db.model("delivery").updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    vi.mocked(sendToContact).mockRejectedValueOnce(new MetaDeliveryError("WINDOW", 400));
+    await runDueDeliveries();
+    expect(notifyFunnelGaveUp).not.toHaveBeenCalled();
+  });
+  it("та же ошибка на живой цепочке — тревога уходит, как раньше", async () => {
+    const { MetaDeliveryError } = await import("../../src/messaging/metaErrors.js");
+    db.model("delivery").findMany.mockResolvedValue([{ id: "d1", funnelId: "funnel-1", nextOrder: 21, failCount: 0, contact, funnel: fakeFunnel() }]);
+    db.model("funnelStep").findUnique.mockResolvedValue(fakeStep({ order: 21, text: "видео" }));
+    vi.mocked(sendToContact).mockRejectedValueOnce(new MetaDeliveryError("WINDOW", 400));
+    await runDueDeliveries();
+    expect(notifyFunnelGaveUp).toHaveBeenCalledTimes(1);
+  });
+});

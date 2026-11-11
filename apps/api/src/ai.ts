@@ -2,6 +2,7 @@ import { handleDeliveryChoiceReply, rememberDeliveryPreference } from "./course/
 import {
   replyPolicyIssues,
   cleanAutomatedReply,
+  cleanGeneratedReply,
   REPLY_POLICY_INSTRUCTION,
   ReplyPolicyError,
   CONTEXT_ONLY_AMOUNT,
@@ -669,7 +670,7 @@ export async function aiReply(
       // так же чужие. Особые буквы и тире правит уже дверь отправки (humanizeForContact):
       // голосу нужны буквы, тексту — по стилю собеседника.
       const beforeClean = replyText;
-      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanAutomatedReply(replyText)));
+      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanGeneratedReply(replyText)));
       // Реквизиты и «пришлите чек» — не чаще раза за 15 минут; оплатившему этот курс
       // чек не просим никогда; «чек приняли» без принятого чека не говорим (ai/repeatGuard.ts).
       let emptiedBy: string[] = beforeClean && !replyText ? ["cleanup"] : [];
@@ -692,8 +693,9 @@ export async function aiReply(
             const again = await generate(prompt + extra);
             if ("error" in again || !again.text) return null;
             if (again.text.trim() === "[NO_REPLY]") return again.text;
-            if (isAskShirin(again.text) || replyPolicyIssues(again.text, await trustedSalesFacts()).length > 0) return null;
-            return withoutStockTails(withoutAddressWords(cleanAutomatedReply(again.text)));
+            if (isAskShirin(again.text) || replyPolicyIssues(again.text, await trustedSalesFacts()).length > 0)
+              return null;
+            return withoutStockTails(withoutAddressWords(cleanGeneratedReply(again.text)));
           },
           repeatCtx ?? (await loadRepeatContext(contact.id, text)),
           language,
@@ -962,7 +964,7 @@ export async function aiReplyToComment(
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
     throw new ReplyPolicyError(issues);
   }
-  const clean = await humanizeForContact(contact.id, cleanAutomatedReply(result.text), [text]);
+  const clean = await humanizeForContact(contact.id, cleanGeneratedReply(result.text), [text]);
   if (!clean) return "no_reply";
   const mid = await withContactMessaging(contact.id, "reply", () =>
     sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),

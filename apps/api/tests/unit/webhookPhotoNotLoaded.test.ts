@@ -100,7 +100,9 @@ describe("Фото пришло, но не скачалось — честный
   });
 
   it("картинка спаслась — обычный путь, без специального ответа", async () => {
-    rescueIncomingImages.mockResolvedValue([{ buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" }]);
+    rescueIncomingImages.mockResolvedValue([
+      { buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" },
+    ]);
     await handleMessage(photoEvent);
     expect(sendToContact).not.toHaveBeenCalled();
     expect(debounceMessage).toHaveBeenCalledTimes(1);
@@ -114,9 +116,11 @@ describe("Фото пришло, но не скачалось — честный
   });
 });
 
-
 describe("incoming message claim", () => {
-  const voice: MessagingEvent = { sender: { id: "customer" }, message: { mid: "voice-mid", attachments: [{ type: "audio", payload: { url: "https://example.invalid/voice" } }] } };
+  const voice: MessagingEvent = {
+    sender: { id: "customer" },
+    message: { mid: "voice-mid", attachments: [{ type: "audio", payload: { url: "https://example.invalid/voice" } }] },
+  };
   it("does not transcribe a duplicate delivery", async () => {
     db.model("message").create.mockRejectedValue(Object.assign(new Error("duplicate"), { code: "P2002" }));
     await handleMessage(voice);
@@ -128,8 +132,13 @@ describe("incoming message claim", () => {
     expect(voiceToText).not.toHaveBeenCalled();
   });
   it("replays AI work after a crash/error following the successful Message insert", async () => {
-    const incoming: MessagingEvent = { sender: { id: "customer" }, message: { mid: "persisted-before-crash", text: "Какие курсы есть?" } };
-    debounceMessage.mockImplementation(async (_id, text, attachments, rescued, flush) => flush(text, attachments, rescued));
+    const incoming: MessagingEvent = {
+      sender: { id: "customer" },
+      message: { mid: "persisted-before-crash", text: "Какие курсы есть?" },
+    };
+    debounceMessage.mockImplementation(async (_id, text, attachments, rescued, flush) =>
+      flush(text, attachments, rescued),
+    );
     aiReply.mockRejectedValueOnce(new Error("failure after Message commit")).mockResolvedValue(undefined);
     await expect(handleMessage(incoming, undefined, "INSTAGRAM", true)).rejects.toThrow("failure after Message commit");
     db.model("message").create.mockRejectedValue(Object.assign(new Error("already persisted"), { code: "P2002" }));
@@ -145,13 +154,15 @@ describe("incoming message claim", () => {
   });
 });
 
-
 describe("delivery choice after human takeover", () => {
   it("routes a pending course choice to its evidence gate while ordinary AI stays silent", async () => {
     vi.mocked(upsertContact).mockResolvedValueOnce({ ...fakeContact(), humanTakenOverAt: new Date() } as never);
     vi.mocked(handleDeliveryChoiceReply).mockResolvedValueOnce(true);
     await handleMessage({ sender: { id: "customer" }, message: { mid: "choice", text: "Telegram есть" } });
-    expect(handleDeliveryChoiceReply).toHaveBeenCalledWith(expect.objectContaining({ humanTakenOverAt: expect.any(Date) }), "Telegram есть");
+    expect(handleDeliveryChoiceReply).toHaveBeenCalledWith(
+      expect.objectContaining({ humanTakenOverAt: expect.any(Date) }),
+      "Telegram есть",
+    );
     expect(debounceMessage).not.toHaveBeenCalled();
   });
   it("never routes a choice through the frozen gate", async () => {
@@ -165,7 +176,9 @@ describe("п.9 чек при Ширин и п.6 отмена шагов воро
   it("Ширин ведёт разговор, клиент прислал чек — чек проверяется сразу, текстом бот не отвечает", async () => {
     const { verifyReceiptsNow } = await import("../../src/ai.js");
     vi.mocked(upsertContact).mockResolvedValueOnce({ ...fakeContact(), humanTakenOverAt: new Date() } as never);
-    const rescued = [{ buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" }];
+    const rescued = [
+      { buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" },
+    ];
     rescueIncomingImages.mockResolvedValue(rescued);
     await handleMessage(photoEvent);
     expect(verifyReceiptsNow).toHaveBeenCalledWith(expect.objectContaining({ id: "contact-1" }), rescued);
@@ -178,7 +191,10 @@ describe("п.9 чек при Ширин и п.6 отмена шагов воро
     await handleMessage({ sender: { id: "customer" }, message: { mid: "q1", text: "Кай сар мешавад?" } });
     expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("клиент"));
     vi.mocked(cancelPendingFunnelSteps).mockClear();
-    await handleMessage({ sender: { id: "customer" }, message: { mid: "tap", text: "💚ОНЛАЙН 21 РЕЦЕПТ", quick_reply: { payload: "step:f:20" } } });
+    await handleMessage({
+      sender: { id: "customer" },
+      message: { mid: "tap", text: "💚ОНЛАЙН 21 РЕЦЕПТ", quick_reply: { payload: "step:f:20" } },
+    });
     expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
   });
   it("ревью 11.11: ИИ недоступен или сообщение-пустяк — шаги воронки НЕ отменяются (некому ответить вместо них)", async () => {

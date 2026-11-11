@@ -154,17 +154,21 @@ export type HumanizeOptions = {
   keepTajikLetters: boolean;
 };
 
-/** Полная правка исходящего текста бота. Идемпотентна: повторный вызов ничего не меняет. */
 /**
  * СЛУЖЕБНЫЕ МЕТКИ НЕ УХОДЯТ КЛИЕНТУ (ревью 11.11.2026). Модель отвечает метками
  * [NO_REPLY], [ASK_SHIRIN] — код их ловит, но если метка пришла вместе с текстом
  * («Сейчас уточню [ASK_SHIRIN]») или в пути, где её не разбирают (ответ под
- * комментарием), клиент видел «[ASK_SHIRIN]». Режется любая метка в квадратных
- * скобках: ЗАГЛАВНЫМИ буквами («[NO_REPLY]», «[МЕТКА]») или через подчёркивание
- * («[ask_shirin]»); в метке должна быть хоть одна буква — «[1]» не трогаем.
- * Стоит в обеих дверях бота: humanizeBotText (отправка) и cleanAutomatedReply.
+ * комментарием), клиент видел «[ASK_SHIRIN]».
+ *
+ * Режутся ТОЛЬКО известные метки — те, что промпт просит модель вернуть (повторное
+ * ревью: прежнее «любые ЗАГЛАВНЫЕ в скобках» съедало «Курс [21 РЕЦЕПТ]» и
+ * «[ДАР НАЗДИ МАН]»). Новая метка в промпте — добавить сюда; сторож в тесте
+ * (botHumanReview.test.ts) сверяет список с промптами и скриптом текстов.
+ * Применяется только к ответам модели (replyPolicy.ts::cleanGeneratedReply), не к
+ * текстам воронки и шаблонам владельца.
  */
-const SERVICE_MARKER = /\[\s*(?=[^\]]*\p{L})(?:[\p{Lu}\d]+(?:[_ :.-]+[\p{Lu}\d]+)*|[\p{L}\d]+(?:_[\p{L}\d]+)+)\s*\]/gu;
+export const SERVICE_MARKERS = ["NO_REPLY", "ASK_SHIRIN"] as const;
+const SERVICE_MARKER = new RegExp(`\\[\\s*(?:${SERVICE_MARKERS.join("|")})\\s*\\]`, "giu");
 
 export function stripServiceMarkers(text: string): string {
   if (!text || !text.includes("[")) return text;
@@ -178,9 +182,10 @@ export function stripServiceMarkers(text: string): string {
     .trim();
 }
 
+/** Полная правка исходящего текста бота. Идемпотентна: повторный вызов ничего не меняет. */
 export function humanizeBotText(text: string, opts: HumanizeOptions): string {
   if (!text) return text;
-  let out = stripServiceMarkers(text.normalize("NFC"));
+  let out = text.normalize("NFC");
   out = withoutAddressWords(out);
   out = withoutStockTails(out);
   out = withoutDashes(out);

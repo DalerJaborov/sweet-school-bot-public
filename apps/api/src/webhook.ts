@@ -16,7 +16,7 @@ import { aiReply, registerOfflineIfAsked, rescueIncomingImages, verifyReceiptsNo
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
 import { recordAdReferral, referralFromMeta } from "./metaConversions.js";
-import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
+import { acceptWebhookEvents, processWebhookInbox, inboxKey, releaseInboxSlot, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
 import { looksPersonal } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -360,6 +360,9 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
   if (echoText || ownerMedia) {
     // Graph may return its send result after the echo. Give recordOutgoingMessage
     // time to correct byHuman before admitting this sample into style learning.
+    // Ожидание — вне потолка очереди вебхуков (webhookInbox.ts): шесть эхо подряд
+    // иначе держали бы все места по 20 с.
+    releaseInboxSlot();
     await new Promise<void>((resolve) => setTimeout(resolve, 20_000));
     if (!(await prisma.message.findUnique({ where: { mid: msg.mid } }))?.byHuman) return;
     const lastIn = await prisma.message.findFirst({

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { prisma, logError } from "./db.js";
@@ -12,11 +13,12 @@ export type InboxEvent = {
 export function inboxKey(input: InboxEvent): string {
   const message = input.event.message as { mid?: string; is_echo?: boolean } | undefined;
   const value = input.event.value as { id?: string; comment_id?: string } | undefined;
-  const identity = input.kind === "message" && message?.mid
-    ? `${message.is_echo ? "echo" : "message"}:${message.mid}`
-    : input.kind === "comment" && (value?.id || value?.comment_id)
-      ? `comment:${value.id || value.comment_id}`
-      : `hash:${crypto.createHash("sha256").update(JSON.stringify(input.event)).digest("hex")}`;
+  const identity =
+    input.kind === "message" && message?.mid
+      ? `${message.is_echo ? "echo" : "message"}:${message.mid}`
+      : input.kind === "comment" && (value?.id || value?.comment_id)
+        ? `comment:${value.id || value.comment_id}`
+        : `hash:${crypto.createHash("sha256").update(JSON.stringify(input.event)).digest("hex")}`;
   return `${input.channel}:${input.selfId ?? ""}:${identity}`;
 }
 
@@ -25,7 +27,11 @@ export async function acceptWebhookEvents(events: InboxEvent[]): Promise<void> {
   await prisma.$transaction(async (tx) => {
     for (const event of events) {
       const eventKey = inboxKey(event);
-      await tx.webhookInbox.upsert({ where: { eventKey }, update: {}, create: { eventKey, payload: JSON.stringify(event) } });
+      await tx.webhookInbox.upsert({
+        where: { eventKey },
+        update: {},
+        create: { eventKey, payload: JSON.stringify(event) },
+      });
     }
   });
 }
@@ -48,14 +54,27 @@ let rescan = false;
  */
 /**
  * ПОТОЛОК ПАРАЛЛЕЛЬНОСТИ (ревью 11.11.2026). Без него всплеск (реклама, 30 человек
- * за минуту) запускал 30 обработчиков сразу: 30 ходов Gemini, 30 записей в одну
- * SQLite — таймауты и «database is locked». Шесть — с запасом на пачку из 3–4
- * пузырей одного человека плюс ещё пару собеседников: второй пузырь по-прежнему
- * берётся в работу, пока первый ждёт окна дебаунса. Остальное ждёт в очереди и
- * берётся, как только освобождается место (не теряется: строки в базе).
+ * за минуту) запускал 30 разборов сразу — 30 записей в одну SQLite, «database is
+ * locked». Потолок держит только БЫСТРУЮ часть: разбор события, запись в историю,
+ * постановку в окно дебаунса или эха. Долгое ожидание (окно дебаунса 6–15 с,
+ * генерация, 20 с паузы эха перед обучением) идёт ВНЕ потолка: обработчик зовёт
+ * releaseInboxSlot() и место сразу берёт следующее событие (повторное ревью: при
+ * 6 разговорах второй пузырь клиента ждал места и не попадал в своё окно —
+ * два ответа на один вопрос). Строка очереди при этом остаётся «в работе» до
+ * конца обработки: доставка «хотя бы раз» не меняется.
  */
 export const MAX_PARALLEL_HANDLERS = 6;
 let active = 0;
+const slotContext = new AsyncLocalStorage<{ release: () => void }>();
+
+/**
+ * Обработчик события дальше только ждёт (окно дебаунса, пауза эха) — отдать его
+ * место в потолке. Вне очереди вебхуков (сайт, тесты) ничего не делает; повторный
+ * вызов — тоже.
+ */
+export function releaseInboxSlot(): void {
+  slotContext.getStore()?.release();
+}
 /** Выборку обрезал потолок — есть строки, которые ждут свободного места. */
 let backlog = false;
 
@@ -76,10 +95,12 @@ export async function processWebhookInbox(handle: (event: InboxEvent) => Promise
         break;
       }
       const now = new Date();
-      const eligible = { OR: [
-        { state: "PENDING", nextRunAt: { lte: now } },
-        { state: "PROCESSING", leaseUntil: { lte: now } },
-      ] };
+      const eligible = {
+        OR: [
+          { state: "PENDING", nextRunAt: { lte: now } },
+          { state: "PROCESSING", leaseUntil: { lte: now } },
+        ],
+      };
       const rows = await prisma.webhookInbox.findMany({ where: eligible, orderBy: { createdAt: "asc" }, take: free });
       if ((rows ?? []).length >= free) backlog = true;
       for (const row of rows ?? []) {
@@ -90,14 +111,16 @@ export async function processWebhookInbox(handle: (event: InboxEvent) => Promise
         });
         if (claim.count !== 1) continue;
         active++;
-        inFlight.push(
-          runRow(row, handle).finally(() => {
-            active--;
-            if (!backlog) return;
-            backlog = false;
-            void processWebhookInbox(handle).catch((err) => logError("webhookInbox:backlog", err));
-          }),
-        );
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
+          active--;
+          if (!backlog) return;
+          backlog = false;
+          void processWebhookInbox(handle).catch((err) => logError("webhookInbox:backlog", err));
+        };
+        inFlight.push(slotContext.run({ release }, () => runRow(row, handle)).finally(release));
       }
     } while (rescan);
   } finally {
@@ -115,19 +138,30 @@ type InboxRow = { id: string; payload: string; attempts: number };
 
 async function runRow(row: InboxRow, handle: (event: InboxEvent) => Promise<void>): Promise<void> {
   const heartbeat = setInterval(() => {
-    void prisma.webhookInbox.updateMany({ where: { id: row.id, state: "PROCESSING" }, data: { leaseUntil: new Date(Date.now() + LEASE_MS) } }).catch((err) => logError("webhookInbox:lease", err));
+    void prisma.webhookInbox
+      .updateMany({ where: { id: row.id, state: "PROCESSING" }, data: { leaseUntil: new Date(Date.now() + LEASE_MS) } })
+      .catch((err) => logError("webhookInbox:lease", err));
   }, 60_000);
   heartbeat.unref?.();
   try {
     await handle(JSON.parse(row.payload) as InboxEvent);
-    await prisma.webhookInbox.update({ where: { id: row.id }, data: { state: "DONE", leaseUntil: null, lastError: null } });
+    await prisma.webhookInbox.update({
+      where: { id: row.id },
+      data: { state: "DONE", leaseUntil: null, lastError: null },
+    });
   } catch (err) {
     const terminal = row.attempts + 1 >= 8 || !canRetryMetaFailure(err);
-    await prisma.webhookInbox.update({ where: { id: row.id }, data: {
-      state: terminal ? "FAILED" : "PENDING", leaseUntil: null,
-      nextRunAt: new Date(Date.now() + Math.min(30_000 * 2 ** row.attempts, 30 * 60_000)),
-      lastError: err instanceof Error ? err.message.slice(0, 1000) : String(err).slice(0, 1000),
-    } });
+    await prisma.webhookInbox.update({
+      where: { id: row.id },
+      data: {
+        state: terminal ? "FAILED" : "PENDING",
+        leaseUntil: null,
+        nextRunAt: new Date(Date.now() + Math.min(30_000 * 2 ** row.attempts, 30 * 60_000)),
+        lastError: err instanceof Error ? err.message.slice(0, 1000) : String(err).slice(0, 1000),
+      },
+    });
     logError(terminal ? "webhookInbox:gaveUp" : "webhookInbox:retry", err);
-  } finally { clearInterval(heartbeat); }
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
