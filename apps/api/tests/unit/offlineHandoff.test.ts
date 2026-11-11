@@ -39,7 +39,7 @@ vi.mock("../../src/ai/styleLearning.js", () => ({ buildStyleBlock: vi.fn(async (
 vi.mock("../../src/nightlyLearning.js", () => ({ buildInsightsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/objectionLibrary.js", () => ({ buildObjectionsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/mediaReuse.js", () => ({ findReusableMedia: vi.fn(async () => null), sendReusedMedia: vi.fn() }));
-vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn() }));
+vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn(), maybeSendCourseMenuPhoto: vi.fn(async () => undefined), sendOfflineMenuPhoto: vi.fn(async () => undefined) }));
 vi.mock("../../src/ai/testimonials.js", async (original) => ({
   ...(await original<typeof import("../../src/ai/testimonials.js")>()),
   maybeSendTestimonial: vi.fn(async () => undefined),
@@ -47,7 +47,7 @@ vi.mock("../../src/ai/testimonials.js", async (original) => ({
 vi.mock("../../src/learningCheckIn.js", () => ({ markStartedLearningIfReplied: vi.fn(async () => undefined) }));
 vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => undefined) }));
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));
-vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false) }));
+vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false), extractPhone: (t: string) => (/9[0-9]{8}/.exec(t ?? "") ?? [null])[0] }));
 const maybeSendOfflineCard = vi.fn(async () => false);
 vi.mock("../../src/ai/offlineCourse.js", async (original) => ({
   ...(await original<typeof import("../../src/ai/offlineCourse.js")>()),
@@ -255,3 +255,52 @@ describe("офлайн передан Ширин — где молчать не�
   });
 });
 
+
+describe("разбор 11.11.2026 — ход aiReply целиком", () => {
+  it.each(["Курс", "Кай сар мешавад", "Онлаен", "ани арзон", "ҲАР ДУ ҚУРС"])(
+    "п.3 «%s» — карточку офлайна не шлём и разговор не передаём, отвечает модель",
+    async (text) => {
+      generateWithFallback.mockResolvedValue(said("Онлайн курс 70 сомони."));
+      await aiReply(lead, text, [], []);
+      expect(maybeSendOfflineCard).not.toHaveBeenCalled();
+      expect(generateWithFallback).toHaveBeenCalled();
+      expect(lastContactUpdate()?.offlineHandoffAt).toBeUndefined();
+    },
+  );
+
+  it("п.1 готовый вопрос Instagram — точный ответ из фактов без хода модели", async () => {
+    await aiReply(lead, "Можно ли купить отдельные рецепты?", [], []);
+    expect(generateWithFallback).not.toHaveBeenCalled();
+    expect(sendToContact.mock.calls.map((c) => String(c[1])).join("\n")).toContain("отдельно не продаются");
+  });
+
+  it("п.7 модель сказала [ASK_SHIRIN] — клиенту «Ширин ответит», бот молчит час", async () => {
+    generateWithFallback.mockResolvedValue(said("[ASK_SHIRIN]"));
+    await aiReply(lead, "Из Казахстана с Kaspi можно оплатить?", [], []);
+    expect(sendToContact.mock.calls.map((c) => String(c[1]))).toEqual(["Это вам точно подскажет Ширин, она скоро ответит"]);
+    expect(db.model("contact").update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { humanSilencedUntil: expect.any(Date) } }),
+    );
+  });
+
+  it("п.7 выдумка осталась и после исправления — не держим молча, а зовём Ширин", async () => {
+    generateWithFallback.mockResolvedValue(said("Видео можно скачать на телефон."));
+    await aiReply(lead, "Видеохоро скачать кардан мешавад?", [], []);
+    // Вопрос по-таджикски — и ответ по-таджикски.
+    expect(sendToContact.mock.calls.map((c) => String(c[1]))).toEqual(["Инро Ширин худаш чавоб медихад"]);
+  });
+
+  it("п.5 номер ушёл минуту назад — в новом ответе его нет", async () => {
+    db.model("message").findMany.mockImplementation(async (args: unknown) => {
+      const a = args as { where?: { direction?: string }; select?: { createdAt?: boolean } };
+      return a?.select?.createdAt && a.where?.direction === "OUT"
+        ? [{ text: "905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф)", createdAt: new Date() }]
+        : [];
+    });
+    generateWithFallback.mockResolvedValue(said("Курс 70 сомони.\n905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф)"));
+    await aiReply(lead, "Нархаш чанд?", [], []);
+    const out = sendToContact.mock.calls.map((c) => String(c[1])).join("\n");
+    expect(out).toContain("70 сомони");
+    expect(out).not.toContain("905 355 355");
+  });
+});

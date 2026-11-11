@@ -98,15 +98,39 @@ describe("случай 2: отложенная автоматика после �
     expect(grantCourses).toHaveBeenCalledTimes(1);
   });
 
-  it("Ширин прислала настоящую ссылку, но покупок нет: не молчим, а отдаём чек владельцу без сообщений клиентке", async () => {
+  // Пункт 9 (владелец 11.11.2026): настоящий чек на наш номер и верную сумму, ссылку
+  // Ширин уже выслала руками — оплату отмечаем сами, без второй ссылки и без
+  // карточки «Чек требует проверки: похоже, Ширин уже отправила ссылку вне системы».
+  it("Ширин прислала настоящую ссылку, чек чистый: оплата отмечена сама, без ссылки, без карточки, без сообщений клиентке", async () => {
+    db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("purchase").create.mockResolvedValue({ id: "p1" });
+    db.model("setting").findUnique.mockResolvedValue({ key: "telegramBotToken", value: "t" });
+    db.model("message").findMany.mockResolvedValue([{ text: "Вот ссылка https://shirinsweets.online/l/aBcD234567" }]);
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).not.toHaveBeenCalled();
+    expect(db.model("purchase").create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ course: "COURSE70", inviteLink: "https://shirinsweets.online/l/aBcD234567" }),
+      }),
+    );
+    expect(db.model("receiptCheck").update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ ownerDecision: "HANDLED", linkSent: true, kind: "valid" }),
+      }),
+    );
+  });
+
+  it("Ширин прислала ссылку, но чек на чужой номер: это реальное сомнение — карточка владельцу, клиентке молчим", async () => {
     db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
     db.model("purchase").findMany.mockResolvedValue([]);
     db.model("setting").findUnique.mockResolvedValue({ key: "telegramBotToken", value: "t" });
-    db.model("message").findMany.mockResolvedValue([
-      { text: "Вот ссылка https://shirinsweets.online/l/aBcD234567" },
-    ]);
-    await handleReceiptVerdict(contact, verdict(), "q1");
+    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+2lICxrvXYYY5OGFi" }]);
+    await handleReceiptVerdict(contact, verdict({ recipientMatches: false }), "q1");
     expect(grantCourses).not.toHaveBeenCalled();
+    expect(db.model("purchase").create).not.toHaveBeenCalled();
     expect(sendToContact).not.toHaveBeenCalled();
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
   });

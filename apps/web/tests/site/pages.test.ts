@@ -209,13 +209,13 @@ describe("Факты очного курса — из панели через SS
     for (const [file, body] of raw) expect(body, file).not.toMatch(/\{\{\s*offline/);
   });
 
-  it("цена, часы и 21 десерт — в title, тексте и карточке очного курса", () => {
+  it("цена, часы и 22 десерта (владелец 11.11.2026) — в title, тексте и карточке очного курса", () => {
     const body = files.get("kursy-konditera-dushanbe.html")!;
     expect(body).toMatch(/<title>[\s\S]*?offer-fact\?key=offline\.price[\s\S]*?<\/title>/);
     const plain = resolveSsiFallback(body);
     expect(plain).toMatch(/<title>[^<]*700 сомони/);
     expect(plain).toContain("с 13:40 до 16:30");
-    expect(plain).toContain("Программа: 21 десерт за 8 дней");
+    expect(plain).toContain("Программа: 22 десерта за 8 дней");
     expect(resolveSsiFallback(files.get("tg/kursy-konditera-dushanbe.html")!)).toMatch(
       /name="description" content="[^"]*700 сомонӣ/,
     );

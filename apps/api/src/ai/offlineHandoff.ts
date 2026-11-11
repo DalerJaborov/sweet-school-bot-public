@@ -34,6 +34,23 @@ import { hasDoubtSignal } from "./testimonials.js";
 
 export const OFFLINE_HANDOFF_SETTING = "offlineHandoffEnabled";
 
+/**
+ * ЯВНЫЙ ИНТЕРЕС К ОФЛАЙН-КУРСУ — только по таким словам уходит карточка офлайна
+ * (владелец 11.11.2026). Разбор: на «Курс», «Кай сар мешавад», «Онлаен», «ани
+ * арзон», «Ҳар ду курс» бот слал 700 сомони / 20 ноября / адрес. Прежний признак
+ * ловил «нависед» (напишите), «запишите», «хочу на курс» и смотрел в историю —
+ * в том числе в наши же сообщения. Теперь — только текущее сообщение и только:
+ * офлайн / очно / вживую / дар назди ман / адрес / суроға / 700 / прийти в Душанбе.
+ */
+const EXPLICIT_OFFLINE =
+  /(офлайн\p{L}*|оффлайн\p{L}*|offline|oflayn|oflain|(?<!\p{L})очн(о|ый|ая|ое|ые|ого|ом)(?!\p{L})|вживую|ру\s*ба\s*ру|назди\s+(ман|худат\p{L}*|шумо)|адрес\p{L}*|сурог\p{L}*|суроғ\p{L}*|(?<!\d)700(?!\d)|(куда|где)\s+(приходить|прийти|проходит|находит\p{L}*)|(дар|ба)\s+душанбе\s+(омад\p{L}*|биё\p{L}*|меоям|рафт\p{L}*)|омада\s+(ёд|омуз)\p{L}*)/iu;
+
+export function explicitOfflineInterest(text: string | null | undefined): boolean {
+  if (!text) return false;
+  if (asksOnlineNotOffline(text)) return false;
+  return EXPLICIT_OFFLINE.test(text);
+}
+
 export async function offlineHandoffEnabled(): Promise<boolean> {
   return (await getSetting(OFFLINE_HANDOFF_SETTING)) !== "false";
 }

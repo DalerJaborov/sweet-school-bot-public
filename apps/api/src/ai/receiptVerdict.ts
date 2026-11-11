@@ -3,7 +3,8 @@ import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automation.js";
+import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
+import { enqueuePurchaseConversion } from "../metaConversions.js";
 import { sendReceiptForReview, sendTelegramMessage, summaryChatIds } from "../telegram.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
@@ -15,7 +16,7 @@ import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
 import { ACCEPTED_WHERE, receiptAccepted } from "../receiptAccepted.js";
-import { manualLinkSince, receiptServedState } from "../course/handedOut.js";
+import { lastManualLinkSince, manualLinkSince, receiptServedState } from "../course/handedOut.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -239,6 +240,52 @@ async function askOwner(
     const sent = await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice, closeAsDuplicate });
     if (sent) await rememberAlert(receiptId, sent);
   }
+}
+
+/**
+ * Ширин выдала ссылку руками, а чек настоящий: записываем покупку и оплату без
+ * второй ссылки и без карточки владельцу. Покупка помнит ссылку Ширин (если
+ * это приглашение в группу — по ней потом узнаётся вход в группу).
+ */
+async function settleManualHandout(
+  contact: Contact,
+  courses: Course[],
+  amount: number,
+  verdict: { amount: number | null; currency?: string | null; confidence: number; imageHash: string; imageUrl: string | null; receiptAt: Date | null; transactionId?: string | null },
+  receiptId: string,
+  reason: string,
+): Promise<void> {
+  const link = (await lastManualLinkSince(contact.id, new Date(0)).catch(() => null)) ?? "выдано вручную";
+  const created: string[] = [];
+  for (const course of courses) {
+    try {
+      const row = await prisma.purchase.create({
+        data: {
+          contactId: contact.id, course, amount: Math.round(amount / courses.length),
+          rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", inviteLink: link,
+        },
+      });
+      if (row?.id) created.push(row.id);
+    } catch (err) {
+      if ((err as { code?: string })?.code !== "P2002") logError("receiptVerdict:manualHandout", err);
+    }
+  }
+  await prisma.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
+  await prisma.receiptCheck.update({
+    where: { id: receiptId },
+    data: {
+      kind: "valid",
+      confidence: verdict.confidence,
+      amount: Math.round(amount),
+      receiptAt: verdict.receiptAt,
+      transactionId: verdict.transactionId?.trim() && verdict.transactionId.trim().length >= 6 ? verdict.transactionId.trim() : null,
+      linkSent: true,
+      ownerDecision: "HANDLED",
+      decidedAt: new Date(),
+      reason: `${reason} (ссылку отправила Ширин сама, оплата отмечена автоматически)`,
+    },
+  });
+  if (created.length > 0) await enqueuePurchaseConversion(contact.id, created);
 }
 
 export async function handleReceiptVerdict(
@@ -465,11 +512,6 @@ export async function handleReceiptVerdict(
     }
   }
 
-  if (maybeServed) {
-    if (kind === "valid") kind = "suspicious";
-    hard = true;
-    doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
-  }
   const plan = amount != null ? await allocate(contact.id, Math.round(amount)) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
@@ -510,6 +552,21 @@ export async function handleReceiptVerdict(
   const isClean = kind === "valid" && causes.length === 0 && !sameTransfer;
   if (kind === "valid" && !sameTransfer) doubts.push(...causes);
   if (await isBotFrozen()) return;
+
+  // ЧЕК ПРИ ШИРИН: ССЫЛКУ ОНА УЖЕ ОТПРАВИЛА САМА (владелец 11.11.2026). Чек
+  // настоящий — на наш номер, сумма совпадает с курсом, повторов нет, — а ссылку
+  // Ширин успела выслать руками. Дублировать ссылку не надо, но и карточка
+  // «Чек требует проверки» владельцу не нужна: оплату отмечаем сами.
+  // Сомнительный чек (не тот номер, сумма, повтор, подделка) по-прежнему идёт
+  // владельцу — уже с пометкой, что ссылку, похоже, выдали.
+  if (maybeServed && isClean && plan && plan.grant.length > 0) {
+    await settleManualHandout(contact, plan.grant, amount as number, verdict, existingId as string, reason);
+    return;
+  }
+  if (maybeServed) {
+    hard = true;
+    doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
+  }
 
   let linkSent = false;
   let closedAsDuplicate: "settled" | "pending" | null = sameTransfer;
@@ -608,6 +665,17 @@ export async function handleReceiptVerdict(
   }
 
   if (await isBotFrozen()) return;
+  // Ширин сейчас ведёт разговор сама: служебные фразы клиентке («передаю Ширин»,
+  // «пришлите другой скрин», «уже приняли») не шлём — дверь отправки их всё равно
+  // не пропустит, а владельцу нужна только карточка. Ссылку на уроки выдаёт
+  // grantCourses выше через проверенный чек — это единственное исключение.
+  const humanTalking = contactAutomationBlocked(contact);
+  if (humanTalking) {
+    if (saved && (needsOwner || duplicatePayment) && !closedAsDuplicate) {
+      await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+    }
+    return;
+  }
   if (saved && closedAsDuplicate === "settled") {
     await tellAlreadyAccepted(contact);
     if (!sameTransferProven) {

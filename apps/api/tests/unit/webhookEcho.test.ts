@@ -7,8 +7,9 @@ vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(),
   handleComment: vi.fn(),
+  cancelPendingFunnelSteps: vi.fn(async () => 0),
 }));
-vi.mock("../../src/ai.js", () => ({ aiReply: vi.fn(), rescueIncomingImages: vi.fn() }));
+vi.mock("../../src/ai.js", () => ({ aiReply: vi.fn(), rescueIncomingImages: vi.fn(), verifyReceiptsNow: vi.fn(async () => undefined) }));
 vi.mock("../../src/debounce.js", () => ({ debounceMessage: vi.fn() }));
 vi.mock("../../src/ai/personalContact.js", () => ({ looksPersonal: () => false }));
 vi.mock("../../src/ai/styleLearning.js", () => ({ rememberOwnerReply: vi.fn(async () => undefined) }));
@@ -59,6 +60,9 @@ describe("handleEcho — транзакция эха хозяйки", () => {
     );
     expect(rememberOwnerReply).toHaveBeenCalledTimes(1);
     expect(rememberOwnerReply).toHaveBeenCalledWith("Курс чанд пул?", echo.message!.text, "TAKEOVER", undefined, "contact-1");
+    // Ширин ответила сама — отложенные шаги воронки этому человеку отменяются (п.6, 11.11.2026).
+    const { cancelPendingFunnelSteps } = await import("../../src/funnel.js");
+    expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("Ширин"));
   });
 
   it("повторный вебхук с тем же mid: транзакция откатывается, обучение НЕ запускается второй раз", async () => {

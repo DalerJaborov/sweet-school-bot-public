@@ -17,6 +17,7 @@ vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(async () => false),
   handleComment: vi.fn(),
+  cancelPendingFunnelSteps: vi.fn(async () => 0),
 }));
 const aiReply = vi.fn(async () => undefined);
 const rescueIncomingImages = vi.fn(async () => []);
@@ -25,6 +26,7 @@ vi.mock("../../src/ai.js", () => ({
   aiReply: (...a: unknown[]) => aiReply(...a),
   registerOfflineIfAsked: (...a: unknown[]) => registerOfflineIfAsked(...a),
   rescueIncomingImages: (...a: unknown[]) => rescueIncomingImages(...a),
+  verifyReceiptsNow: vi.fn(async () => undefined),
 }));
 const debounceMessage = vi.fn();
 vi.mock("../../src/debounce.js", () => ({ debounceMessage: (...a: unknown[]) => debounceMessage(...a) }));
@@ -154,5 +156,27 @@ describe("delivery choice after human takeover", () => {
     db.model("setting").findUnique.mockResolvedValue({ value: "true" });
     await handleMessage({ sender: { id: "customer" }, message: { mid: "choice", text: "Telegram есть" } });
     expect(handleDeliveryChoiceReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("п.9 чек при Ширин и п.6 отмена шагов воронки (11.11.2026)", () => {
+  it("Ширин ведёт разговор, клиент прислал чек — чек проверяется сразу, текстом бот не отвечает", async () => {
+    const { verifyReceiptsNow } = await import("../../src/ai.js");
+    vi.mocked(upsertContact).mockResolvedValueOnce({ ...fakeContact(), humanTakenOverAt: new Date() } as never);
+    const rescued = [{ buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" }];
+    rescueIncomingImages.mockResolvedValue(rescued);
+    await handleMessage(photoEvent);
+    expect(verifyReceiptsNow).toHaveBeenCalledWith(expect.objectContaining({ id: "contact-1" }), rescued);
+    expect(debounceMessage).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
+  it("клиент написал сам — отложенные шаги воронки отменяются; нажатие кнопки — нет", async () => {
+    const { cancelPendingFunnelSteps } = await import("../../src/funnel.js");
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "q1", text: "Кай сар мешавад?" } });
+    expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("клиент"));
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "tap", text: "💚ОНЛАЙН 21 РЕЦЕПТ", quick_reply: { payload: "step:f:20" } } });
+    expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
   });
 });

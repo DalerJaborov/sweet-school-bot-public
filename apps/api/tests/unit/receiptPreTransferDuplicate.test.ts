@@ -62,7 +62,7 @@ describe("экран до перевода", () => {
     expect(sendToContact).toHaveBeenCalledTimes(1);
     const text = String(sendToContact.mock.calls[0][1]);
     expect(text).toContain("Ха, дуруст");
-    expect(text).toContain("905 355 355 Чаборова Фарангис (Душанбе Сити, Алиф)");
+    expect(text).toContain("905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф)");
     expect(sendReceiptForReview).not.toHaveBeenCalled();
   });
 

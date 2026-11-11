@@ -31,6 +31,21 @@ export async function manualLinkSince(contactId: string, since: Date): Promise<b
   return (rows ?? []).some((m) => Boolean(m.text && MANUAL_LINK.test(m.text)));
 }
 
+/** Последняя настоящая ссылка на уроки, которую Ширин прислала руками после `since`. */
+export async function lastManualLinkSince(contactId: string, since: Date): Promise<string | null> {
+  const rows = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 30,
+    select: { text: true },
+  });
+  for (const m of rows ?? []) {
+    const hit = m.text ? /https?:\/\/\S*(?:\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+)\S*|t\.me\/(?:\+|joinchat\/)[\w-]+/i.exec(m.text) : null;
+    if (hit) return hit[0];
+  }
+  return null;
+}
+
 /** Курсы с выданной ссылкой, купленные после `since`. */
 export async function deliveredCoursesSince(contactId: string, since: Date): Promise<string[]> {
   const rows = await prisma.purchase.findMany({

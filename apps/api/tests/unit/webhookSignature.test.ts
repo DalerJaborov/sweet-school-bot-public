@@ -8,8 +8,9 @@ vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(),
   handleComment: vi.fn(),
+  cancelPendingFunnelSteps: vi.fn(async () => 0),
 }));
-vi.mock("../../src/ai.js", () => ({ aiReply: vi.fn(), registerOfflineIfAsked: vi.fn(), rescueIncomingImages: vi.fn() }));
+vi.mock("../../src/ai.js", () => ({ aiReply: vi.fn(), registerOfflineIfAsked: vi.fn(), rescueIncomingImages: vi.fn(), verifyReceiptsNow: vi.fn(async () => undefined) }));
 vi.mock("../../src/debounce.js", () => ({ debounceMessage: vi.fn() }));
 vi.mock("../../src/ai/personalContact.js", () => ({ looksPersonal: () => false }));
 vi.mock("../../src/ai/styleLearning.js", () => ({ rememberOwnerReply: vi.fn() }));

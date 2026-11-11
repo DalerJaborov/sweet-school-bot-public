@@ -4,8 +4,8 @@ import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
-import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
+import { upsertContact, handleIncomingDm, handleComment, cancelPendingFunnelSteps } from "./funnel.js";
+import { aiReply, registerOfflineIfAsked, rescueIncomingImages, verifyReceiptsNow, type RescuedImage } from "./ai.js";
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
 import { recordAdReferral, referralFromMeta } from "./metaConversions.js";
@@ -297,6 +297,10 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
     });
   if (!recorded) return;
 
+  // Ширин написала сама — отложенные шаги воронки этому человеку больше не уходят
+  // (разбор 11.11.2026: видео и реквизиты прилетали через 3 часа поверх её разговора).
+  await cancelPendingFunnelSteps(contact.id, "остановлено: Ширин ответила сама");
+
   /**
    * ГОЛОСОВОЙ/ФОТО/ВИДЕО ОТВЕТ ХОЗЯЙКИ — СОХРАНЯЕМ И РАСШИФРОВЫВАЕМ (22.08,
    * расширено 24.08.2026).
@@ -579,10 +583,17 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     return;
   }
 
+  // Клиент написал сам (не нажал кнопку) — отложенные шаги воронки отменяются:
+  // разговор пошёл живьём, шаблон поверх него звучит как автомат (пункт 6, 11.11.2026).
+  if (!payload && (textOrVoice || attachments.length > 0)) {
+    await cancelPendingFunnelSteps(contact.id, "остановлено: клиент написал сам");
+  }
+  const hasAttachments = attachments.length > 0;
+
   // Frozen means funnel-only, including before receipt intake and signup.
   // Preserve the incoming history and human takeover rules, then stop here.
   if (frozen || (await getSetting("botFrozen")) === "true") {
-    if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload);
+    if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable: false });
     return;
   }
 
@@ -633,13 +644,25 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // ключевое слово воронки. Пауза временная: humanSilenceHours от её последнего
   // ответа (messaging/automation.ts); пропущенное за паузу подберёт сторож
   // unansweredWatch.ts.
-  if (isHumanSilenced(contact)) return;
+  if (isHumanSilenced(contact)) {
+    // ЧЕК ПРИ ШИРИН (владелец 11.11.2026): Ширин переписывается, а клиент прислал
+    // настоящий чек — бот САМ проверяет его сразу и выдаёт ссылку (дверь
+    // verified_receipt_access пропускает это через паузу). Раньше чек ждал
+    // фоновой перепроверки 3+ минуты, Ширин за это время отправляла ссылку
+    // руками, и владельцу уходило «Чек требует проверки: похоже, Ширин уже
+    // отправила ссылку вне системы». Текстом бот по-прежнему не отвечает.
+    if (rescuedImages.length > 0) {
+      await verifyReceiptsNow(contact, rescuedImages).catch((err) => logError("webhook:receiptDuringHuman", err));
+    }
+    return;
+  }
 
-  const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload);
+  const aiAvailable = (await getSetting("aiEnabled")) === "true";
+  const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable });
   if (handledByFunnel || (!textOrVoice && attachments.length === 0)) return;
 
   // Человеческий тайминг: ждём, вдруг человек допишет ещё пузырь — отвечаем на
-  // всё сразу, максимум через 9 секунд после последнего сообщения.
+  // всё сразу одним ответом (окно и потолок — debounce.ts).
   // Подсказка про нашу публикацию идёт вместе с текстом человека — модель должна
   // знать, о чём он спрашивает, ещё до того, как посмотрит обложку.
   const textForAi = ownMediaHint ? `${ownMediaHint}\n${textOrVoice ?? ""}`.trim() : textOrVoice ?? "";
