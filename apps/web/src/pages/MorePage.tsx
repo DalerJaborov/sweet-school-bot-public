@@ -1,5 +1,6 @@
 import { Icons } from "../components/Brand";
 import { BehaviorSwitches } from "../components/BehaviorSwitches";
+import { NotificationSwitches } from "../components/NotificationSwitches";
 import { InstallApp } from "../components/InstallApp";
 import { Switch } from "../components/Switch";
 import { MORE_SECTIONS, type Tab } from "../panel/nav";
@@ -77,6 +78,12 @@ export function MorePage(props: { onGo: (tab: Tab) => void; onLogout: () => void
           </details>
         </section>
       )}
+
+      <section className="card" aria-label="Уведомления">
+        <h3 className="more-title">Уведомления в Telegram</h3>
+        <p className="hint">Бот пишет редко: оплаты, записи на офлайн, итог дня и серьёзные сбои. Всё это можно выключить.</p>
+        <NotificationSwitches />
+      </section>
 
       <section className="card" aria-label="Приложение">
         <h3 className="more-title">Приложение на телефоне</h3>

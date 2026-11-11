@@ -2,7 +2,7 @@ import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "..
 import { handlePhoneChange, isAwaitingProof, phoneChangeProof } from "./phoneChange.js";
 import { ownerOfExpiredLink, recentlyHitDeviceLimit } from "./access.js";
 import { sendToContact } from "../messaging/send.js";
-import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { ACCEPTED_WHERE } from "../receiptAccepted.js";
 import { type ClientLanguage } from "../ai/clientLanguage.js";
@@ -458,10 +458,6 @@ async function tellOwner(
 }
 
 async function sendOwnerAlert(gateKey: string, text: string, always = false): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
-  if (!botToken || !chatId) return;
   // Одно и то же — не чаще раза в сутки (08.11.2026), кроме always.
-  if (!always && !(await shouldSendAlert(gateKey, { cooldownMs: 24 * 3_600_000 }))) return;
-  await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("recovery:tellOwner", err));
+  await sendKind("security", text, always ? {} : { dedupeKey: gateKey, cooldownMs: 24 * 3_600_000 });
 }

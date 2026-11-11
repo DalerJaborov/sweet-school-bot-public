@@ -1,5 +1,6 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
+import { createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
+import { sendKind } from "./notify.js";
 import { shouldSendAlert } from "./alertGate.js";
 import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
@@ -108,31 +109,20 @@ export function isHumanCreatedLink(update: ChatMemberUpdate, botToken: string): 
  * Дальше это решает владелец — бот только сигналит.
  */
 async function alertUnexplainedJoin(update: ChatMemberUpdate, link: string | undefined): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  if (!botToken) return;
-
-  // Те же двое получателей, что и в остальных алертах бота (askOwner в ai.ts,
-  // maybeSendDailyReport в dailyReport.ts) — сестра и владелец, дубли отсечены.
-  // Только владельцу (telegramTechChatId).
-  const recipients = await techChatIds();
-  if (recipients.length === 0) return;
-
+  // Только владельцу, вид «подозрительное с доступом» (notify.ts).
   const user = update.new_chat_member?.user;
-  // Один и тот же вход (человек + группа) — не чаще раза в 6 часов.
-  if (!(await shouldSendAlert(`join:${user?.id ?? "?"}:${update.chat?.id ?? "?"}`))) return;
   const who = user?.username ? `@${user.username}` : user?.first_name ?? "без имени";
   const group = (await courseNameForChat(update.chat?.id)) ?? `неизвестная группа (chat_id ${update.chat?.id ?? "?"})`;
   const how = link ? "по ссылке, которую не узнаём — возможно слитая" : "без ссылки вообще";
 
   const text =
-    `⚠️ Непонятный вход в закрытую группу\n` +
+    `🚫 Непонятный вход в закрытую группу\n` +
     `Кто: ${who} (id ${user?.id ?? "?"})\n` +
     `Группа: ${group}\n` +
     `Как вошёл: ${how}`;
 
-  for (const chatId of recipients) {
-    await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("groupAccess:alertUnexplainedJoin", err));
-  }
+  // Один и тот же вход (человек + группа) — не чаще раза в 6 часов.
+  await sendKind("security", text, { dedupeKey: `join:${user?.id ?? "?"}:${update.chat?.id ?? "?"}` });
 }
 
 type ChatMemberUpdate = {
@@ -411,11 +401,9 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
   return { ok: true, details };
 }
 
-async function notifyOwner(botToken: string, who: string, reason: string, details: string, mark = "🚫"): Promise<void> {
-  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
-  if (!chatId) return;
+async function notifyOwner(_botToken: string, who: string, reason: string, details: string, mark = "🚫"): Promise<void> {
   const title = mark === "🔓" ? `${mark} Доступ возвращён` : `${mark} Доступ отобран`;
-  await sendTelegramMessage(botToken, chatId, `${title} у ${who}\nПричина: ${reason}\n${details}`).catch((err) =>
-    logError("groupAccess:notify", err)
-  );
+  await sendKind("security", `${title} у ${who}
+Причина: ${reason}
+${details}`);
 }

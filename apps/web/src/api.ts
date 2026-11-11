@@ -244,8 +244,20 @@ export type GoodNewsItem = {
   reviewText: string;
 };
 
+/** Самое главное сверху «Сегодня» (apps/api/src/todaySummary.ts). */
+export type MainEvent = { kind: "payment" | "offline"; who: string; what: string; at: string };
+export type BotState = { ai: boolean; frozen: boolean; comments: boolean; funnelsOn: number; funnelsPaused: boolean };
+export type MainSummary = {
+  money: { today: number; salesToday: number; week: number; salesWeek: number };
+  offline: { today: number; week: number };
+  pendingReceipts: number;
+  recent: MainEvent[];
+  bot: BotState;
+};
+
 export type Today = {
   generatedAt: string;
+  main?: MainSummary;
   money: { yesterday: number; dayBefore: number; week: number; prevWeek: number; salesYesterday: number; salesWeek: number };
   pendingReceipts: number;
   unansweredQuestions: number;

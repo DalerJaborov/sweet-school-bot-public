@@ -1,6 +1,7 @@
-import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
+import { prisma, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { chatsForKind } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { canTransferNow, describeDevice, issueMagicLink, transferToNewPhone } from "./access.js";
 import { parseRecoveryCode, recoveryCodeFor } from "./linkCode.js";
@@ -295,12 +296,6 @@ const PROOF_NAME: Record<ProofKind, string> = {
   own_chat: "сообщение из её чата покупки",
 };
 
-async function ownerChat(): Promise<{ botToken: string; chatId: string } | null> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  return botToken && chatId ? { botToken, chatId } : null;
-}
-
 function who(contact: Contact): string {
   return [contact.name, contact.username ? `@${contact.username}` : null, `${contact.channel} ${contact.igUserId}`]
     .filter(Boolean)
@@ -321,27 +316,21 @@ async function devicesNow(contactId: string): Promise<string> {
 
 /** Карточка владельцу с кнопкой «Разрешить перенос». */
 async function askOwner(contact: Contact, what: string, key = "ask"): Promise<void> {
-  const chat = await ownerChat();
-  if (!chat) return;
+  // Вид «decision» — невыключаемый: карточка с кнопкой не пропадёт, даже если владелец выключил «безопасность».
+  if ((await chatsForKind("decision")).length === 0) return;
   if (!(await shouldSendAlert(`phone-change:${key}:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
   approvals.set(contact.id, Date.now() + APPROVAL_TTL_MS);
   const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "переносов не было";
-  await sendTelegramMessage(
-    chat.botToken,
-    chat.chatId,
+  await sendKind(
+    "decision",
     `${who(contact)}: ${what}. Прошлый перенос: ${last}. Сейчас занято: ${await devicesNow(contact.id)}. ` +
       "Если это она, нажмите «Разрешить перенос»: старый телефон и старая ссылка перестанут работать, новая уйдёт ей в чат.",
-    undefined,
-    { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] },
+    { buttons: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] },
   ).catch((err) => logError("phoneChange:askOwner", err));
 }
 
 async function notifyOwner(contact: Contact, what: string): Promise<void> {
-  const chat = await ownerChat();
-  if (!chat) return;
-  await sendTelegramMessage(chat.botToken, chat.chatId, `${who(contact)}: ${what}`).catch((err) =>
-    logError("phoneChange:notifyOwner", err),
-  );
+  await sendKind("security", `🔓 ${who(contact)}: ${what}`);
 }
 
 /**

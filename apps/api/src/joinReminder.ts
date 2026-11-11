@@ -5,7 +5,7 @@ import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
 import { everTalkedWithShirin } from "./messaging/automation.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
-import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
+import { createOneTimeInviteLink, revokeInviteLink } from "./telegram.js";
 import { rememberInviteLink } from "./groupAccess.js";
 import { chatIdFor, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryMode, deliveryModeFor, issueCourseLink, type DeliveryMode } from "./course/delivery.js";
@@ -16,8 +16,8 @@ import { deliveryMode, deliveryModeFor, issueCourseLink, type DeliveryMode } fro
  * Часть учениц просто не понимает, что делать со ссылкой: Telegram у них либо не
  * установлен, либо ссылка открылась не в том приложении. Деньги отданы, уроков
  * человек не видит — и молчит, потому что стесняется. Через 20 часов бот
- * напоминает ОДИН раз (решение владельца: один раз, не больше) и заодно
- * сообщает сестре — дальше уже живой человек доведёт за руку.
+ * напоминает ОДИН раз (решение владельца: один раз, не больше). Владельцу и
+ * Ширин об этом в Telegram НЕ пишем (11.11.2026) — человек виден в панели.
  *
  * Решение владельца (25.08.2026 веч.): не только ПРОСИТЬ написать за новой
  * ссылкой, а перевыпустить и прислать её самому, не дожидаясь просьбы клиента —
@@ -127,7 +127,6 @@ async function sweep(): Promise<void> {
   if (waiting.length === 0) return;
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const sisterChat = (await techChatIds())[0];
 
   for (const contact of waiting) {
     if ((await getSetting("botFrozen")) === "true") return;
@@ -156,7 +155,6 @@ async function sweep(): Promise<void> {
     const links = windowOpen ? await reissueLinks(contact.id, botToken, contactMode, deliveredUpdates) : [];
     let uncertain = pendingUncertain;
     let delivered = false;
-    let ownerNotified = false;
     if ((await getSetting("botFrozen")) === "true") return;
 
     if (windowOpen) {
@@ -198,24 +196,10 @@ async function sweep(): Promise<void> {
       }
     }
 
-    // Сестре сообщаем в любом случае — даже когда окно Meta закрыто и написать
-    // человеку нельзя. Тогда это единственный способ его не потерять.
-    if (botToken && sisterChat) {
-      const who = contact.username ? `@${contact.username}` : contact.igUserId;
-      const linkNote = delivered && links.length > 0 ? " Ссылка доставлена." : "";
-      const note = uncertain ? "Доставка ссылки или напоминания неизвестна. Автоповтор остановлен; проверьте переписку вручную." : shirinTalked
-        ? "бот не напоминал: Ширин переписывалась с ней сама — напомните, если нужно."
-        : windowOpen
-        ? delivered ? `бот напомнил.${linkNote}` : "Напоминание НЕ доставлено — нужна ручная помощь; оплаченный доступ сохранён."
-        : `написать боту уже нельзя — окно Instagram закрыто.${linkNote}`;
-      const where = mode === "web" ? "не открыл(а) уроки" : "не зашёл(шла) в группу";
-      const ownerMessage = await sendTelegramMessage(
-        botToken,
-        sisterChat,
-        `${who} оплатил(а), но за ${AFTER_HOURS} часов ${where}\n${note}`
-      ).catch((err) => { logError("joinReminder:notify", err); return null; });
-      ownerNotified = Boolean(ownerMessage);
-    }
-    if (delivered || ownerNotified || uncertain) await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
+    // Владельцу и Ширин про это НЕ пишем (11.11.2026: «@x оплатил, но за 20 часов не
+    // зашёл в группу» — шум; человек виден в панели «Клиенты»). Одна попытка на
+    // человека («один раз, не больше»): отметка ставится при любом исходе, иначе
+    // постоянный отказ Instagram повторялся бы каждый круг. Отказ виден в «Журнале».
+    await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
   }
 }

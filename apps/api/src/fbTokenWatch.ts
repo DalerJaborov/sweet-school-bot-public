@@ -1,5 +1,5 @@
 import { getSetting, logInfo, logWarn, setSetting } from "./db.js";
-import { techChatIds, sendTelegramMessage } from "./telegram.js";
+import { sendKind } from "./notify.js";
 
 /**
  * СТОРОЖ МАРКЕРА СТРАНИЦЫ FACEBOOK (fbPageToken).
@@ -68,11 +68,8 @@ async function fetchInfo(token: string): Promise<FbTokenInfo | null> {
 async function alertOwner(text: string, now: number): Promise<void> {
   const last = Number(await getSetting("fbTokenAlertAt"));
   if (Number.isFinite(last) && last > 0 && now - last < ALERT_COOLDOWN_MS) return;
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  if (!botToken || !chatId) return;
   await setSetting("fbTokenAlertAt", String(now));
-  await sendTelegramMessage(botToken, chatId, text);
+  await sendKind("failure", text);
 }
 
 /** Раз в несколько часов: спросить Meta про маркер страницы и предупредить заранее. */
