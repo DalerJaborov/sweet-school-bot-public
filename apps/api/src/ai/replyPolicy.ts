@@ -159,9 +159,20 @@ export function cleanGeneratedReply(text: string): string {
 
 export const FORMAL_TONE_RULE = "Обращайтесь только на «вы» по-русски и «шумо» по-таджикски. Без эмодзи.";
 
+/**
+ * «Линк» по-таджикски клиенты не понимают (владелец 12.11.2026): говорят «ссылка»,
+ * иногда «дар сайти мо» / «сомонаи мо». Модели это сказано в REPLY_POLICY_INSTRUCTION,
+ * а если слово всё же проскочило — меняем на «ссылка» с тем же окончанием
+ * (линкро → ссылкаро, линки → ссылкаи). Ручные ответы Ширин сюда не идут.
+ */
+const LINK_WORD = /(?<!\p{L})([Лл])инк(ҳо|хо|ро|и|ам|ат|аш|амон|атон|ашон)?(?!\p{L})/gu;
+export function replaceLinkWord(text: string): string {
+  return text.replace(LINK_WORD, (_m, l: string, suffix = "") => `${l === "Л" ? "С" : "с"}сылка${suffix}`);
+}
+
 export function cleanAutomatedReply(text: string): string {
   // A single policy for generated text and automatic templates; human sends bypass it.
-  return text
+  return replaceLinkWord(text)
     .replace(
       /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu,
       "",
@@ -184,4 +195,4 @@ export function cleanKeepingWarmTail(text: string): string {
 }
 
 export const REPLY_POLICY_INSTRUCTION =
-  "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Смайлики сами не ставьте: когда уместно, их добавляет система. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ. Если ответа нет в фактах выше, верните ровно [ASK_SHIRIN], не угадывайте.";
+  "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Смайлики сами не ставьте: когда уместно, их добавляет система. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ. Если ответа нет в фактах выше, верните ровно [ASK_SHIRIN], не угадывайте. По-таджикски не пишите «линк»: говорите «ссылка» или «дар сайти мо» / «дар сомонаи мо», чередуйте.";

@@ -218,7 +218,7 @@ const personLabel = (p: Person) => `${p.handle}${p.name ? ` · ${p.name}` : ""}`
 
 /** Что человеку приходит вместе с кнопкой «Переслать»: коротко, по-русски и по-таджикски. */
 function shareButton(url: string): Record<string, unknown> {
-  const text = "Ваша личная ссылка на уроки Ширин. Линки шахсии шумо ба дарсҳои Ширин.";
+  const text = "Ваша личная ссылка на уроки Ширин. Ссылкаи шахсии шумо ба дарсҳои Ширин.";
   return {
     inline_keyboard: [
       [{ text: "📤 Переслать человеку", url: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}` }],
