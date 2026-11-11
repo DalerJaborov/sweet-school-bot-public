@@ -185,7 +185,10 @@ export async function sendNotifyMenu(botToken: string, chatId: string): Promise<
 const labels = (kinds: NotifyKind[]) => kinds.map((k) => `«${NOTIFY_INFO[k].label}»`).join(", ");
 
 async function muteKinds(role: ChatRole, kinds: NotifyKind[]): Promise<string> {
-  const allowed = kinds.filter((k) => kindsFor(role).includes(k));
+  if (kinds.length > 0 && kinds.every((k) => NOTIFY_INFO[k].locked)) {
+    return "Это выключить нельзя: без вашей кнопки чек или перенос телефона зависнет.";
+  }
+  const allowed = kinds.filter((k) => kindsFor(role).includes(k) && !NOTIFY_INFO[k].locked);
   if (allowed.length === 0) return "Такое вам и так не приходит.";
   for (const k of allowed) await setKindEnabled(role, k, false);
   return `🔕 Готово, больше не пришлю: ${labels(allowed)}.\nВернуть — «включи обратно» или кнопка «🔔 Уведомления».`;

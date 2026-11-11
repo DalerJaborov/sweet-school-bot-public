@@ -40,11 +40,15 @@ function code(file: string): string {
 const files = walk(SRC).map((f) => ({ name: rel(f), src: code(f) }));
 
 function callers(pattern: RegExp): string[] {
-  return files.filter((f) => pattern.test(f.src)).map((f) => f.name).sort();
+  return files
+    .filter((f) => pattern.test(f.src))
+    .map((f) => f.name)
+    .sort();
 }
 
 /** Низкоуровневые отправки в Telegram: звать напрямую можно только отсюда. */
-const RAW_SENDERS = /\b(sendTelegramMessage|sendMessageWithButtons|sendWithMarkup|sendReceiptForReview|sendTelegramVoice)\(/;
+const RAW_SENDERS =
+  /\b(sendTelegramMessage|sendMessageWithButtons|sendWithMarkup|sendReceiptForReview|sendTelegramVoice)\(/;
 
 const RAW_SENDER_ALLOWED: Record<string, string> = {
   "telegram.ts": "здесь эти функции определены; sendKind — их единственный «массовый» вызывающий",
@@ -54,9 +58,12 @@ const RAW_SENDER_ALLOWED: Record<string, string> = {
   "course/manualLink.ts": "ответ тому, кто прислал команду «выдай ссылку» (чат уже проверен trustedChatIds)",
   "course/manualOfflineSignup.ts": "ответ тому, кто прислал команду записи на офлайн (чат уже проверен trustedChatIds)",
   "qaGroup.ts": "ответ в учебной группе, откуда пришёл вопрос (не уведомление владельцу)",
-  "course/chat.ts": "вопрос ученицы с платформы — в учебную группу или Ширин, чтобы она ответила реплаем; это не «уведомление»",
-  "ai/receiptVerdict.ts": "карточка чека с ФОТО и кнопками «Подтвердить/Отклонить»: получатели — summaryChatIds() = вид «decision» (невыключаемый)",
-  "stuckAlert.ts": "ДОЛГ: «активный интерес без покупки» уходит напрямую в telegramReportChatId с кнопками быстрых ответов; перевести на sendKind(кнопки) отдельной задачей",
+  "course/chat.ts":
+    "вопрос ученицы с платформы — в учебную группу или Ширин, чтобы она ответила реплаем; это не «уведомление»",
+  "ai/receiptVerdict.ts":
+    "карточка чека с ФОТО и кнопками «Подтвердить/Отклонить»: получатели — summaryChatIds() = вид «decision» (невыключаемый)",
+  "stuckAlert.ts":
+    "ДОЛГ: «активный интерес без покупки» уходит напрямую в telegramReportChatId с кнопками быстрых ответов; перевести на sendKind(кнопки) отдельной задачей",
 };
 
 /** Выбор получателей уведомлений: только тут и в самой двери. */
@@ -65,12 +72,15 @@ const RECIPIENT_LOOKUP_ALLOWED: Record<string, string> = {
   "telegram.ts": "определения и маршрутизация по ролям",
   "notify.ts": "сама дверь: sendKind",
   "ai/receiptVerdict.ts": "получатели карточки чека (вид «decision»)",
-  "course/phoneChange.ts": "проверка «есть ли кому слать» перед карточкой «Разрешить перенос» (вид «decision»); отправка — через sendKind",
-  "appSecretWatch.ts": "проверка «есть ли кому слать» перед тем, как считать сторож сработавшим; отправка — через sendKind",
+  "course/phoneChange.ts":
+    "проверка «есть ли кому слать» перед карточкой «Разрешить перенос» (вид «decision»); отправка — через sendKind",
+  "appSecretWatch.ts":
+    "проверка «есть ли кому слать» перед тем, как считать сторож сработавшим; отправка — через sendKind",
 };
 
 /** Чат-id владельцев в настройках напрямую: только эти файлы. */
-const RAW_CHAT_SETTINGS = /["'](telegramReportChatId|telegramTechChatId|telegramOwnerChatId|telegramSummaryChatIds)["']/;
+const RAW_CHAT_SETTINGS =
+  /["'](telegramReportChatId|telegramTechChatId|telegramOwnerChatId|telegramSummaryChatIds)["']/;
 const RAW_CHAT_SETTINGS_ALLOWED: Record<string, string> = {
   "telegram.ts": "маршрутизация по ролям",
   "services/settingsService.ts": "список настроек панели",
@@ -83,7 +93,10 @@ describe("КЛАСС: уведомления владельцам идут то�
   it("прямые отправки в Telegram есть только в белом списке (и каждая — с причиной)", () => {
     const found = callers(RAW_SENDERS);
     const extra = found.filter((f) => !(f in RAW_SENDER_ALLOWED));
-    expect(extra, `Прямая отправка в Telegram мимо sendKind: ${extra.join(", ")}. Используйте sendKind (notify.ts).`).toEqual([]);
+    expect(
+      extra,
+      `Прямая отправка в Telegram мимо sendKind: ${extra.join(", ")}. Используйте sendKind (notify.ts).`,
+    ).toEqual([]);
   });
 
   it("белый список не копит мёртвые записи: каждый файл в нём реально зовёт отправку", () => {
