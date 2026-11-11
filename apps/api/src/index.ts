@@ -14,6 +14,8 @@ import { adminRouter } from "./admin.js";
 import { adminLoginRouter } from "./adminLogin.js";
 import { mediaRouter } from "./upload.js";
 import { telegramRouter } from "./telegramWebhook.js";
+import { pushMenuOnce } from "./telegramMenu.js";
+import { menuChats } from "./telegram.js";
 import { miniAppRouter } from "./miniApp.js";
 import { courseRouter } from "./course/router.js";
 import { siteRouter } from "./site/router.js";
@@ -130,6 +132,16 @@ const server = app.listen(env.port, () => {
   logInfo("http", `Sweet School Bot API на порту ${env.port}`);
 });
 startWhatsAppWorker();
+
+// Кнопки бота владельцу и Ширин без «/menu» — один раз на версию меню (telegramMenu.ts).
+setTimeout(() => {
+  void (async () => {
+    const token = (await getSetting("telegramBotToken"))?.trim();
+    if (!token) return;
+    const n = await pushMenuOnce(token, await menuChats());
+    if (n > 0) logInfo("telegramMenu", `кнопки бота отправлены в ${n} чат(а)`);
+  })().catch((err) => logError("telegramMenu:push", err));
+}, 20_000);
 
 // Graceful shutdown: при SIGTERM/SIGINT сначала сбрасываем pending-сообщения
 // дебаунса (чтобы не потерять неотправленные ответы), потом закрываем сервер.

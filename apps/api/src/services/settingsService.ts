@@ -49,6 +49,9 @@ export const SETTING_KEYS = [
   "testimonialsEnabled",
   "testimonialBatchSize",
   "testimonialsLinkUrl",
+  // Видео «не открывается видео» (владелец 12.11.2026, ai/deliveryContext.ts): ссылка на
+  // ролик-инструкцию; не задано — ролик владельца, "" или "false" — бот видео не даёт.
+  "videoHelpUrl",
   // Особые таджикские буквы в текстах бота (messaging/humanize.ts): "plain" (по умолчанию,
   // владелец 11.11.2026 — без книжных ҷ қ ӯ ғ ҳ ӣ) или "mirror" — как пишет сам клиент.
   "tajikLettersMode",
