@@ -23,7 +23,8 @@ describe("картинки меню — только с нашего серве�
 
   it("новый адрес меню арт-десертов = имя, которое даст скрипт переноса", () => {
     // Формула имени — ops/2026-11-11-move-manybot-media.mjs::localNameFor.
-    const old = "https://manybot-thumbnails.s3.eu-central-1.amazonaws.com/fb4433534/ca/big_69c2e6c900233215cc5859be98a8dfac.png";
+    const old =
+      "https://manybot-thumbnails.s3.eu-central-1.amazonaws.com/fb4433534/ca/big_69c2e6c900233215cc5859be98a8dfac.png";
     const name = `mb-${createHash("sha1").update(old).digest("hex").slice(0, 16)}.png`;
     expect(DEFAULT_MENU_MEDIA.online50).toEqual([`https://shirinsweets.online/media/${name}`]);
     const mover = fs.readFileSync(path.join(OPS, "2026-11-11-move-manybot-media.mjs"), "utf8");

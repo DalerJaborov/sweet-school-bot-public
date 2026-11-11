@@ -1,5 +1,6 @@
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
+import { sendKind } from "./notify.js";
 import { sendToContact } from "./messaging/send.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
@@ -185,13 +186,6 @@ async function runQueue(): Promise<void> {
 
 /** Попытки кончились (~13 часов) — сообщаем владельцу, а не молчим, как раньше. */
 async function giveUp(contactId: string, text: string, early = false): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  if (!botToken) return;
-  // Техническое: только владельцу (telegramTechChatId), не сестре.
-  const { techChatIds } = await import("./telegram.js");
-  const recipients = await techChatIds();
-  if (recipients.length === 0) return;
-
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const who = contact?.username ? `@${contact.username}` : contact?.igUserId;
   const message =
@@ -200,8 +194,6 @@ async function giveUp(contactId: string, text: string, early = false): Promise<v
     `Последнее: «${text.slice(0, 200)}»\n` +
     `Ответьте, пожалуйста, вручную.`;
 
-  const { sendTelegramMessage } = await import("./telegram.js");
-  for (const chatId of recipients) {
-    await sendTelegramMessage(botToken, chatId, message).catch((err) => logError("aiReplyRetry:notify", err));
-  }
+  // Сбой: только владельцу (notify.ts), Ширин служебного не получает.
+  await sendKind("failure", message);
 }

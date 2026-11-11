@@ -7,6 +7,7 @@ const { createOneTimeInviteLink, sendTelegramMessage, sendToContact } = vi.hoist
 vi.mock("../../src/telegram.js", () => ({
   createOneTimeInviteLink, sendTelegramMessage,
   techChatIds: async () => ["owner"],
+  chatsForKind: async () => ["owner"],
 }));
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact }));
 import { MetaDeliveryError } from "../../src/messaging/metaErrors.js";
@@ -62,17 +63,17 @@ describe("in-flight join reminder freeze", () => {
     expect(db.model("purchase").findMany).not.toHaveBeenCalled();
     expect(db.model("contact").update.mock.calls.some(([arg]) => "accessTokenId" in (arg as { data: object }).data)).toBe(false);
     expect(sendToContact).not.toHaveBeenCalled();
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("окно Instagram закрыто");
-    expect(String(sendTelegramMessage.mock.calls[0][2])).not.toContain("перевыпущена");
+    expect(sendTelegramMessage).not.toHaveBeenCalled(); // 11.11.2026: владельцу и Ширин про это не пишем
+    expect(sendTelegramMessage).not.toHaveBeenCalled(); // 11.11.2026: владельцу и Ширин про это не пишем
   });
 
-  it("failed delivery cannot be reported as successful; unnotified work remains retryable", async () => {
+  it("failed delivery is not reported as success and makes one attempt only (no Telegram noise)", async () => {
     sendToContact.mockRejectedValueOnce(new Error("network error"));
     sendTelegramMessage.mockRejectedValueOnce(new Error("owner unavailable"));
     humanAware();
     await runJoinReminders();
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("НЕ доставлено");
-    expect(db.model("contact").update.mock.calls.some(([arg]) => "joinReminderAt" in (arg as { data: object }).data)).toBe(false);
+    expect(sendTelegramMessage).not.toHaveBeenCalled(); // 11.11.2026: владельцу и Ширин про это не пишем
+    expect(db.model("contact").update.mock.calls.some(([arg]) => "joinReminderAt" in (arg as { data: object }).data)).toBe(true);
     expect(db.model("purchase").delete).not.toHaveBeenCalled();
   });
 
@@ -81,7 +82,7 @@ describe("in-flight join reminder freeze", () => {
     sendTelegramMessage.mockRejectedValueOnce(new Error("owner unavailable"));
     humanAware();
     await runJoinReminders();
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Доставка ссылки или напоминания неизвестна");
+    expect(sendTelegramMessage).not.toHaveBeenCalled(); // 11.11.2026: владельцу и Ширин про это не пишем
     expect(db.model("contact").update.mock.calls.some(([arg]) => "joinReminderAt" in (arg as { data: object }).data)).toBe(true);
     expect(db.model("purchase").update).not.toHaveBeenCalled();
   });
@@ -92,7 +93,7 @@ describe("in-flight join reminder freeze", () => {
     await runJoinReminders();
     expect(sendToContact).not.toHaveBeenCalled();
     expect(db.model("purchase").findMany).not.toHaveBeenCalled();
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Доставка ссылки или напоминания неизвестна");
+    expect(sendTelegramMessage).not.toHaveBeenCalled(); // 11.11.2026: владельцу и Ширин про это не пишем
   });
 
   it("freeze during purchase lookup prevents rotating a paid student's web link", async () => {
@@ -129,7 +130,7 @@ describe("Ширин переписывалась с клиенткой сама
     await runJoinReminders();
     expect(sendToContact).not.toHaveBeenCalled();
     expect(db.model("purchase").findMany).not.toHaveBeenCalled();
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Ширин переписывалась с ней сама");
+    expect(sendTelegramMessage).not.toHaveBeenCalled(); // 11.11.2026: владельцу и Ширин про это не пишем
     expect(db.model("contact").update.mock.calls.some(([arg]) => "joinReminderAt" in (arg as { data: object }).data)).toBe(true);
   });
 

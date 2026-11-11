@@ -21,6 +21,7 @@ import { offerRouter } from "./offerRoutes.js";
 import { waitingRouter } from "./waiting.js";
 import { ownerLinkRouter } from "./course/ownerLinkRoutes.js";
 import { todayRouter, resetTodayCache, guessCourse } from "./today.js";
+import { controlRouter } from "./controlRoutes.js";
 import { metricsRouter } from "./metrics.js";
 import { searchRouter } from "./search.js";
 import { assistantRouter } from "./assistantPanel.js";
@@ -1363,6 +1364,7 @@ adminRouter.use(mediaLibraryRouter);
 adminRouter.use(offerRouter);
 // Главный экран «Сегодня» — очередь дел и утренние числа (today.ts).
 adminRouter.use(todayRouter);
+adminRouter.use(controlRouter);
 adminRouter.use(waitingRouter);
 // «Выдать ссылку» на экране «Сегодня» (course/ownerLink.ts).
 adminRouter.use(ownerLinkRouter);

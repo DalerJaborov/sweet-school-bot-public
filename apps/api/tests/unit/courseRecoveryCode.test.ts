@@ -14,6 +14,7 @@ vi.mock("../../src/whatsapp/transport.js", () => ({
 }));
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: vi.fn(async () => ["owner-1"]),
+  chatsForKind: vi.fn(async () => ["owner-1"]),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 

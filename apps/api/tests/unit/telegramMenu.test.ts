@@ -5,7 +5,8 @@ const sendTelegramMessage = vi.fn(async () => 1);
 const sendWithMarkup = vi.fn(async () => true);
 const answerCallback = vi.fn(async () => undefined);
 const createOneTimeInviteLink = vi.fn(async () => "https://t.me/+abc");
-vi.mock("../../src/telegram.js", () => ({
+vi.mock("../../src/telegram.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/telegram.js")>()),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
   sendWithMarkup: (...a: unknown[]) => sendWithMarkup(...a),
   answerCallback: (...a: unknown[]) => answerCallback(...a),

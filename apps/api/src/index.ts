@@ -2,7 +2,6 @@ import express from "express";
 import os from "node:os";
 import fs from "node:fs";
 import { checkInboundSilence } from "./inboundWatch.js";
-import { runOwnerReminders } from "./ownerReminder.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
 import { markWorkerOk, markWorkerTimeout, STUCK_AFTER } from "./workerHealth.js";
@@ -48,6 +47,7 @@ import { resumeUnfinishedTranscodes } from "./course/adminRoutes.js";
 import { startWhatsAppWorker } from "./whatsapp/worker.js";
 import { runMetaConversions } from "./metaConversions.js";
 import { runUnansweredWatch } from "./unansweredWatch.js";
+import { runPaymentNotifications } from "./paymentNotify.js";
 
 // index.ts — единственная точка, где db.ts и telegram.ts (через systemAlerts.ts)
 // встречаются без цикла импортов (см. комментарий у onNewSystemError в db.ts).
@@ -308,22 +308,20 @@ setInterval(() => {
   void checkInboundSilence().catch((err) => logError("inboundWatch", err));
 }, 60 * 60_000);
 
-// НАПОМИНАНИЕ ВЛАДЕЛЬЦУ (ownerReminder.ts): чеки и вопросы учениц, которые
-// висят дольше часа, — раз в два часа в рабочее время. Тик частый, сама
-// задача решает, пора ли (отметка в базе); singleFlight — чтобы медленный
-// Telegram не наложил два прогона друг на друга.
-const ownerReminderTick = () =>
-  void singleFlight("ownerReminder", () => runOwnerReminders()).catch((err) => logError("ownerReminder", err));
-setTimeout(ownerReminderTick, 3 * 60_000);
-setInterval(ownerReminderTick, 10 * 60_000);
-
 // СТОРОЖ «БЕЗ ОТВЕТА» (unansweredWatch.ts, владелец 09.11.2026): клиент в
 // Instagram ждёт ответа дольше 15 минут — бот отвечает сам после паузы Ширин
-// или напоминает владельцу в Telegram. Рубильник unansweredWatchdogEnabled.
+// (в Telegram с 11.11.2026 не пишет). Рубильник unansweredWatchdogEnabled.
 const unansweredTick = () =>
   void singleFlight("unansweredWatch", () => runUnansweredWatch()).catch((err) => logError("unansweredWatch", err));
 setTimeout(unansweredTick, 4 * 60_000);
 setInterval(unansweredTick, 5 * 60_000);
+
+// «ПРИШЛА ОПЛАТА» (paymentNotify.ts, 11.11.2026): одно сообщение на покупку владельцу
+// и Ширин. Первый запуск только ставит отметку, историю не высылает.
+const paymentNotifyTick = () =>
+  void singleFlight("paymentNotify", async () => void (await runPaymentNotifications())).catch((err) => logError("paymentNotify", err));
+setTimeout(paymentNotifyTick, 90_000);
+setInterval(paymentNotifyTick, 30_000);
 
 // ПОКУПКИ — В РЕКЛАМУ META (metaConversions.ts): очередь событий «Покупка».
 // Рубильник metaCapiEnabled по умолчанию выключен — тогда задача ничего не делает.

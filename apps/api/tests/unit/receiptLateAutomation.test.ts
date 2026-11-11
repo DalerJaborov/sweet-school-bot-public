@@ -17,6 +17,7 @@ vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[])
 const sendReceiptForReview = vi.fn(async (..._a: unknown[]) => null);
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: vi.fn(async () => ["owner-1"]),
+  chatsForKind: vi.fn(async () => ["owner-1"]),
   summaryChatIds: vi.fn(async () => ["owner-1"]),
   sendReceiptForReview: (...a: unknown[]) => sendReceiptForReview(...a),
   sendTelegramMessage: vi.fn(async () => 1),

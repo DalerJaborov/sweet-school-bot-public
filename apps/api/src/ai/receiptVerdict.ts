@@ -5,7 +5,8 @@ import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
 import { enqueuePurchaseConversion } from "../metaConversions.js";
-import { sendReceiptForReview, sendTelegramMessage, summaryChatIds } from "../telegram.js";
+import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
 import { allocate, COURSE_TITLE, coursesForAmount, ownedCourses, planForAmount, type Course } from "../courses.js";
@@ -141,10 +142,8 @@ const SAME_TRANSFER_AMOUNT_GAP = 5;
  *  (без кнопок: решать по чужой строке нельзя). */
 async function notifyOwnerText(contact: Contact, text: string): Promise<void> {
   try {
-    const botToken = (await getSetting("telegramBotToken"))?.trim();
-    if (!botToken) return;
     const who = contact.username ? `@${contact.username}` : contact.igUserId;
-    for (const chatId of await summaryChatIds()) await sendTelegramMessage(botToken, chatId, `${who}: ${text}`);
+    await sendKind("review", `${who}: ${text}`);
   } catch (err) {
     logError("receiptVerdict:ownerText", err);
   }
@@ -152,15 +151,13 @@ async function notifyOwnerText(contact: Contact, text: string): Promise<void> {
 
 async function notifyHashTaken(contact: Contact, otherContactId: string, amount: number | null, imageUrl: string | null): Promise<void> {
   try {
-    const botToken = (await getSetting("telegramBotToken"))?.trim();
-    if (!botToken) return;
     const other = await prisma.contact.findUnique({ where: { id: otherContactId }, select: { username: true, igUserId: true } });
     const name = (c: { username: string | null; igUserId: string } | null) => (c ? (c.username ? `@${c.username}` : c.igUserId) : "?");
     const text =
       `Чек требует проверки: этот же скриншот уже присылал другой человек (${name(other)}).\n` +
       `Сейчас прислал: ${name(contact)}\nСумма: ${amount != null ? `${Math.round(amount * 100) / 100} сомони` : "не разобрана"}\n` +
       `Доступ не выдан.${imageUrl ? `\nКартинка: ${imageUrl}` : ""}`;
-    for (const chatId of await summaryChatIds()) await sendTelegramMessage(botToken, chatId, text);
+    await sendKind("review", text);
   } catch (err) {
     logError("receiptVerdict:hashTaken", err);
   }
@@ -222,7 +219,7 @@ async function askOwner(
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken || !verdict.imageUrl) return;
 
-  // Карточки сомнительных чеков — владельцу и сестре (telegramSummaryChatIds).
+  // Карточки сомнительных чеков — только владельцу и невыключаемые (вид «decision», telegram.ts).
   const recipients = await summaryChatIds();
   if (recipients.length === 0) return;
 

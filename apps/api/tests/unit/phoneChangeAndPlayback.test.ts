@@ -14,6 +14,7 @@ vi.mock("../../src/whatsapp/transport.js", () => ({
 }));
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: vi.fn(async () => ["owner-1"]),
+  chatsForKind: vi.fn(async () => ["owner-1"]),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
@@ -80,7 +81,7 @@ describe("смена телефона через бота", () => {
     expect(upd.data.deviceSwaps).toBe(1);
     // Владельцу — сводка без кнопки.
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("код из ссылки");
-    expect(sendTelegramMessage.mock.calls[0][4]).toBeUndefined();
+    expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain("nf:off:security"); // только кнопка «Не присылать такое»
   });
 
   it("чужой код не считается доказательством", async () => {
