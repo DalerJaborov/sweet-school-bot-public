@@ -63,29 +63,29 @@ const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.
 const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string; foreign: string }> = {
   ru: {
     foreign:
-      "Поняла вас. Это другой чат, поэтому ссылку здесь сама выдать не могу. Передала Ширин: " +
-      "она проверит покупку и откроет доступ.",
+      "Поняла вас. Это другой чат, поэтому ссылку здесь сразу выдать не могу. " +
+      "Сейчас проверю покупку и открою доступ.",
     sent: "Вот новая ссылка на ваши уроки. Откройте её на том телефоне, где будете смотреть:\n",
     pending:
-      "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
-      "она откроет доступ вручную, это недолго.",
-    revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Ширин посмотрит и напишет вам сама.",
+      "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому открою доступ вручную, " +
+      "это недолго.",
+    revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Сейчас проверю и напишу вам.",
   },
   tg: {
     foreign:
-      "Фахмидам. Ин чати дигар, барои хамин ссылкаро худам дода наметонам. Ба Ширин гуфтам, " +
-      "харидатонро тафтиш карда дарсхоя мекушояд.",
+      "Фахмидам. Ин чати дигар, барои хамин ссылкаро хозир дода наметонам. " +
+      "Харидатонро тафтиш карда дарсхоя мекушоям.",
     sent: "Ана ссылкаи нави дарсхоятон. Дар хамон телефоне кушоен, ки тамошо мекнен:\n",
     pending:
-      "Харидатонро дидам. Ссылка чанд бор рафт, барои хамин ба Ширин гуфтам. " +
-      "Худаш дарсхоя мекушояд, дер намешавад.",
-    revoked: "Дар бораи пардохтатон савол хаст, дарсхо хозир пушида. Ширин тафтиш карда худаш менависад.",
+      "Харидатонро дидам. Ссылка чанд бор рафт, барои хамин дарсхоя худам мекушоям, " +
+      "дер намешавад.",
+    revoked: "Дар бораи пардохтатон савол хаст, дарсхо хозир пушида. Тафтиш карда ба шумо менависам.",
   },
   en: {
-    foreign: "This is a different chat, so I cannot issue the link here. I passed this to Shirin, she will check the purchase and open access.",
+    foreign: "This is a different chat, so I cannot issue the link here right away. I will check the purchase and open access.",
     sent: "Here is a fresh link to your lessons. Open it on the phone you will watch on:\n",
-    pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
-    revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
+    pending: "I can see your purchase. The link was sent several times already, so I will open access manually.",
+    revoked: "There is a question about your payment, access is on hold. I will check and write to you.",
   },
 };
 

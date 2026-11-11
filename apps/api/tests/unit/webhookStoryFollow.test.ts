@@ -16,6 +16,8 @@ vi.mock("../../src/funnel.js", () => ({
   handleIncomingDm: vi.fn(async () => false),
   handleComment: vi.fn(),
   cancelPendingFunnelSteps: vi.fn(async () => 0),
+  clientMessageStopsFunnel: vi.fn(async () => true),
+  settleDeferredFunnel: vi.fn(async () => undefined),
 }));
 vi.mock("../../src/ai.js", () => ({
   aiReply: vi.fn(async () => undefined),

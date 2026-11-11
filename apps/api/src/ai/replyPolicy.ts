@@ -1,3 +1,5 @@
+import { stripServiceMarkers } from "./humanText.js";
+
 /** Validate generated sales copy, never rewrite a customer's words or a recipe. */
 export class ReplyPolicyError extends Error {
   readonly retryable = false;
@@ -124,7 +126,8 @@ export const FORMAL_TONE_RULE = "Обращайтесь только на «вы
 
 export function cleanAutomatedReply(text: string): string {
   // A single policy for generated text and automatic templates; human sends bypass it.
-  return text.replace(/\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu, "").trim();
+  // Служебные метки ([ASK_SHIRIN], [NO_REPLY]) клиенту не уходят никогда (humanText.ts).
+  return stripServiceMarkers(text).replace(/\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu, "").trim();
 }
 
 /** Разрешённые тёплые завершающие смайлики (voice.ts::maybeWarmEmoji, ai/reactions.ts). */
@@ -141,4 +144,4 @@ export function cleanKeepingWarmTail(text: string): string {
   return tail && cleaned ? `${cleaned} ${tail[1]}` : cleaned;
 }
 
-export const REPLY_POLICY_INSTRUCTION = "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Без эмодзи. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ. Если ответа нет в фактах выше, верните ровно [ASK_SHIRIN], не угадывайте.";
+export const REPLY_POLICY_INSTRUCTION = "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Смайлики сами не ставьте: когда уместно, их добавляет система. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ. Если ответа нет в фактах выше, верните ровно [ASK_SHIRIN], не угадывайте.";

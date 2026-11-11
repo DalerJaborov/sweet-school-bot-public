@@ -44,7 +44,8 @@ export const DEFAULT_OFFLINE_FACTS: OfflineFacts = {
   // Шаг воронки берёт число подстановкой {десерты} (funnelPlaceholders.ts),
   // настройка offlineCourseDesserts в «Цены и даты» перекрывает это значение.
   desserts: OFFLINE_DESSERTS_DEFAULT,
-  address: "Душанбе, Рудаки 177, ориентир Воданасос",
+  // Одно написание на обоих языках (владелец 11.11.2026: «везде Рудаки 177, назди Воданасос»).
+  address: DEFAULT_OFFLINE_ADDRESS_TG,
   seats: null,
 };
 

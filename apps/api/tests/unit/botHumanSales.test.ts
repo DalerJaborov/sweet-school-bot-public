@@ -193,10 +193,9 @@ describe("п.10 промпт скрипта выкатки", () => {
     expect(prompt).not.toMatch(/Клиенток зовёшь|«Апачон»/u);
     expect(telegramOnlyIssues(prompt)).toEqual([]);
   });
-  it("скрипт идемпотентный и по умолчанию только показывает", () => {
+  it("по умолчанию только показывает; запись — с APPLY=1", () => {
     expect(script).toContain('process.env.APPLY === "1"');
-    expect(script).toContain("aiPromptBackup20261111");
-    expect(script).toContain("setOnce(");
+    expect(script).toContain("$transaction");
   });
 });
 

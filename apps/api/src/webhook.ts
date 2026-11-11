@@ -4,7 +4,14 @@ import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { upsertContact, handleIncomingDm, handleComment, cancelPendingFunnelSteps } from "./funnel.js";
+import {
+  upsertContact,
+  handleIncomingDm,
+  handleComment,
+  cancelPendingFunnelSteps,
+  clientMessageStopsFunnel,
+  settleDeferredFunnel,
+} from "./funnel.js";
 import { aiReply, registerOfflineIfAsked, rescueIncomingImages, verifyReceiptsNow, type RescuedImage } from "./ai.js";
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
@@ -583,11 +590,6 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     return;
   }
 
-  // Клиент написал сам (не нажал кнопку) — отложенные шаги воронки отменяются:
-  // разговор пошёл живьём, шаблон поверх него звучит как автомат (пункт 6, 11.11.2026).
-  if (!payload && (textOrVoice || attachments.length > 0)) {
-    await cancelPendingFunnelSteps(contact.id, "остановлено: клиент написал сам");
-  }
   const hasAttachments = attachments.length > 0;
 
   // Frozen means funnel-only, including before receipt intake and signup.
@@ -595,6 +597,14 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   if (frozen || (await getSetting("botFrozen")) === "true") {
     if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable: false });
     return;
+  }
+
+  // Клиент написал сам (не нажал кнопку) — отложенные шаги воронки отменяются:
+  // разговор пошёл живьём, шаблон поверх него звучит как автомат (пункт 6, 11.11.2026).
+  // Только если ответит ИИ (включён, не пауза, ключи есть) и сообщение не пустяк
+  // («рахмат», «ок»): иначе человек остался бы и без шага, и без ответа (ревью 11.11.2026).
+  if (!payload && (await clientMessageStopsFunnel(textOrVoice, attachments))) {
+    await cancelPendingFunnelSteps(contact.id, "остановлено: клиент написал сам");
   }
 
   // Only the confirmed pending course delivery may continue after human takeover.
@@ -667,9 +677,17 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // знать, о чём он спрашивает, ещё до того, как посмотрит обложку.
   const textForAi = ownMediaHint ? `${ownMediaHint}\n${textOrVoice ?? ""}`.trim() : textOrVoice ?? "";
 
+  // С этого момента считаем «ответили ли человеку» — для отложенной воронки ниже.
+  const answerWindowFrom = new Date();
   await debounceMessage(contact.id, textForAi, attachments, rescuedImages, async (mergedText, mergedAttachments, mergedRescued) => {
-    const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-    if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
-    await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
+    try {
+      const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
+      if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
+      await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
+    } finally {
+      // Первый вопрос без меню: ответ реально ушёл — воронка пропущена; ИИ
+      // промолчал или упал — человеку уходит обычное меню (funnel.ts::settleDeferredFunnel).
+      await settleDeferredFunnel(contact.id, answerWindowFrom).catch((err) => logError("webhook:deferredFunnel", err));
+    }
   });
 }

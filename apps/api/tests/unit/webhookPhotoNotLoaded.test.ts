@@ -18,6 +18,8 @@ vi.mock("../../src/funnel.js", () => ({
   handleIncomingDm: vi.fn(async () => false),
   handleComment: vi.fn(),
   cancelPendingFunnelSteps: vi.fn(async () => 0),
+  clientMessageStopsFunnel: vi.fn(async () => true),
+  settleDeferredFunnel: vi.fn(async () => undefined),
 }));
 const aiReply = vi.fn(async () => undefined);
 const rescueIncomingImages = vi.fn(async () => []);
@@ -177,6 +179,24 @@ describe("п.9 чек при Ширин и п.6 отмена шагов воро
     expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("клиент"));
     vi.mocked(cancelPendingFunnelSteps).mockClear();
     await handleMessage({ sender: { id: "customer" }, message: { mid: "tap", text: "💚ОНЛАЙН 21 РЕЦЕПТ", quick_reply: { payload: "step:f:20" } } });
+    expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
+  });
+  it("ревью 11.11: ИИ недоступен или сообщение-пустяк — шаги воронки НЕ отменяются (некому ответить вместо них)", async () => {
+    const { cancelPendingFunnelSteps, clientMessageStopsFunnel } = await import("../../src/funnel.js");
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    vi.mocked(clientMessageStopsFunnel).mockResolvedValueOnce(false);
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "q2", text: "рахмат" } });
+    expect(clientMessageStopsFunnel).toHaveBeenCalledWith("рахмат", []);
+    expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
+  });
+  it("ревью 11.11: экстренная пауза — шаги воронки не отменяются (работает только воронка)", async () => {
+    const { cancelPendingFunnelSteps } = await import("../../src/funnel.js");
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    db.model("setting").findUnique.mockImplementation(async (args) => {
+      const key = (args as { where: { key: string } }).where.key;
+      return key === "botFrozen" ? { value: "true" } : null;
+    });
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "q3", text: "Кай сар мешавад?" } });
     expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
   });
 });

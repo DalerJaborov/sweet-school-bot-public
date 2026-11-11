@@ -112,9 +112,14 @@ export async function sendAttachmentToContact(
   return withContactMessaging(contact.id, "reply", async () => {
     await assertMessagingAllowed();
     const channel = channelOf(contact);
-    if (channel === "WHATSAPP") return sendWhatsAppAttachment(contact, url, type);
     if (channel !== "WEB") {
-      const mid = await sendAttachment(contact.igUserId, url, type, channel);
+      // WhatsApp — так же, как Instagram (ревью 11.11.2026): раньше вложение уходило
+      // без строки в истории и без метки, mediaAlreadySent его не видел, и фото меню
+      // уходило человеку в WhatsApp на каждый вопрос про курс.
+      const mid =
+        channel === "WHATSAPP"
+          ? await sendWhatsAppAttachment(contact, url, type)
+          : await sendAttachment(contact.igUserId, url, type, channel);
       // КРИТИЧНО: без записи mid эхо нашей же картинки (меню, фото воронки) вебхук
       // принимает за ответ хозяйки из приложения и ставит «передано человеку» —
       // бот замолкает для клиента навсегда (инцидент 08.11.2026, шаг воронки с
@@ -182,8 +187,11 @@ export async function sendVideoWithCaption(contact: Recipient, url: string, capt
       await assertMessagingAllowed();
       return sendWhatsAppAttachment(contact, url, "video", "reply", shown.trim() ? shown : undefined);
     });
-    if (mid && shown.trim())
-      await recordOutgoingMessage(contact.id, shown, mid).catch((err) => logError("send:recordCaption", err));
+    if (mid)
+      await recordOutgoingMessage(contact.id, shown.trim() ? shown : "", mid).catch((err) =>
+        logError("send:recordCaption", err),
+      );
+    await markSentMedia(mid, url);
     return mid;
   }
   // Подпись уходит отдельным текстом и сама пишется в историю (sendToContact); возвращаем

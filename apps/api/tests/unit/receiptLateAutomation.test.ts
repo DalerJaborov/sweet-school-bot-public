@@ -32,6 +32,7 @@ import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 import { awaitingDeliveryChoice, askDeliveryChoice } from "../../src/course/deliveryChoice.js";
 import { decideReceipt } from "../../src/receiptDecision.js";
 import { claimsReceiptSent } from "../../src/ai/receiptClaim.js";
+import { sendTelegramMessage } from "../../src/telegram.js";
 
 let db: PrismaMock;
 const contact = fakeContact({ askedAltScreenshotAt: null, paid: false }) as Parameters<typeof handleReceiptVerdict>[0];
@@ -107,6 +108,8 @@ describe("случай 2: отложенная автоматика после �
     db.model("purchase").create.mockResolvedValue({ id: "p1" });
     db.model("setting").findUnique.mockResolvedValue({ key: "telegramBotToken", value: "t" });
     db.model("message").findMany.mockResolvedValue([{ text: "Вот ссылка https://shirinsweets.online/l/aBcD234567" }]);
+    // Код ссылки — личная ссылка ЭТОГО человека (ревью 11.11.2026: иначе ссылку не пишем).
+    db.model("contact").findUnique.mockResolvedValue({ id: contact.id });
     await handleReceiptVerdict(contact, verdict(), "q1");
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendToContact).not.toHaveBeenCalled();
@@ -287,5 +290,62 @@ describe("в шаблонах чека, доступа и восстановле
       .split("\n")
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
     expect(lines.filter((l) => emoji.test(l))).toEqual([]);
+  });
+});
+
+describe("ревью 11.11: чек при Ширин — ссылку Ширин сверяем с курсом (деньги)", () => {
+  const queuedAt = new Date(Date.now() - 4 * 60_000);
+  const queuedRow = async ({ where }: { where: Record<string, unknown> }) => (where.id ? { createdAt: queuedAt } : null);
+  const settings: Record<string, string> = { telegramBotToken: "t", telegramChatId70: "-100777", telegramChatId50: "-100555" };
+  beforeEach(() => {
+    db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
+    db.model("purchase").findMany.mockResolvedValue([]);
+    db.model("purchase").create.mockResolvedValue({ id: "p1" });
+    db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
+      settings[where.key] ? { key: where.key, value: settings[where.key] } : null,
+    );
+    vi.mocked(sendTelegramMessage).mockClear();
+  });
+  const created = () => (db.model("purchase").create.mock.calls[0]?.[0] as { data: { inviteLink: string | null } }).data;
+  const alerts = () => vi.mocked(sendTelegramMessage).mock.calls.map((c) => String(c[2]));
+
+  it("ссылки Ширин берутся только после чека, а не за всё время (since = момент чека)", async () => {
+    db.model("message").findMany.mockResolvedValue([{ text: "https://example.test/l/aBcD234567" }]);
+    db.model("contact").findUnique.mockResolvedValue({ id: contact.id });
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    const calls = db.model("message").findMany.mock.calls.map((c) => (c[0] as { where: { createdAt?: { gte: Date } } }).where);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const where of calls) expect(where.createdAt?.gte).toEqual(queuedAt);
+  });
+  it("личная ссылка на сайт ДРУГОГО человека — оплата отмечена, ссылка в покупку НЕ пишется, Далеру строка «сверьте группу»", async () => {
+    db.model("message").findMany.mockResolvedValue([{ text: "Вот https://example.test/l/zzzZ234567" }]);
+    db.model("contact").findUnique.mockResolvedValue({ id: "someone-else" });
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(created()).toEqual(expect.objectContaining({ course: "COURSE70", inviteLink: null }));
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ paid: true }) }));
+    expect(alerts()).toEqual([expect.stringMatching(/@client.*отмечена.*сверьте группу/s)]);
+    expect(sendReceiptForReview).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
+  it("приглашение из панели в группу этого курса — ссылка в покупке, без тревоги", async () => {
+    db.model("message").findMany.mockResolvedValue([{ text: "t.me/+FakeInvite777" }]);
+    db.model("telegramInvite").findFirst.mockResolvedValue({ chatId: "-100777", contactId: null, revokedAt: null, expiresAt: null });
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(created().inviteLink).toBe("t.me/+FakeInvite777");
+    expect(alerts()).toEqual([]);
+  });
+  it("приглашение в ДРУГУЮ группу (арт-десерты за чек на 70) — ссылку не пишем, тревога Далеру", async () => {
+    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+FakeInvite555" }]);
+    db.model("telegramInvite").findFirst.mockResolvedValue({ chatId: "-100555", contactId: null, revokedAt: null, expiresAt: null });
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(created().inviteLink).toBeNull();
+    expect(alerts()).toHaveLength(1);
+  });
+  it("ссылка, которой нет в базе (Ширин создала в самом Telegram) — без «выдано вручную», тревога Далеру", async () => {
+    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+MadeByHandX1" }]);
+    db.model("telegramInvite").findFirst.mockResolvedValue(null);
+    await handleReceiptVerdict(contact, verdict(), "q1");
+    expect(created().inviteLink).toBeNull();
+    expect(alerts()).toHaveLength(1);
   });
 });

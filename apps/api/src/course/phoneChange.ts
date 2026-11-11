@@ -58,13 +58,13 @@ export const PHONE_CHANGE_TEXT: Record<Lang, { changed: string; noProof: string;
       "Прежняя ссылка и старый телефон больше не открывают уроки:\n",
     noProof:
       "Чтобы я перенесла доступ на новый телефон сама, пришлите чек об оплате картинкой или код из вашей ссылки (вид 7F3A-91C2). " +
-      "Пока передала Ширин: она посмотрит и ответит вам.",
+      "Пока проверю сама и напишу вам.",
     limit:
-      "Передала Ширин: она посмотрит и ответит вам.",
+      "Сейчас проверю и напишу вам.",
     approved:
       "Ширин разрешила перенос на новый телефон. Вот новая ссылка, откройте её на нём. " +
       "Прежняя ссылка и старый телефон больше не открывают уроки:\n",
-    failed: "Передала Ширин: она посмотрит и ответит вам.",
+    failed: "Сейчас проверю и напишу вам.",
   },
   tg: {
     changed:
@@ -72,23 +72,23 @@ export const PHONE_CHANGE_TEXT: Record<Lang, { changed: string; noProof: string;
       "Ссылкаи пешина ва телефони куханатон дигар дарсхоя намекушояд:\n",
     noProof:
       "Барои ки худам ба телефони нав гузаронам, сурати чеки пардохт ё коди ссылкаатона (мисли 7F3A-91C2) фиристен. " +
-      "Хозир ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
+      "Хозир худам тафтиш карда ба шумо менависам.",
     limit:
-      "Ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
+      "Тафтиш карда ба шумо менависам.",
     approved:
       "Ширин ичозат дод, ба телефони нав гузарондам. Ана ссылкаи нав, дар телефони нав кушоен. " +
       "Ссылкаи пешина ва телефони куханатон дигар дарсхоя намекушояд:\n",
-    failed: "Ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
+    failed: "Тафтиш карда ба шумо менависам.",
   },
   en: {
     changed:
       "I moved your access to the new phone. Here is the new link, open it there. The old link and the old phone no longer open the lessons:\n",
     noProof:
-      "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I passed this to Shirin.",
-    limit: "I passed this to Shirin, she will look and reply.",
+      "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I will check it myself and write to you.",
+    limit: "I will check and write to you.",
     approved:
       "Shirin approved the move. Here is the new link, open it on the new phone. The old link and phone no longer work:\n",
-    failed: "I passed this to Shirin, she will look and reply.",
+    failed: "I will check and write to you.",
   },
 };
 

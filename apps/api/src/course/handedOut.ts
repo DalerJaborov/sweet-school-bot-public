@@ -1,5 +1,6 @@
-import { prisma } from "../db.js";
-import type { Course } from "../courses.js";
+import { prisma, getSetting } from "../db.js";
+import { chatKeyFor, type Course } from "../courses.js";
+import { findPanelInviteByLink } from "../links/telegramInvites.js";
 
 /**
  * «ДОСТУП УЖЕ ВЫДАН» - ЕДИНЫЙ ВОПРОС ДЛЯ АВТОМАТИКИ ПО ОПЛАТЕ (08.11.2026).
@@ -31,19 +32,53 @@ export async function manualLinkSince(contactId: string, since: Date): Promise<b
   return (rows ?? []).some((m) => Boolean(m.text && MANUAL_LINK.test(m.text)));
 }
 
-/** Последняя настоящая ссылка на уроки, которую Ширин прислала руками после `since`. */
-export async function lastManualLinkSince(contactId: string, since: Date): Promise<string | null> {
+const LINK_IN_TEXT = /https?:\/\/\S*(?:\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+)\S*|t\.me\/(?:\+|joinchat\/)[\w-]+/gi;
+
+/** Настоящие ссылки на уроки, которые Ширин прислала руками после `since` (новые первыми, без повторов). */
+export async function manualLinksSince(contactId: string, since: Date): Promise<string[]> {
   const rows = await prisma.message.findMany({
     where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
     orderBy: { createdAt: "desc" },
     take: 30,
     select: { text: true },
   });
+  const links: string[] = [];
   for (const m of rows ?? []) {
-    const hit = m.text ? /https?:\/\/\S*(?:\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+)\S*|t\.me\/(?:\+|joinchat\/)[\w-]+/i.exec(m.text) : null;
-    if (hit) return hit[0];
+    for (const hit of (m.text ?? "").matchAll(LINK_IN_TEXT)) {
+      const link = hit[0].replace(/[.,!?)»"']+$/u, "");
+      if (!links.includes(link)) links.push(link);
+    }
   }
-  return null;
+  return links;
+}
+
+/**
+ * ДЕНЬГИ: ЧЬЯ ЭТО ССЫЛКА И В КАКУЮ ГРУППУ (ревью 11.11.2026). Ширин выдала ссылку
+ * сама — прежде чем молча закрыть оплату, сверяем, что ссылка правда открывает
+ * оплаченный курс именно этому человеку:
+ *  - сайт /l/<код> — код личной ссылки ЭТОГО человека (на сайте по ней открываются
+ *    все его оплаченные курсы, значит и тот, что закрываем сейчас);
+ *  - t.me/+… — приглашение, созданное ботом из панели (TelegramInvite): группа =
+ *    группа этого курса, ссылка не отозвана и не просрочена, выдана не другому человеку.
+ * Ссылку Ширин создала в самом Telegram (в базе её нет), чужая, общая или в другую
+ * группу — false: оплату отмечаем, но ссылку к покупке не пишем и просим сверить.
+ */
+export async function manualLinkServesCourse(contactId: string, link: string, course: Course): Promise<boolean> {
+  const site = /\/l\/([A-Za-z0-9_-]{10,})/.exec(link);
+  if (site) {
+    const code = site[1];
+    const owner =
+      (await prisma.contact.findUnique({ where: { accessTokenId: code }, select: { id: true } }))?.id ??
+      (await prisma.purchase.findUnique({ where: { accessTokenId: code }, select: { contactId: true } }))?.contactId ??
+      null;
+    return owner === contactId;
+  }
+  const invite = await findPanelInviteByLink(link);
+  if (!invite || invite.revokedAt) return false;
+  if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) return false;
+  if (invite.contactId && invite.contactId !== contactId) return false;
+  const chatId = (await getSetting(chatKeyFor(course)))?.trim();
+  return Boolean(chatId) && invite.chatId === chatId;
 }
 
 /** Курсы с выданной ссылкой, купленные после `since`. */

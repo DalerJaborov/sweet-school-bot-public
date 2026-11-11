@@ -9,7 +9,13 @@ import {
   isAskShirin,
 } from "./ai/replyPolicy.js";
 import { detectInstagramFaq, instagramFaqAnswer } from "./ai/instagramFaq.js";
-import { hasDeliveredAccess, loadRepeatContext, withoutRepeats, mentionsPaymentPhone } from "./ai/repeatGuard.js";
+import {
+  hasDeliveredAccess,
+  loadRepeatContext,
+  withoutRepeats,
+  mentionsPaymentPhone,
+  regenerateAfterFilters,
+} from "./ai/repeatGuard.js";
 import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
@@ -390,9 +396,10 @@ export async function aiReply(
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
   // «принято, открываю» (живой прогон 05.09.2026). Ответ детерминированный,
   // см. ai/receiptClaim.ts.
-  // Уже оплатил и получил ссылку — чек у него больше не просим никогда (пункт 5):
-  // такое «я оплатила» отвечает модель с блоком «доступ уже выдан».
-  const deliveredAccess = await hasDeliveredAccess(contact.id);
+  // Уже оплатил ЭТОТ курс — чек у него больше не просим никогда (пункт 5; по курсу, а не по человеку:
+  // купивший «21 рецепт» и платящий за арт-десерты получает обычный ответ про чек).
+  // Такое «я оплатила» отвечает модель с блоком «доступ уже выдан».
+  const deliveredAccess = await hasDeliveredAccess(contact.id, text);
   if (
     text &&
     claimsReceiptSent(text) &&
@@ -661,13 +668,41 @@ export async function aiReply(
       // Обращение «апачон» и дежурный хвост — до голоса и до текста: озвучке они
       // так же чужие. Особые буквы и тире правит уже дверь отправки (humanizeForContact):
       // голосу нужны буквы, тексту — по стилю собеседника.
+      const beforeClean = replyText;
       if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanAutomatedReply(replyText)));
-      // Реквизиты и «пришлите чек» — не чаще раза за 15 минут; после выданной ссылки
+      // Реквизиты и «пришлите чек» — не чаще раза за 15 минут; оплатившему этот курс
       // чек не просим никогда; «чек приняли» без принятого чека не говорим (ai/repeatGuard.ts).
-      if (replyText) {
-        const repeat = withoutRepeats(replyText, await loadRepeatContext(contact.id, text), language);
+      let emptiedBy: string[] = beforeClean && !replyText ? ["cleanup"] : [];
+      const repeatCtx = replyText ? await loadRepeatContext(contact.id, text) : null;
+      if (replyText && repeatCtx) {
+        const repeat = withoutRepeats(replyText, repeatCtx, language);
         if (repeat.removed.length > 0) logWarn("ai:repeatGuard", `${contact.id}: removed ${repeat.removed.join(",")}`);
+        if (!repeat.text) emptiedBy = repeat.removed;
         replyText = repeat.text || null;
+      }
+      // ПОСЛЕ ФИЛЬТРОВ ПУСТО — НЕ МОЛЧИМ (ревью 11.11.2026). Модель ответила, но всё
+      // сказанное было повтором реквизитов / просьбой чека / служебной меткой:
+      // клиент остался бы без ответа. Один повторный ход с прямой подсказкой, что
+      // нельзя; снова пусто (или ошибка) — «сейчас уточню и напишу» и зовём человека.
+      // Явное [NO_REPLY] на повторе — законное молчание.
+      if (!replyText && emptiedBy.length > 0) {
+        replyText = await regenerateAfterFilters(
+          emptiedBy,
+          async (extra) => {
+            const again = await generate(prompt + extra);
+            if ("error" in again || !again.text) return null;
+            if (again.text.trim() === "[NO_REPLY]") return again.text;
+            if (isAskShirin(again.text) || replyPolicyIssues(again.text, await trustedSalesFacts()).length > 0) return null;
+            return withoutStockTails(withoutAddressWords(cleanAutomatedReply(again.text)));
+          },
+          repeatCtx ?? (await loadRepeatContext(contact.id, text)),
+          language,
+        );
+        if (replyText === "") replyText = null;
+        else if (replyText === null) {
+          logWarn("ai:emptyAfterFilters", `${contact.id}: handed to Shirin after ${emptiedBy.join(",")}`);
+          await handOffUnknownToShirin(contact, text, language);
+        }
       }
       // Редкий смайлик, как у самой Ширин (voice.ts): не чаще раза на три ответа,
       // только на коротких тёплых репликах без цифр (значит, никогда в реквизитах).
@@ -910,6 +945,18 @@ export async function aiReplyToComment(
   if (!result.text) return "ai_error";
 
   if (result.text.trim() === "[NO_REPLY]") return "no_reply";
+  // Нет факта — как в директе (ревью 11.11.2026): раньше «[ASK_SHIRIN]» уходил
+  // человеку под комментарием буквально. Теперь «сейчас уточню и напишу вам»
+  // приватным ответом, пауза и вопрос в списке ждущих, Далеру — уведомление.
+  if (isAskShirin(result.text)) {
+    await handOffUnknownToShirin(contact, text, language, async (reply) => {
+      const shown = await humanizeForContact(contact.id, cleanAutomatedReply(reply), [text]);
+      return withContactMessaging(contact.id, "reply", () =>
+        sendPrivateReply(commentId, shown, [], metaChannelOf(contact)),
+      );
+    });
+    return "waiting_human";
+  }
   const issues = replyPolicyIssues(result.text, await trustedSalesFacts());
   if (issues.length) {
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
@@ -1136,7 +1183,13 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   // спросить «кай сар мешавад?» после карточки) — фактам место в промпте, но без
   // нажима «запишитесь»: вопрос может быть и про онлайн.
   const recent = !explicit && (await recentIncomingWantsOffline(contact.id));
-  if (!explicit && !recent) return "";
+  // Строка «Офлайн-курс: …» из «Цены и даты» стоит в промпте ВСЕГДА (ревью 11.11.2026):
+  // промпт владельца называет дату набора словами («20 ноября») и говорит «если в
+  // строке «Офлайн-курс: …» другая дата — верна она». Без строки сравнивать не с чем,
+  // и после смены даты в панели модель называла бы старую.
+  if (!explicit && !recent) {
+    return `\n\nСПРАВКА ОБ ОФЛАЙН-КУРСЕ (говори о нём, только если человек сам спросил про офлайн):\n${await offlineFactsForModel()}`;
+  }
 
   const date = await courseDateLabel();
   // Факты очного курса — из раздела «Цены и даты», та же строка, что видит
@@ -1287,9 +1340,12 @@ async function recentBotUsedEmoji(contactId: string): Promise<boolean> {
 }
 
 const ASK_SHIRIN_REPLY: Record<ClientLanguage, string> = {
-  ru: "Это вам точно подскажет Ширин, она скоро ответит",
-  tg: "Инро Ширин худаш чавоб медихад",
-  en: "Shirin will answer this herself shortly",
+  // От первого лица и без имени (ревью 11.11.2026): бот пишет от имени Ширин, и
+  // «Ширин сама ответит» выдавало автомат. Таджикский — по образцу разговорника
+  // (tajik-phrasebook: «тафтиш карда», «менависам»), без особых букв; носителем не вычитан.
+  ru: "Сейчас уточню и напишу вам",
+  tg: "Хозир аник карда ба шумо менависам",
+  en: "Let me check, I'll write to you shortly",
 };
 
 /**
@@ -1299,14 +1355,26 @@ const ASK_SHIRIN_REPLY: Record<ClientLanguage, string> = {
  * одно на такой случай, а не на каждое сообщение: повторный вопрос в тот же час
  * сюда не дойдёт (пауза).
  */
-async function handOffUnknownToShirin(contact: Contact, question: string, language: ClientLanguage): Promise<void> {
+/**
+ * Ответ на комментарий идёт приватным ответом (sendPrivateReply), а не в директ:
+ * тому, кто ещё не писал, директ не дойдёт. Поэтому способ отправки — параметр.
+ * humanRequestedAt (ревью 11.11.2026): без него вопрос не попадал в список
+ * «ждут ответа» — обещание «напишу вам» держалось только на тревоге Далеру.
+ */
+async function handOffUnknownToShirin(
+  contact: Contact,
+  question: string,
+  language: ClientLanguage,
+  send: (reply: string) => Promise<string | null> = (reply) => sendToContact(contact, reply),
+): Promise<void> {
   const reply = ASK_SHIRIN_REPLY[language];
-  const mid = await sendToContact(contact, reply);
+  const mid = await send(reply);
   if (mid) await recordOutgoingMessage(contact.id, reply, mid);
+  const now = Date.now();
   await prisma.contact
     .update({
       where: { id: contact.id },
-      data: { humanSilencedUntil: new Date(Date.now() + HUMAN_REQUESTED_SILENCE_MS) },
+      data: { humanSilencedUntil: new Date(now + HUMAN_REQUESTED_SILENCE_MS), humanRequestedAt: new Date(now) },
     })
     .catch((err) => logError("ai:askShirin:silence", err));
   try {
@@ -1321,7 +1389,7 @@ async function handOffUnknownToShirin(contact: Contact, question: string, langua
       chatId,
       `❓ ${who} спросил то, чего бот не знает: «${question.slice(0, 200)}»
 
-Бот ответил «Ширин ответит» и молчит час. Ответьте сами или кнопкой ниже.`,
+Бот ответил «сейчас уточню и напишу вам» и молчит час. Ответьте сами или кнопкой ниже.`,
       buttons,
     );
   } catch (err) {

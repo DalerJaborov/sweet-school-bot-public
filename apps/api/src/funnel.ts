@@ -22,7 +22,7 @@ import { instagramShortcode } from "./ownMedia.js";
 import { aiReplyToComment } from "./ai.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
 import { notifyFunnelGaveUp } from "./systemAlerts.js";
-import type { Contact, Delivery, Funnel, FunnelStep } from "@prisma/client";
+import type { Contact, Delivery, Funnel, FunnelStep, Prisma } from "@prisma/client";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { renderFunnelText } from "./funnelPlaceholders.js";
@@ -35,6 +35,8 @@ import {
   contactAutomationBlocked as policyBlocks,
 } from "./messaging/automation.js";
 import { isTrivialMessage } from "./trivialMessage.js";
+import { resolveGeminiKeys } from "./ai/geminiKeys.js";
+import { BUDGET_FALLBACK } from "./ai/prompts.js";
 
 /**
  * ОТКАЗ ШАГА — РАСТУЩАЯ ПАУЗА, А НЕ МГНОВЕННЫЙ ОКОНЧАТЕЛЬНЫЙ FAILED
@@ -73,8 +75,10 @@ async function retryOrGiveUp(delivery: Delivery, contact: Contact, err: unknown)
 
   const failCount = delivery.failCount + 1;
   if (failCount >= RETRY_MAX_ATTEMPTS || !canRetryMetaFailure(err)) {
-    await prisma.delivery.update({
-      where: { id: delivery.id },
+    // Условно: цепочку, которую за время отправки отменили (клиент написал сам),
+    // не превращаем обратно в «сбой» и не воскрешаем.
+    await prisma.delivery.updateMany({
+      where: { id: delivery.id, state: "ACTIVE" },
       data: { state: "FAILED", failCount, lastError: message, nextRunAt: null },
     });
     const who = contact.username ? `@${contact.username}` : contact.igUserId;
@@ -83,10 +87,22 @@ async function retryOrGiveUp(delivery: Delivery, contact: Contact, err: unknown)
   }
 
   const delayMs = RETRY_DELAYS_MS[failCount - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
-  await prisma.delivery.update({
-    where: { id: delivery.id },
+  await prisma.delivery.updateMany({
+    where: { id: delivery.id, state: "ACTIVE" },
     data: { state: "ACTIVE", failCount, lastError: message, nextRunAt: new Date(Date.now() + delayMs) },
   });
+}
+
+/**
+ * ПЕРЕХОД ЦЕПОЧКИ ПОСЛЕ ШАГА — ТОЛЬКО ЕСЛИ ЕЁ НЕ ОТМЕНИЛИ (ревью 11.11.2026).
+ * Шаг «в полёте» (печатает, ждёт Meta) — а клиент в это время написал сам, и
+ * cancelPendingFunnelSteps поставил DONE. Безусловный update в конце sendStep
+ * перетирал отмену: цепочка снова становилась ACTIVE и следующий шаг уходил поверх
+ * живого разговора. Теперь переход пишется только по состоянию ACTIVE.
+ */
+async function advanceIfActive(id: string, data: Prisma.DeliveryUpdateManyMutationInput): Promise<boolean> {
+  const res = await prisma.delivery.updateMany({ where: { id, state: "ACTIVE" }, data });
+  return (res?.count ?? 0) > 0;
 }
 
 async function cancelDelivery(id: string, reason: string): Promise<void> {
@@ -209,10 +225,7 @@ async function sendStep(
 
   if (buttons.length > 0) {
     // Шаг с кнопками ставит цепочку на паузу до нажатия.
-    await prisma.delivery.update({
-      where: { id: delivery.id },
-      data: { state: "WAITING", nextRunAt: null },
-    });
+    await advanceIfActive(delivery.id, { state: "WAITING", nextRunAt: null });
     return;
   }
 
@@ -223,19 +236,13 @@ async function sendStep(
         orderBy: { order: "asc" },
       });
   if (!next) {
-    await prisma.delivery.update({
-      where: { id: delivery.id },
-      data: { state: "DONE", nextRunAt: null },
-    });
+    await advanceIfActive(delivery.id, { state: "DONE", nextRunAt: null });
     return;
   }
-  await prisma.delivery.update({
-    where: { id: delivery.id },
-    data: {
-      state: "ACTIVE",
-      nextOrder: next.order,
-      nextRunAt: new Date(Date.now() + next.delaySeconds * 1000),
-    },
+  await advanceIfActive(delivery.id, {
+    state: "ACTIVE",
+    nextOrder: next.order,
+    nextRunAt: new Date(Date.now() + next.delaySeconds * 1000),
   });
 }
 
@@ -244,7 +251,7 @@ async function sendStep(
 export async function startFunnel(
   funnel: Funnel,
   contact: Contact,
-  opts: { commentId?: string; commentText?: string } = {},
+  opts: { commentId?: string; commentText?: string; claimDeferredId?: string } = {},
 ): Promise<boolean> {
   const firstStep = await prisma.funnelStep.findFirst({
     where: { funnelId: funnel.id },
@@ -258,10 +265,20 @@ export async function startFunnel(
   const previous = await prisma.delivery.findUnique({
     where: { funnelId_contactId: { funnelId: funnel.id, contactId: contact.id } },
   });
-  if (previous) {
+  // Отложенная воронка (settleDeferredFunnel): строка — не прошлый проход, а место,
+  // занятое на время ответа ИИ. Захват атомарный — два хода не отправят меню дважды.
+  const claimDeferred = Boolean(opts.claimDeferredId && previous?.id === opts.claimDeferredId && previous?.lastError === FUNNEL_DEFERRED);
+  if (previous && !claimDeferred) {
     if (funnel.repeatAfterDays <= 0) return false; // повтор запрещён совсем
     const daysSince = (Date.now() - previous.createdAt.getTime()) / 86_400_000;
     if (daysSince < funnel.repeatAfterDays) return false; // ещё рано
+  }
+  if (previous && claimDeferred) {
+    const claimed = await prisma.delivery.updateMany({
+      where: { id: previous.id, state: "DONE", lastError: FUNNEL_DEFERRED },
+      data: { state: "ACTIVE", lastError: null },
+    });
+    if ((claimed?.count ?? 0) === 0) return false;
   }
 
   let delivery;
@@ -446,15 +463,87 @@ export async function handleIncomingDm(
       return funnelMenuFits(text, opts.hasAttachments) && isTrivialMessage(text);
     }
     // Первое сообщение — настоящий вопрос (или фото/голосовое): меню-приветствие
-    // проглотило бы его. Воронку отмечаем пройденной, отвечает ИИ (ai/firstMessage.ts).
+    // проглотило бы его. Отвечает ИИ (ai/firstMessage.ts), а воронка ОТЛОЖЕНА:
+    // отметку «пропущено» ставит settleDeferredFunnel только после того, как ответ
+    // реально ушёл; ИИ промолчал или упал — уходит обычное меню (ревью 11.11.2026).
     // Ответов ИИ нет (экстренная пауза, выключен консультант) — лучше меню, чем тишина.
     if (anyMessage && opts.aiAvailable !== false && !funnelMenuFits(text, opts.hasAttachments)) {
-      await markFunnelSkipped(funnel, contact, "пропущено: первым сообщением пришёл вопрос, ответил ИИ");
+      await markFunnelSkipped(funnel, contact, FUNNEL_DEFERRED);
       return false;
     }
     if (await startFunnel(funnel, contact)) return true;
   }
   return false;
+}
+
+/**
+ * ВОРОНКА ОТЛОЖЕНА ДО ОТВЕТА ИИ (ревью 11.11.2026). Первым сообщением пришёл вопрос:
+ * отвечает ИИ, а строка доставки стоит с этой отметкой — чтобы второй пузырь
+ * («салом») в окне ожидания не запустил меню поверх. Начинается с «пропущено»:
+ * otherFunnelGreetedRecently её не считает «уже поздоровались».
+ */
+export const FUNNEL_DEFERRED = "пропущено (ждёт ответа ИИ): первым сообщением пришёл вопрос";
+export const FUNNEL_SKIPPED_AI_ANSWERED = "пропущено: первым сообщением пришёл вопрос, ответил ИИ";
+const FUNNEL_SKIPPED_HUMAN = "пропущено: первым сообщением пришёл вопрос, разговор ведёт Ширин";
+
+/**
+ * Ответил ли кто-то человеку после `since`: бот (текст, фото меню, карточка) или
+ * сама Ширин. «Напишите чуть позже» (кончился бюджет ИИ) ответом не считается —
+ * тогда лучше меню воронки.
+ */
+async function answeredSince(contactId: string, since: Date): Promise<boolean> {
+  const rows = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", createdAt: { gte: since } },
+    select: { text: true },
+    take: 20,
+  });
+  const notAnswers = new Set(Object.values(BUDGET_FALLBACK).map((t) => t.trim()));
+  return (rows ?? []).some((r) => !notAnswers.has((r.text ?? "").trim()));
+}
+
+/**
+ * Решение по отложенной воронке, когда ход ИИ закончился (webhook.ts, после
+ * aiReply — в том числе если он упал). Ответ ушёл — отметка «пропущено, ответил
+ * ИИ». Ответа нет (ключей нет, бюджет, «не по делу», фильтры, ошибка) — обычное
+ * меню воронки, а не тишина. Ширин уже ведёт разговор — меню не шлём.
+ */
+export async function settleDeferredFunnel(contactId: string, since: Date): Promise<void> {
+  const pending = await prisma.delivery.findMany({
+    where: { contactId, state: "DONE", lastError: FUNNEL_DEFERRED },
+    include: { funnel: true, contact: true },
+  });
+  if (!pending || pending.length === 0) return;
+  const answered = await answeredSince(contactId, since);
+  for (const d of pending) {
+    const mark = (reason: string) =>
+      prisma.delivery.updateMany({ where: { id: d.id, lastError: FUNNEL_DEFERRED }, data: { lastError: reason } });
+    if (answered) {
+      await mark(FUNNEL_SKIPPED_AI_ANSWERED);
+      continue;
+    }
+    if (!d.funnel?.enabled || policyBlocks(d.contact) || humanSilenceActive(d.contact)) {
+      await mark(FUNNEL_SKIPPED_HUMAN);
+      continue;
+    }
+    await startFunnel(d.funnel, d.contact, { claimDeferredId: d.id });
+  }
+}
+
+/**
+ * Отменять ли отложенные шаги воронки на сообщение клиента (ревью 11.11.2026).
+ * Только если кто-то ответит вместо шаблона: ИИ включён, бот не на экстренной
+ * паузе («всё, кроме воронки»), ключи есть — и сообщение не пустяк («рахмат», «ок»).
+ * Иначе отмена оставляла человека без следующего шага и без ответа.
+ */
+export async function clientMessageStopsFunnel(
+  text: string | null,
+  attachments: readonly unknown[],
+): Promise<boolean> {
+  const meaningful = text?.trim() ? !isTrivialMessage(text) : attachments.length > 0;
+  if (!meaningful) return false;
+  if (await isBotFrozen()) return false;
+  if ((await getSetting("aiEnabled")) !== "true") return false;
+  return (await resolveGeminiKeys()).length > 0;
 }
 
 /** Запустилась бы воронка для этого человека сейчас (то же правило, что в startFunnel). */
@@ -768,10 +857,8 @@ export async function runDueDeliveries(): Promise<void> {
     });
     for (const delivery of due) {
       // Сначала снимаем с расписания, потом шлём — повторный тик не отправит дубль.
-      await prisma.delivery.update({
-        where: { id: delivery.id },
-        data: { nextRunAt: new Date(Date.now() + 5 * 60_000) },
-      });
+      // Условно: между выборкой и захватом цепочку могли отменить (клиент написал сам).
+      if (!(await advanceIfActive(delivery.id, { nextRunAt: new Date(Date.now() + 5 * 60_000) }))) continue;
       const step = await prisma.funnelStep.findUnique({
         where: { funnelId_order: { funnelId: delivery.funnelId, order: delivery.nextOrder } },
       });

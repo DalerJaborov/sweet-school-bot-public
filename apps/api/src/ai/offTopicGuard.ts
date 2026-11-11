@@ -485,9 +485,9 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
    * бот замолкает — иначе «сейчас ответит» окажется ложью, а это хуже молчания.
    */
   wants_human: {
-    ru: "Хорошо, сейчас Ширин сама вам ответит",
-    tg: "Хуб, хозир Ширин худаш чавоб медиханд",
-    en: "Sure, Shirin will reply to you herself shortly",
+    ru: "Хорошо, минутку, сейчас напишу вам",
+    tg: "Хуб, хозир ба шумо менависам",
+    en: "Sure, I'll write to you in a moment",
   },
   recipe_question: {
     ru: "По рецептам у нас чат в телеграм-группе, напишите туда, там отвечаем на все вопросы",
@@ -566,6 +566,9 @@ const LEGACY_REPLIES: Partial<Record<SpeakingKind, string[]>> = {
   ],
   wants_human: [
     "Хорошо — сейчас Ширин сама вам ответит",
+    // Прежние тексты в третьем лице (до 11.11.2026) — чтобы счёт «уже говорили» их видел.
+    "Хорошо, сейчас Ширин сама вам ответит",
+    "Хуб, хозир Ширин худаш чавоб медиханд",
     "Хуб, хозир Ширин худаш ба шумо чавоб медиханд",
     "Sure — Shirin will reply to you herself shortly",
   ],

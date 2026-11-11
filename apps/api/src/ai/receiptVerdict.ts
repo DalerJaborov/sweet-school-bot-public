@@ -16,7 +16,8 @@ import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
 import { ACCEPTED_WHERE, receiptAccepted } from "../receiptAccepted.js";
-import { lastManualLinkSince, manualLinkSince, receiptServedState } from "../course/handedOut.js";
+import { manualLinkServesCourse, manualLinksSince, manualLinkSince, receiptServedState } from "../course/handedOut.js";
+import { notifyOwnerDirect } from "../systemAlerts.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -244,8 +245,18 @@ async function askOwner(
 
 /**
  * Ширин выдала ссылку руками, а чек настоящий: записываем покупку и оплату без
- * второй ссылки и без карточки владельцу. Покупка помнит ссылку Ширин (если
- * это приглашение в группу — по ней потом узнаётся вход в группу).
+ * второй ссылки и без карточки владельцу (владелец 11.11.2026).
+ *
+ * ДЕНЬГИ — СВЕРКА ССЫЛКИ (ревью 11.11.2026). Раньше в покупку писалась любая
+ * последняя ссылка Ширин за всё время (since = 0), а без ссылки — строка
+ * «выдано вручную»: оплата закрывалась молча, даже если ссылка вела в другую
+ * группу или была общей, а вход по общей ссылке потом привязывался к этому
+ * человеку. Теперь:
+ *  - ссылки берутся только присланные ПОСЛЕ чека (since = момент чека);
+ *  - каждая сверяется с курсом (course/handedOut.ts::manualLinkServesCourse);
+ *  - совпала — покупка помнит ссылку, закрываем молча;
+ *  - не совпала или ссылка неизвестна — оплату всё равно отмечаем (деньги пришли),
+ *    но ссылку в покупку НЕ пишем и Далеру уходит одна строка «сверьте группу».
  */
 async function settleManualHandout(
   contact: Contact,
@@ -254,15 +265,32 @@ async function settleManualHandout(
   verdict: { amount: number | null; currency?: string | null; confidence: number; imageHash: string; imageUrl: string | null; receiptAt: Date | null; transactionId?: string | null },
   receiptId: string,
   reason: string,
+  receiptAt: Date,
 ): Promise<void> {
-  const link = (await lastManualLinkSince(contact.id, new Date(0)).catch(() => null)) ?? "выдано вручную";
+  const links = await manualLinksSince(contact.id, receiptAt).catch((err) => {
+    logError("receiptVerdict:manualLinks", err);
+    return [] as string[];
+  });
+  const linkFor = new Map<Course, string>();
+  for (const course of courses) {
+    for (const link of links) {
+      const ok = await manualLinkServesCourse(contact.id, link, course).catch((err) => {
+        logError("receiptVerdict:manualLinkCheck", err);
+        return false;
+      });
+      if (ok) {
+        linkFor.set(course, link);
+        break;
+      }
+    }
+  }
   const created: string[] = [];
   for (const course of courses) {
     try {
       const row = await prisma.purchase.create({
         data: {
           contactId: contact.id, course, amount: Math.round(amount / courses.length),
-          rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", inviteLink: link,
+          rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", inviteLink: linkFor.get(course) ?? null,
         },
       });
       if (row?.id) created.push(row.id);
@@ -270,6 +298,7 @@ async function settleManualHandout(
       if ((err as { code?: string })?.code !== "P2002") logError("receiptVerdict:manualHandout", err);
     }
   }
+  const unverified = courses.filter((c) => !linkFor.has(c));
   await prisma.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
   await prisma.receiptCheck.update({
     where: { id: receiptId },
@@ -282,10 +311,20 @@ async function settleManualHandout(
       linkSent: true,
       ownerDecision: "HANDLED",
       decidedAt: new Date(),
-      reason: `${reason} (ссылку отправила Ширин сама, оплата отмечена автоматически)`,
+      reason:
+        `${reason} (ссылку отправила Ширин сама, оплата отмечена автоматически` +
+        (unverified.length > 0 ? `; группа не сверена: ${unverified.map((c) => COURSE_TITLE[c]).join(", ")})` : ", группа сверена)"),
     },
   });
   if (created.length > 0) await enqueuePurchaseConversion(contact.id, created);
+  if (unverified.length > 0) {
+    // Тех-чат Далера (systemAlerts.ts::notifyOwnerDirect), не Ширин: она эту ссылку и выдала.
+    const who = contact.username ? `@${contact.username}` : contact.igUserId;
+    await notifyOwnerDirect(
+      `${who}: оплата ${Math.round(amount)} сомони (${unverified.map((c) => COURSE_TITLE[c]).join(", ")}) отмечена, ` +
+        "ссылку дала Ширин сама — сверьте группу.",
+    ).catch((err) => logError("receiptVerdict:manualHandoutNotify", err));
+  }
 }
 
 export async function handleReceiptVerdict(
@@ -311,8 +350,11 @@ export async function handleReceiptVerdict(
   // прислала ссылку вне системы (покупок нет) - оплату молча не закрываем:
   // карточка владельцу с пометкой, клиентке ничего не пишем.
   let maybeServed = false;
+  // Момент чека: ссылки Ширин считаются только присланные после него (settleManualHandout).
+  let queuedAt: Date | null = null;
   if (existingId) {
     const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
+    queuedAt = queued?.createdAt ?? null;
     if (queued) {
       const tjs = verdict.amount != null && (verdict.currency ?? "TJS").toUpperCase() === "TJS";
       // Другой чек этого человека уже открыл доступ после этого: покупки могли
@@ -559,8 +601,8 @@ export async function handleReceiptVerdict(
   // «Чек требует проверки» владельцу не нужна: оплату отмечаем сами.
   // Сомнительный чек (не тот номер, сумма, повтор, подделка) по-прежнему идёт
   // владельцу — уже с пометкой, что ссылку, похоже, выдали.
-  if (maybeServed && isClean && plan && plan.grant.length > 0) {
-    await settleManualHandout(contact, plan.grant, amount as number, verdict, existingId as string, reason);
+  if (maybeServed && isClean && plan && plan.grant.length > 0 && queuedAt) {
+    await settleManualHandout(contact, plan.grant, amount as number, verdict, existingId as string, reason, queuedAt);
     return;
   }
   if (maybeServed) {

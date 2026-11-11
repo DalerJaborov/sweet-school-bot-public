@@ -155,9 +155,32 @@ export type HumanizeOptions = {
 };
 
 /** Полная правка исходящего текста бота. Идемпотентна: повторный вызов ничего не меняет. */
+/**
+ * СЛУЖЕБНЫЕ МЕТКИ НЕ УХОДЯТ КЛИЕНТУ (ревью 11.11.2026). Модель отвечает метками
+ * [NO_REPLY], [ASK_SHIRIN] — код их ловит, но если метка пришла вместе с текстом
+ * («Сейчас уточню [ASK_SHIRIN]») или в пути, где её не разбирают (ответ под
+ * комментарием), клиент видел «[ASK_SHIRIN]». Режется любая метка в квадратных
+ * скобках: ЗАГЛАВНЫМИ буквами («[NO_REPLY]», «[МЕТКА]») или через подчёркивание
+ * («[ask_shirin]»); в метке должна быть хоть одна буква — «[1]» не трогаем.
+ * Стоит в обеих дверях бота: humanizeBotText (отправка) и cleanAutomatedReply.
+ */
+const SERVICE_MARKER = /\[\s*(?=[^\]]*\p{L})(?:[\p{Lu}\d]+(?:[_ :.-]+[\p{Lu}\d]+)*|[\p{L}\d]+(?:_[\p{L}\d]+)+)\s*\]/gu;
+
+export function stripServiceMarkers(text: string): string {
+  if (!text || !text.includes("[")) return text;
+  return text
+    .replace(SERVICE_MARKER, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([.,!?])/g, "$1")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .trim();
+}
+
 export function humanizeBotText(text: string, opts: HumanizeOptions): string {
   if (!text) return text;
-  let out = text.normalize("NFC");
+  let out = stripServiceMarkers(text.normalize("NFC"));
   out = withoutAddressWords(out);
   out = withoutStockTails(out);
   out = withoutDashes(out);

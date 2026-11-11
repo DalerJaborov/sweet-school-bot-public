@@ -167,11 +167,31 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
   // У Contact.inviteLink живёт только ПОСЛЕДНЯЯ ссылка; ссылка на первый из двух
   // купленных курсов есть только на её покупке — ищем и там, иначе вход по ней
   // поднимал тревогу «слитая ссылка» у честной ученицы.
-  const contact =
-    (await prisma.contact.findFirst({ where: { inviteLink: link } })) ??
-    (await prisma.purchase
-      .findFirst({ where: { inviteLink: link }, select: { contactId: true } })
-      .then((p) => (p ? prisma.contact.findUnique({ where: { id: p.contactId } }) : null)));
+  //
+  // ОБЩАЯ ССЫЛКА НЕ ПРИВЯЗЫВАЕТСЯ К ЧЕЛОВЕКУ (ревью 11.11.2026). Если одна и та же
+  // ссылка записана у нескольких людей (Ширин рассылает одну руками), вошедший по
+  // ней — кто угодно из них: Telegram этого человека НЕ пишем ни в одну карточку и
+  // ссылку не гасим (иначе она перестала бы работать у остальных).
+  const owners = new Set<string>();
+  for (const c of (await prisma.contact.findMany({ where: { inviteLink: link }, select: { id: true }, take: 5 })) ?? [])
+    owners.add(c.id);
+  for (const p of (await prisma.purchase.findMany({ where: { inviteLink: link }, select: { contactId: true }, take: 5 })) ?? [])
+    owners.add(p.contactId);
+  const contact = owners.size === 1 ? await prisma.contact.findUnique({ where: { id: [...owners][0] } }) : null;
+  if (!contact && owners.size > 1) {
+    if (!joined) return;
+    await prisma.qaMessage
+      .create({
+        data: {
+          chatId: String(update.chat?.id ?? ""),
+          telegramUserId: String(userId),
+          fromOwner: false,
+          text: `[вход по общей ссылке] ${update.new_chat_member?.user?.username ? "@" + update.new_chat_member.user.username : update.new_chat_member?.user?.first_name ?? ""}`.trim(),
+        },
+      })
+      .catch((err) => logError("groupAccess:sharedJoinLog", err));
+    return;
+  }
   if (!contact) {
     if (!joined) return;
     const botToken = (await getSetting("telegramBotToken"))?.trim() ?? "";
