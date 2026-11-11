@@ -1,3 +1,5 @@
+import { stripServiceMarkers } from "./humanText.js";
+
 /** Validate generated sales copy, never rewrite a customer's words or a recipe. */
 export class ReplyPolicyError extends Error {
   readonly retryable = false;
@@ -8,7 +10,11 @@ export class ReplyPolicyError extends Error {
 }
 
 export function formalAddressIssues(text: string): string[] {
-  return /(?:^|[^\p{L}])(?:ты|тебе|тебя|тобой|твой|твоя|твои|можешь|хочешь|напиши|открой|посмотри|ту|туро|туя)(?=$|[^\p{L}])/iu.test(text) ? ["informal_address"] : [];
+  return /(?:^|[^\p{L}])(?:ты|тебе|тебя|тобой|твой|твоя|твои|можешь|хочешь|напиши|открой|посмотри|ту|туро|туя)(?=$|[^\p{L}])/iu.test(
+    text,
+  )
+    ? ["informal_address"]
+    : [];
 }
 
 /**
@@ -22,8 +28,22 @@ const CONTEXT_WORDS = /(вместо|по\s+отдельност\p{L}*|отде�
 
 /** Метка даты набора в фактах: «Дата набора офлайн-курса: 20 ноября» или «…: уточняется». */
 export const COURSE_DATE_FACT = "Дата набора офлайн-курса:";
-const MONTH_STEMS = ["январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"];
-const DAY_MONTH = /(?<!\d)([0-3]?\d)(?:-?(?:го|ум|юм|ом))?\s+(январ|феврал|март|апрел|ма[йяю]|июн|июл|август|сентябр|октябр|ноябр|декабр)\p{L}*/giu;
+const MONTH_STEMS = [
+  "январ",
+  "феврал",
+  "март",
+  "апрел",
+  "ма",
+  "июн",
+  "июл",
+  "август",
+  "сентябр",
+  "октябр",
+  "ноябр",
+  "декабр",
+];
+const DAY_MONTH =
+  /(?<!\d)([0-3]?\d)(?:-?(?:го|ум|юм|ом))?\s+(январ|феврал|март|апрел|ма[йяю]|июн|июл|август|сентябр|октябр|ноябр|декабр)\p{L}*/giu;
 const COURSE_CONTEXT = /курс|набор|офлайн|оффлайн|очн|заняти|начн|старт|оғоз|сабт|дарс|гурӯҳ|групп/iu;
 
 function dayMonthKeys(text: string): string[] {
@@ -34,10 +54,55 @@ function dayMonthKeys(text: string): string[] {
   });
 }
 
+/**
+ * «УРОКИ ТОЛЬКО В TELEGRAM» — БОЛЬШЕ НЕ ПРАВДА (владелец 11.11.2026). Уроки есть и
+ * на нашем сайте; «бе телеграм намешад» отпугивало тех, у кого Telegram нет.
+ * Запрет стоит дважды: в промпте (deliveryContext.ts) и здесь, перед отправкой.
+ */
+const TELEGRAM_ONLY =
+  /(факат|фақат|танхо|танҳо|только|лишь)\s+(да\s+|дар\s+|в\s+)?(телеграм\p{L}*|telegram)|бе\s+телеграм\p{L}*\s+(намеш\p{L}*|нашав\p{L}*|намешад|не)|без\s+телеграм\p{L}*[^.!?\n]{0,20}(нельзя|не\s+получится|не\s+выйдет|никак)|(дар|да)\s+(ватсап|вацап|whatsapp)\p{L}*\s+(намеш\p{L}*|рои\s+намекун\p{L}*|сифат\p{L}*\s+вайрон)/iu;
+
+export function telegramOnlyIssues(text: string): string[] {
+  return TELEGRAM_ONLY.test(text) ? ["telegram_only_claim"] : [];
+}
+
+/**
+ * ВЫДУМКИ, КОТОРЫЕ УЖЕ БЫЛИ (разбор переписок 11.11.2026). Фактов об этом у бота
+ * нет, а сказанное стоило клиентов: «сертификат сам появится в программе»,
+ * «скачать можно / нельзя», «из Казахстана можно перевести» (потом «карты нет»),
+ * «ссылка в течение часа», «простые печи не подходят» (факт — только про Odul).
+ * Такой ответ перегенерируется, а не уходит; повторилось — «Ширин ответит»
+ * (ai.ts::handOffUnknownToShirin).
+ */
+const UNVERIFIED_CLAIMS: RegExp[] = [
+  /сертификат[^.!?\n]{0,60}(в\s+программ\p{L}*|в\s+приложени\p{L}*|сам\p{L}*\s+(появ|прид|выда)\p{L}*|дар\s+барнома|худаш\s+(мебаро|меоя|пайдо)\p{L}*)/iu,
+  /(скача\p{L}*|скачив\p{L}*|загрузить\s+(себе|на\s+телефон)|сохранить\s+(видео|урок)\p{L}*\s+(на|в)\s+(телефон|галере)\p{L}*|боргир\p{L}*|download)/iu,
+  /(казахстан\p{L}*|қазоқистон|казокистон|kaspi|каспи|узбекистан\p{L}*|ўзбекистон|кыргызстан\p{L}*|киргиз\p{L}*)/iu,
+  /(в\s+течение\s+(часа|\d+\s*(минут|час)\p{L}*)|через\s+(час|\d+\s*(минут|час)\p{L}*)|дар\s+(як|давоми\s+як|\d+)\s+соат|баъди\s+(як|\d+)\s+соат|дар\s+\d+\s+дакика)/iu,
+  /(прост\p{L}*|обычн\p{L}*|одди\p{L}*|оддӣ)\s+(печ\p{L}*|духовк\p{L}*|танур\p{L}*|духовка)[^.!?\n]{0,40}(не\s+подход\p{L}*|намеш\p{L}*|намешад|мувофик\s+нест|нашояд|не\s+годят\p{L}*)/iu,
+];
+
+export function unverifiedClaimIssues(text: string): string[] {
+  return UNVERIFIED_CLAIMS.some((re) => re.test(text)) ? ["unverified_claim"] : [];
+}
+
+/** Модель сама сказала «фактов нет — пусть ответит Ширин» (правило 30 в prompts.ts). */
+export const ASK_SHIRIN = "[ASK_SHIRIN]";
+export function isAskShirin(text: string | null | undefined): boolean {
+  return (text ?? "").includes(ASK_SHIRIN);
+}
+
 export function replyPolicyIssues(text: string, trustedFacts: string): string[] {
-  const issues: string[] = formalAddressIssues(text);
+  const issues: string[] = [...formalAddressIssues(text), ...telegramOnlyIssues(text), ...unverifiedClaimIssues(text)];
   const amounts = /(\d+(?:[.,]\d+)?)\s*(сомон[иӣ]?|с\.|TJS|руб(?:лей)?|доллар(?:ов)?|USD|€|\$)/giu;
-  const currency = (value: string) => /^(сомон|с\.|TJS)/iu.test(value) ? "TJS" : /^(доллар|USD|\$)/iu.test(value) ? "USD" : /^руб/iu.test(value) ? "RUB" : "EUR";
+  const currency = (value: string) =>
+    /^(сомон|с\.|TJS)/iu.test(value)
+      ? "TJS"
+      : /^(доллар|USD|\$)/iu.test(value)
+        ? "USD"
+        : /^руб/iu.test(value)
+          ? "RUB"
+          : "EUR";
   const amountKey = (match: RegExpMatchArray) => `${match[1].replace(",", ".")}:${currency(match[2])}`;
   const sentences = trustedFacts.split(/(?<=\.)\s+/);
   const contextFacts = sentences.filter((s) => s.includes(CONTEXT_ONLY_AMOUNT)).join(" ");
@@ -48,7 +113,8 @@ export function replyPolicyIssues(text: string, trustedFacts: string): string[] 
   for (const match of text.matchAll(amounts)) {
     const key = amountKey(match);
     if (allowed.has(key)) continue;
-    if (contextOnly.has(key) && CONTEXT_WORDS.test(text.slice(Math.max(0, (match.index ?? 0) - 40), match.index))) continue;
+    if (contextOnly.has(key) && CONTEXT_WORDS.test(text.slice(Math.max(0, (match.index ?? 0) - 40), match.index)))
+      continue;
     issues.push("unverified_amount");
   }
   // Дата набора — только та, что в «Цены и даты» (или никакой, если «уточняется»).
@@ -79,14 +145,28 @@ export function replyPolicyIssues(text: string, trustedFacts: string): string[] 
 /** Recipe quantities are deliberately outside this check. */
 export function guardGeneratedTone(text: string | null): string | null {
   if (!text || formalAddressIssues(text).length) return null;
-  return cleanAutomatedReply(text) || null;
+  return cleanGeneratedReply(text) || null;
+}
+
+/**
+ * Чистка ОТВЕТА МОДЕЛИ перед отправкой: служебные метки ([ASK_SHIRIN], [NO_REPLY],
+ * humanText.ts::SERVICE_MARKERS) плюс общая чистка. Тексты воронки и шаблоны
+ * владельца сюда не идут — в них метки не режем (повторное ревью 11.11.2026).
+ */
+export function cleanGeneratedReply(text: string): string {
+  return cleanAutomatedReply(stripServiceMarkers(text));
 }
 
 export const FORMAL_TONE_RULE = "Обращайтесь только на «вы» по-русски и «шумо» по-таджикски. Без эмодзи.";
 
 export function cleanAutomatedReply(text: string): string {
   // A single policy for generated text and automatic templates; human sends bypass it.
-  return text.replace(/\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu, "").trim();
+  return text
+    .replace(
+      /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu,
+      "",
+    )
+    .trim();
 }
 
 /** Разрешённые тёплые завершающие смайлики (voice.ts::maybeWarmEmoji, ai/reactions.ts). */
@@ -103,4 +183,5 @@ export function cleanKeepingWarmTail(text: string): string {
   return tail && cleaned ? `${cleaned} ${tail[1]}` : cleaned;
 }
 
-export const REPLY_POLICY_INSTRUCTION = "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Без эмодзи. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ.";
+export const REPLY_POLICY_INSTRUCTION =
+  "\nОбращайтесь к клиенту только на «вы» по-русски и «шумо» по-таджикски. Смайлики сами не ставьте: когда уместно, их добавляет система. Не называйте неподтверждённые суммы или номера телефона. Если ответа не требуется по правилам, верните ровно [NO_REPLY], не пустой ответ. Если ответа нет в фактах выше, верните ровно [ASK_SHIRIN], не угадывайте.";

@@ -303,9 +303,7 @@ const OTHER_COURSE = rx([
   "маникюр|парикмахер|шить[её]|кулинар(ия|ии)\\s+общ|повар(ск|ом)|англ(ийск|иси)",
 ]);
 
-const COURSE_ASK = rx([
-  "курс|дарс|омӯз|омуз|учит|обуча|мешавад|доред|дорет|есть\\s+ли|ҳаст|хаст",
-]);
+const COURSE_ASK = rx(["курс|дарс|омӯз|омуз|учит|обуча|мешавад|доред|дорет|есть\\s+ли|ҳаст|хаст"]);
 
 function detectNoSuchCourse(trimmed: string): string | null {
   return OTHER_COURSE.test(trimmed) && COURSE_ASK.test(trimmed) ? "спрашивают курс, которого нет" : null;
@@ -327,6 +325,11 @@ const IS_QUESTION = rx([
  */
 function detectRecipeQuestion(trimmed: string): string | null {
   if (ABOUT_COURSE.test(trimmed)) return null;
+  // Вопрос о СОСТАВЕ курса («онлайн арт десерто рецептои 5 6 донагиай?», «какие
+  // десерты входят?») — это разговор о покупке, а не просьба рецепта: отказ «Оид
+  // ба рецепт гуфта наметонам» тут отталкивал покупательниц (разбор 11.11.2026).
+  // Отказ остаётся только на просьбу дать сам рецепт и на вопрос «как готовить».
+  if (COURSE_CONTENT.test(trimmed) && !RECIPE_HOWTO.test(trimmed)) return null;
   if (RECIPE_HOWTO.test(trimmed) && FOOD_OBJECT.test(trimmed)) return "вопрос про саму готовку";
   if (FOOD_OBJECT.test(trimmed) && IS_QUESTION.test(trimmed)) return "вопрос про еду";
   // «Рецепти клубника дар шоколад равон кунед» — это не вопрос, а просьба
@@ -335,6 +338,16 @@ function detectRecipeQuestion(trimmed: string): string | null {
   if (RECIPE_ASK.test(trimmed) && FOOD_OBJECT.test(trimmed)) return "просят прислать рецепт";
   return null;
 }
+
+/** Слова про состав и устройство курса: онлайн/офлайн, арт-десерты, «входит»,
+ *  «сколько видов», «порции», «в видео». */
+const COURSE_CONTENT = rx([
+  String.raw`(?<!\p{L})(онлайн|онлаен|офлайн|оффлайн)\p{L}*`,
+  String.raw`арт[\s-]?десерт\p{L}*|21\s*(рецепт|намуд|дарс|видео)`,
+  String.raw`вход(ит|ят)|дохил|в\s+курс\p{L}*|дар\s+курс\p{L}*|курс\p{L}*\s+(дорад|хаст|ҳаст|аст)`,
+  String.raw`донаги\p{L}*|порци\p{L}*|калон\p{L}*|хурд\p{L}*|намуд\p{L}*|вид(ов|ы)(?!\p{L})`,
+  String.raw`видео\p{L}*|дарс(хо|ҳо|ои|и)?(?!\p{L})|урок\p{L}*`,
+]);
 
 /** Просьба прислать/дать рецепт — без вопросительного знака. */
 const RECIPE_ASK = rx([
@@ -472,9 +485,9 @@ const REPLIES: Record<SpeakingKind, { ru: string; tg: string; en: string }> = {
    * бот замолкает — иначе «сейчас ответит» окажется ложью, а это хуже молчания.
    */
   wants_human: {
-    ru: "Хорошо, сейчас Ширин сама вам ответит",
-    tg: "Хуб, хозир Ширин худаш чавоб медиханд",
-    en: "Sure, Shirin will reply to you herself shortly",
+    ru: "Хорошо, минутку, сейчас напишу вам",
+    tg: "Хуб, хозир ба шумо менависам",
+    en: "Sure, I'll write to you in a moment",
   },
   recipe_question: {
     ru: "По рецептам у нас чат в телеграм-группе, напишите туда, там отвечаем на все вопросы",
@@ -522,7 +535,12 @@ const RECIPE_FOR_WEB_STUDENT: Record<ClientLanguage, string> = {
 /**
  * @param isStudent человек оплатил курс — только ему можно звать в закрытый чат.
  */
-export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStudent = false, deliveryMode: "web" | "telegram" | "both" = "telegram"): string {
+export function guardReply(
+  kind: SpeakingKind,
+  language: ClientLanguage,
+  isStudent = false,
+  deliveryMode: "web" | "telegram" | "both" = "telegram",
+): string {
   if (kind === "recipe_question" && !isStudent) return RECIPE_FOR_GUEST[language];
   if (kind === "recipe_question" && deliveryMode !== "telegram") return RECIPE_FOR_WEB_STUDENT[language];
   return REPLIES[kind][language];
@@ -538,9 +556,22 @@ export function guardReply(kind: SpeakingKind, language: ClientLanguage, isStude
 const LEGACY_REPLIES: Partial<Record<SpeakingKind, string[]>> = {
   asks_bot: ["Не, ман ёрдамчии Ширин ҳастам"],
   offtopic: ["Ин мавзуи мо нест, ман танҳо оид ба курсҳои Ширин мегӯям"],
-  no_such_course: ["К сожалению нет — у нас только кондитерские курсы", "Мутаассифона не, мо танҳо курси кондитерӣ дорем"],
-  order_request: ["Мутаассифона, мо фармоиши торту ширинӣ намегирем", "Sorry, we don't take cake or dessert orders — we only teach"],
-  wants_human: ["Хорошо — сейчас Ширин сама вам ответит", "Хуб, хозир Ширин худаш ба шумо чавоб медиханд", "Sure — Shirin will reply to you herself shortly"],
+  no_such_course: [
+    "К сожалению нет — у нас только кондитерские курсы",
+    "Мутаассифона не, мо танҳо курси кондитерӣ дорем",
+  ],
+  order_request: [
+    "Мутаассифона, мо фармоиши торту ширинӣ намегирем",
+    "Sorry, we don't take cake or dessert orders — we only teach",
+  ],
+  wants_human: [
+    "Хорошо — сейчас Ширин сама вам ответит",
+    // Прежние тексты в третьем лице (до 11.11.2026) — чтобы счёт «уже говорили» их видел.
+    "Хорошо, сейчас Ширин сама вам ответит",
+    "Хуб, хозир Ширин худаш чавоб медиханд",
+    "Хуб, хозир Ширин худаш ба шумо чавоб медиханд",
+    "Sure — Shirin will reply to you herself shortly",
+  ],
   recipe_question: [
     "По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы",
     "Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед",
@@ -554,7 +585,8 @@ function templatesOf(kind: SpeakingKind): string[] {
   const own = [...Object.values(REPLIES[kind]), ...(LEGACY_REPLIES[kind] ?? [])];
   // Гостевой и «сайтовый» варианты ответа про рецепты — тоже наш шаблон: без них счётчик
   // «сколько раз уже сказали» не увидит их, и бот повторит одно и то же.
-  if (kind === "recipe_question") own.push(...Object.values(RECIPE_FOR_GUEST), ...Object.values(RECIPE_FOR_WEB_STUDENT));
+  if (kind === "recipe_question")
+    own.push(...Object.values(RECIPE_FOR_GUEST), ...Object.values(RECIPE_FOR_WEB_STUDENT));
   return own;
 }
 

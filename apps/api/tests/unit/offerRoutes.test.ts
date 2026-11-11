@@ -101,7 +101,7 @@ describe("/admin/v1/offer — «Цены и даты»", () => {
       startDate: "",
       timeFrom: "13:40",
       timeTo: "16:30",
-      desserts: 21,
+      desserts: 22,
       seats: null,
     });
     expect(s.warnings.join(" ")).toMatch(/дата уточняется/);

@@ -40,7 +40,11 @@ vi.mock("../../src/ai/styleLearning.js", () => ({ buildStyleBlock: vi.fn(async (
 vi.mock("../../src/nightlyLearning.js", () => ({ buildInsightsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/objectionLibrary.js", () => ({ buildObjectionsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/mediaReuse.js", () => ({ findReusableMedia: vi.fn(async () => null), sendReusedMedia: vi.fn() }));
-vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn() }));
+vi.mock("../../src/ai/menuImages.js", () => ({
+  sendMenuImages: vi.fn(),
+  maybeSendCourseMenuPhoto: vi.fn(async () => undefined),
+  sendOfflineMenuPhoto: vi.fn(async () => undefined),
+}));
 vi.mock("../../src/ai/testimonials.js", async (original) => ({
   ...(await original<typeof import("../../src/ai/testimonials.js")>()),
   maybeSendTestimonial: vi.fn(async () => undefined),
@@ -48,9 +52,19 @@ vi.mock("../../src/ai/testimonials.js", async (original) => ({
 vi.mock("../../src/learningCheckIn.js", () => ({ markStartedLearningIfReplied: vi.fn(async () => undefined) }));
 vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => undefined) }));
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));
-vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false) }));
-vi.mock("../../src/ai/offlineCourse.js", async (original) => ({ ...(await original<typeof import("../../src/ai/offlineCourse.js")>()), maybeSendOfflineCard: vi.fn(async () => false) }));
-vi.mock("../../src/ai/courseDate.js", async (original) => ({ ...(await original<typeof import("../../src/ai/courseDate.js")>()), courseDateLabel: vi.fn(async () => ""), upcomingOfflineStartDate: vi.fn(async () => null) }));
+vi.mock("../../src/ai/offlineSignup.js", () => ({
+  registerOfflineSignup: vi.fn(async () => false),
+  extractPhone: (t: string) => (/9[0-9]{8}/.exec(t ?? "") ?? [null])[0],
+}));
+vi.mock("../../src/ai/offlineCourse.js", async (original) => ({
+  ...(await original<typeof import("../../src/ai/offlineCourse.js")>()),
+  maybeSendOfflineCard: vi.fn(async () => false),
+}));
+vi.mock("../../src/ai/courseDate.js", async (original) => ({
+  ...(await original<typeof import("../../src/ai/courseDate.js")>()),
+  courseDateLabel: vi.fn(async () => ""),
+  upcomingOfflineStartDate: vi.fn(async () => null),
+}));
 vi.mock("../../src/ai/dailyBudget.js", () => ({
   isBudgetExceeded: vi.fn(async () => false),
   recordAiCall: vi.fn(async () => undefined),
@@ -78,7 +92,7 @@ function systemPromptOfCall(n: number): string {
 beforeEach(() => {
   db = mockPrisma();
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null
+    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null,
   );
   db.model("message").findMany.mockResolvedValue([]);
   db.model("message").count.mockResolvedValue(5);
@@ -112,7 +126,13 @@ describe("«Я отправила чек» без картинки", () => {
 
   it("а с картинкой — обычный путь через модель", async () => {
     generateWithFallback.mockResolvedValue(said("Сейчас посмотрю чек."));
-    const rescued = { buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: null };
+    const rescued = {
+      buffer: Buffer.from("x"),
+      mimeType: "image/jpeg",
+      hash: "h",
+      url: "/media/x.jpg",
+      queuedId: null,
+    };
     await aiReply(web, "отправила чек", [{ url: "/media/x.jpg", kind: "image" }], [rescued]);
 
     expect(generateWithFallback).toHaveBeenCalledTimes(1);
@@ -201,7 +221,10 @@ describe("Контекст офлайн-курса держится по обе�
 
     await aiReply(web, "Кай мешавад?", [], []);
 
-    expect(systemPromptOfCall(0)).toContain("ВАЖНО СЕЙЧАС: человек хочет на ОФЛАЙН-курс");
+    // Факты офлайна — в промпте, но без нажима «запишитесь»: «Кай мешавад?» может
+    // быть и про онлайн (ложный офлайн, разбор 11.11.2026).
+    expect(systemPromptOfCall(0)).toContain("ЕСЛИ ВОПРОС ПРО ОФЛАЙН-КУРС");
+    expect(systemPromptOfCall(0)).not.toContain("человек хочет на ОФЛАЙН");
   });
 
   it("без офлайн-контекста в недавней переписке — блока про офлайн-курс нет", async () => {
@@ -214,10 +237,11 @@ describe("Контекст офлайн-курса держится по обе�
   });
 });
 
-
 describe("sales policy before delivery", () => {
   it("corrects informal generated copy once before sending", async () => {
-    generateWithFallback.mockResolvedValueOnce(said("Ты можете открыть курс после оплаты")).mockResolvedValueOnce(said("Вы можете открыть курс после подтверждения оплаты"));
+    generateWithFallback
+      .mockResolvedValueOnce(said("Ты можете открыть курс после оплаты"))
+      .mockResolvedValueOnce(said("Вы можете открыть курс после подтверждения оплаты"));
     await aiReply(web, "Как открыть курс?", [], []);
     expect(generateWithFallback).toHaveBeenCalledTimes(2);
     expect(sendToContact).toHaveBeenCalledTimes(1);

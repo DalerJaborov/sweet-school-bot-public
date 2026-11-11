@@ -61,9 +61,9 @@ async function isManualInviteLink(link: string): Promise<boolean> {
 
 /** Запоминаем выданную ссылку — по ней потом узнаем вошедшего. */
 export async function rememberInviteLink(contactId: string, link: string): Promise<void> {
-  await prisma.contact.update({ where: { id: contactId }, data: { inviteLink: link } }).catch((err) =>
-    logError("groupAccess:remember", err)
-  );
+  await prisma.contact
+    .update({ where: { id: contactId }, data: { inviteLink: link } })
+    .catch((err) => logError("groupAccess:remember", err));
 }
 
 /** По chat_id группы говорим, какой это курс — для алерта о непонятном входе.
@@ -111,7 +111,9 @@ export function isHumanCreatedLink(update: ChatMemberUpdate, botToken: string): 
 async function alertUnexplainedJoin(update: ChatMemberUpdate, link: string | undefined): Promise<void> {
   // Только владельцу, вид «подозрительное с доступом» (notify.ts).
   const user = update.new_chat_member?.user;
-  const who = user?.username ? `@${user.username}` : user?.first_name ?? "без имени";
+  // Один и тот же вход (человек + группа) — не чаще раза в 6 часов.
+  if (!(await shouldSendAlert(`join:${user?.id ?? "?"}:${update.chat?.id ?? "?"}`))) return;
+  const who = user?.username ? `@${user.username}` : (user?.first_name ?? "без имени");
   const group = (await courseNameForChat(update.chat?.id)) ?? `неизвестная группа (chat_id ${update.chat?.id ?? "?"})`;
   const how = link ? "по ссылке, которую не узнаём — возможно слитая" : "без ссылки вообще";
 
@@ -126,7 +128,12 @@ async function alertUnexplainedJoin(update: ChatMemberUpdate, link: string | und
 }
 
 type ChatMemberUpdate = {
-  invite_link?: { invite_link?: string; creator?: { id?: number; is_bot?: boolean }; is_primary?: boolean; name?: string };
+  invite_link?: {
+    invite_link?: string;
+    creator?: { id?: number; is_bot?: boolean };
+    is_primary?: boolean;
+    name?: string;
+  };
   new_chat_member?: { status?: string; user?: { id?: number; username?: string; first_name?: string } };
   chat?: { id?: number };
 };
@@ -157,11 +164,35 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
   // У Contact.inviteLink живёт только ПОСЛЕДНЯЯ ссылка; ссылка на первый из двух
   // купленных курсов есть только на её покупке — ищем и там, иначе вход по ней
   // поднимал тревогу «слитая ссылка» у честной ученицы.
-  const contact =
-    (await prisma.contact.findFirst({ where: { inviteLink: link } })) ??
-    (await prisma.purchase
-      .findFirst({ where: { inviteLink: link }, select: { contactId: true } })
-      .then((p) => (p ? prisma.contact.findUnique({ where: { id: p.contactId } }) : null)));
+  //
+  // ОБЩАЯ ССЫЛКА НЕ ПРИВЯЗЫВАЕТСЯ К ЧЕЛОВЕКУ (ревью 11.11.2026). Если одна и та же
+  // ссылка записана у нескольких людей (Ширин рассылает одну руками), вошедший по
+  // ней — кто угодно из них: Telegram этого человека НЕ пишем ни в одну карточку и
+  // ссылку не гасим (иначе она перестала бы работать у остальных).
+  const owners = new Set<string>();
+  for (const c of (await prisma.contact.findMany({ where: { inviteLink: link }, select: { id: true }, take: 5 })) ?? [])
+    owners.add(c.id);
+  for (const p of (await prisma.purchase.findMany({
+    where: { inviteLink: link },
+    select: { contactId: true },
+    take: 5,
+  })) ?? [])
+    owners.add(p.contactId);
+  const contact = owners.size === 1 ? await prisma.contact.findUnique({ where: { id: [...owners][0] } }) : null;
+  if (!contact && owners.size > 1) {
+    if (!joined) return;
+    await prisma.qaMessage
+      .create({
+        data: {
+          chatId: String(update.chat?.id ?? ""),
+          telegramUserId: String(userId),
+          fromOwner: false,
+          text: `[вход по общей ссылке] ${update.new_chat_member?.user?.username ? "@" + update.new_chat_member.user.username : (update.new_chat_member?.user?.first_name ?? "")}`.trim(),
+        },
+      })
+      .catch((err) => logError("groupAccess:sharedJoinLog", err));
+    return;
+  }
   if (!contact) {
     if (!joined) return;
     const botToken = (await getSetting("telegramBotToken"))?.trim() ?? "";
@@ -175,7 +206,7 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
             chatId: String(update.chat?.id ?? ""),
             telegramUserId: String(userId),
             fromOwner: false,
-            text: `[вход по ссылке админа] ${update.new_chat_member?.user?.username ? "@" + update.new_chat_member.user.username : update.new_chat_member?.user?.first_name ?? ""}`.trim(),
+            text: `[вход по ссылке админа] ${update.new_chat_member?.user?.username ? "@" + update.new_chat_member.user.username : (update.new_chat_member?.user?.first_name ?? "")}`.trim(),
           },
         })
         .catch((err) => logError("groupAccess:manualJoinLog", err));
@@ -189,7 +220,7 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
     where: { id: contact.id },
     data: {
       telegramUserId: String(userId),
-      joinedGroupAt: joined ? contact.joinedGroupAt ?? new Date() : contact.joinedGroupAt,
+      joinedGroupAt: joined ? (contact.joinedGroupAt ?? new Date()) : contact.joinedGroupAt,
     },
   });
 
@@ -201,7 +232,10 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
   // оставалось бы всегда пустым, и проверочное сообщение никогда бы не ушло.
   if (joined) {
     await prisma.purchase
-      .updateMany({ where: { contactId: contact.id, inviteLink: link, joinedAt: null }, data: { joinedAt: new Date() } })
+      .updateMany({
+        where: { contactId: contact.id, inviteLink: link, joinedAt: null },
+        data: { joinedAt: new Date() },
+      })
       .catch((err) => logError("groupAccess:purchaseJoined", err));
     // Ссылка была на одного человека, он вошёл — гасим её. member_limit в
     // Telegram ограничивает, сколько человек В ГРУППЕ одновременно, а не число
@@ -258,17 +292,21 @@ export async function revokeAccess(
     return -1;
   });
   // Молча «готово» нельзя: по неотозванной ссылке можно войти и после отзыва.
-  const warning =
-    notRevoked !== 0
-      ? "Ссылка из раздела «Ссылки» не отозвана — отзовите её там вручную."
-      : undefined;
+  const warning = notRevoked !== 0 ? "Ссылка из раздела «Ссылки» не отозвана — отзовите её там вручную." : undefined;
 
   const results: string[] = [];
   if (contact.telegramUserId) {
     for (const chatId of await courseChats()) {
-      const kicked = await call(botToken, "banChatMember", { chat_id: chatId, user_id: Number(contact.telegramUserId) });
+      const kicked = await call(botToken, "banChatMember", {
+        chat_id: chatId,
+        user_id: Number(contact.telegramUserId),
+      });
       if (kicked.ok) {
-        await call(botToken, "unbanChatMember", { chat_id: chatId, user_id: Number(contact.telegramUserId), only_if_banned: true });
+        await call(botToken, "unbanChatMember", {
+          chat_id: chatId,
+          user_id: Number(contact.telegramUserId),
+          only_if_banned: true,
+        });
         results.push("удалён из группы");
       }
     }
@@ -304,14 +342,12 @@ export async function revokeAccess(
     select: { imageHash: true },
   });
   for (const r of receipts) {
-    await prisma.blockedReceipt
-      .create({ data: { imageHash: r.imageHash, reason } })
-      .catch((err) => {
-        // P2002 = дубликат imageHash (уже заблокирован) — это нормально.
-        if ((err as { code?: string })?.code !== "P2002") {
-          logError("groupAccess:revoke:blockedReceipt", err);
-        }
-      });
+    await prisma.blockedReceipt.create({ data: { imageHash: r.imageHash, reason } }).catch((err) => {
+      // P2002 = дубликат imageHash (уже заблокирован) — это нормально.
+      if ((err as { code?: string })?.code !== "P2002") {
+        logError("groupAccess:revoke:blockedReceipt", err);
+      }
+    });
   }
 
   const details = [results.length > 0 ? results.join("; ") : "ссылка отозвана", warning].filter(Boolean).join(". ");
@@ -388,10 +424,16 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
     }
   }
 
-  await prisma.contact.update({ where: { id: contactId }, data: { paid: true, paidAt: new Date(), accessRevokedAt: null } });
+  await prisma.contact.update({
+    where: { id: contactId },
+    data: { paid: true, paidAt: new Date(), accessRevokedAt: null },
+  });
 
   // Снимаем блокировку с его чеков — доступ вернули, значит чек признан настоящим.
-  const receipts = await prisma.receiptCheck.findMany({ where: { contactId, linkSent: true }, select: { imageHash: true } });
+  const receipts = await prisma.receiptCheck.findMany({
+    where: { contactId, linkSent: true },
+    select: { imageHash: true },
+  });
   if (receipts.length > 0) {
     await prisma.blockedReceipt.deleteMany({ where: { imageHash: { in: receipts.map((r) => r.imageHash) } } });
   }
@@ -405,5 +447,7 @@ async function notifyOwner(_botToken: string, who: string, reason: string, detai
   const title = mark === "🔓" ? `${mark} Доступ возвращён` : `${mark} Доступ отобран`;
   await sendKind("security", `${title} у ${who}
 Причина: ${reason}
-${details}`);
+${details}`).catch((err) =>
+    logError("groupAccess:notify", err),
+  );
 }

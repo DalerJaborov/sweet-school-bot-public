@@ -53,8 +53,10 @@ const WINDOW_DAYS = 30;
  * belong to support, not to token or device management.
  */
 const ACCESS_SUBJECT = /(ссылк|доступ|кабинет|курс|урок[иов]*|линк|дастрас|дарс)/iu;
-const ACCESS_PROBLEM = /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
-const NEW_DEVICE = /(это\s+мой\s+новый\s+телефон|смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
+const ACCESS_PROBLEM =
+  /(не\s*открыва|не\s*работа|потеря|пропал|не\s*могу\s*(зайти|войти|открыть)|нет\s*доступ|нов[уюая]+|заново|снова|повтор|намекуша|кушода намешавад|нав|дигар|кор намекунад|надорам)/iu;
+const NEW_DEVICE =
+  /(это\s+мой\s+новый\s+телефон|смен(ил|ила)\s*телефон|поменя(л|ла)\s*телефон|нов(ый|ом)\s*телефон|телефони\s*нав|телефон\S*\s*(иваз|нав)|иваз\s*кард)/iu;
 const VIDEO_PROBLEM = /(видео|ролик|звук|плеер|буфер|боргир|садо)/iu;
 
 /** Явная жалоба на лимит устройств — её текст мы сами и пишем в приложении. */
@@ -63,29 +65,26 @@ const DEVICE_LIMIT_HINT = /(двух|2)\s*устройств|устройств.
 const TEXTS: Record<ClientLanguage, { sent: string; pending: string; revoked: string; foreign: string }> = {
   ru: {
     foreign:
-      "Поняла вас. Это другой чат, поэтому ссылку здесь сама выдать не могу. Передала Ширин: " +
-      "она проверит покупку и откроет доступ.",
+      "Поняла вас. Это другой чат, поэтому ссылку здесь сразу выдать не могу. " +
+      "Сейчас проверю покупку и открою доступ.",
     sent: "Вот новая ссылка на ваши уроки. Откройте её на том телефоне, где будете смотреть:\n",
-    pending:
-      "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому передала вопрос Ширин — " +
-      "она откроет доступ вручную, это недолго.",
-    revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Ширин посмотрит и напишет вам сама.",
+    pending: "Вижу вашу покупку. Ссылку уже отправляли несколько раз, поэтому открою доступ вручную, " + "это недолго.",
+    revoked: "По вашей оплате есть вопрос, доступ пока закрыт. Сейчас проверю и напишу вам.",
   },
   tg: {
     foreign:
-      "Фахмидам. Ин чати дигар, барои хамин ссылкаро худам дода наметонам. Ба Ширин гуфтам, " +
-      "харидатонро тафтиш карда дарсхоя мекушояд.",
+      "Фахмидам. Ин чати дигар, барои хамин ссылкаро хозир дода наметонам. " +
+      "Харидатонро тафтиш карда дарсхоя мекушоям.",
     sent: "Ана ссылкаи нави дарсхоятон. Дар хамон телефоне кушоен, ки тамошо мекнен:\n",
-    pending:
-      "Харидатонро дидам. Ссылка чанд бор рафт, барои хамин ба Ширин гуфтам. " +
-      "Худаш дарсхоя мекушояд, дер намешавад.",
-    revoked: "Дар бораи пардохтатон савол хаст, дарсхо хозир пушида. Ширин тафтиш карда худаш менависад.",
+    pending: "Харидатонро дидам. Ссылка чанд бор рафт, барои хамин дарсхоя худам мекушоям, " + "дер намешавад.",
+    revoked: "Дар бораи пардохтатон савол хаст, дарсхо хозир пушида. Тафтиш карда ба шумо менависам.",
   },
   en: {
-    foreign: "This is a different chat, so I cannot issue the link here. I passed this to Shirin, she will check the purchase and open access.",
+    foreign:
+      "This is a different chat, so I cannot issue the link here right away. I will check the purchase and open access.",
     sent: "Here is a fresh link to your lessons. Open it on the phone you will watch on:\n",
-    pending: "I can see your purchase. The link was sent several times already, so I passed this to Shirin.",
-    revoked: "There is a question about your payment, access is on hold. Shirin will check and write to you.",
+    pending: "I can see your purchase. The link was sent several times already, so I will open access manually.",
+    revoked: "There is a question about your payment, access is on hold. I will check and write to you.",
   },
 };
 
@@ -96,8 +95,12 @@ export function looksLikeAccessRequest(text: string): boolean {
   const trimmed = text?.trim();
   if (!trimmed || trimmed.length > 400) return false;
   // Код покупательницы из готового сообщения страницы курса — сам по себе просьба.
-  return parseRecoveryCode(trimmed) !== null || DEVICE_LIMIT_HINT.test(trimmed) || NEW_DEVICE.test(trimmed) ||
-    (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed));
+  return (
+    parseRecoveryCode(trimmed) !== null ||
+    DEVICE_LIMIT_HINT.test(trimmed) ||
+    NEW_DEVICE.test(trimmed) ||
+    (!VIDEO_PROBLEM.test(trimmed) && ACCESS_SUBJECT.test(trimmed) && ACCESS_PROBLEM.test(trimmed))
+  );
 }
 
 /**
@@ -108,11 +111,13 @@ export function looksLikeAccessRequest(text: string): boolean {
 export async function maybeRestoreAccess(
   contact: Contact,
   text: string,
-  imageHashes: string[] = []
+  imageHashes: string[] = [],
 ): Promise<RecoveryResult> {
   if (await isBotFrozen()) return { handled: false };
   // Бот уже просил доказательство смены телефона: код, картинка или имя с номером — продолжение.
-  const waiting = isAwaitingProof(contact.id) && (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
+  const waiting =
+    isAwaitingProof(contact.id) &&
+    (parseRecoveryCode(text) !== null || imageHashes.length > 0 || /\d{9}/.test(text.replace(/\D+/g, "")));
   if (!waiting && !looksLikeAccessRequest(text)) return { handled: false };
   // Ждём доказательство, а пришло просто фото (домашка) или чужой код: это не наш случай.
   if (waiting && !looksLikeAccessRequest(text) && !(await phoneChangeProof(contact, text, imageHashes))) {
@@ -156,7 +161,9 @@ export async function maybeRestoreAccess(
       await reply(contact, TEXTS[language].pending);
       await tellOwner(
         contact,
-        paidProof ? "просит сменить телефон, но выдача идёт через Telegram-группу" : "просит сменить телефон, но чека в базе нет",
+        paidProof
+          ? "просит сменить телефон, но выдача идёт через Telegram-группу"
+          : "просит сменить телефон, но чека в базе нет",
         active.length,
         0,
       );
@@ -331,7 +338,12 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
   // не пишет (messaging/automation.ts). Проверяем ДО выдачи: иначе новая ссылка
   // погасила бы старую, а доставить её бот всё равно не смог бы (ревью PR 59).
   if (contactAutomationBlocked(contact)) {
-    await tellOwner(contact, "просит новую ссылку на сайте, но переписку ведёте вы — пришлите её сами", active.length, reissues);
+    await tellOwner(
+      contact,
+      "просит новую ссылку на сайте, но переписку ведёте вы — пришлите её сами",
+      active.length,
+      reissues,
+    );
     return "escalated";
   }
   // Купила через чат сайта: переписка привязана к куке посетителя, а ученица с
@@ -339,7 +351,13 @@ export async function restoreAccessFromSite(contact: Contact): Promise<SiteRelin
   // «ссылка уже у вас» было бы неправдой. Ссылку не выдаём (старую не гасим),
   // хозяйку зовём без суточного глушения: другого пути у ученицы нет.
   if (contact.channel === "WEB") {
-    await tellOwner(contact, "купила на сайте, ссылка устарела — пришлите новую по телефону или в WhatsApp", active.length, reissues, { always: true });
+    await tellOwner(
+      contact,
+      "купила на сайте, ссылка устарела — пришлите новую по телефону или в WhatsApp",
+      active.length,
+      reissues,
+      { always: true },
+    );
     return "escalated";
   }
 
@@ -382,17 +400,20 @@ async function handleForeignCode(contact: Contact, owner: Contact, text: string)
   await reply(contact, TEXTS[language].foreign);
 
   const courses = purchases
-    .map((p) => `${p.course}, куплено ${p.createdAt.toISOString().slice(0, 10)}${p.revokedAt ? " (ДОСТУП ОТОЗВАН)" : ""}`)
+    .map(
+      (p) => `${p.course}, куплено ${p.createdAt.toISOString().slice(0, 10)}${p.revokedAt ? " (ДОСТУП ОТОЗВАН)" : ""}`,
+    )
     .join("; ");
   const buyer = [owner.name, owner.username ? `@${owner.username}` : null, `${owner.channel} ${owner.igUserId}`]
     .filter(Boolean)
     .join(", ");
   const writer = `${contact.channel} ${contact.username ? `@${contact.username}` : contact.igUserId}`;
-  const verdict = purchases.length === 0
-    ? "покупок по коду нет"
-    : active.length === 0
-      ? "покупка ОТОЗВАНА — не открывайте без причины"
-      : "покупка действует; если это она, выдайте доступ командой /ссылка на ник покупателя";
+  const verdict =
+    purchases.length === 0
+      ? "покупок по коду нет"
+      : active.length === 0
+        ? "покупка ОТОЗВАНА — не открывайте без причины"
+        : "покупка действует; если это она, выдайте доступ командой /ссылка на ник покупателя";
   await sendOwnerAlert(
     `recovery-code:${owner.id}:${contact.id}`,
     `Просят ссылку по коду из ссылки, но пишут с ДРУГОГО чата.
@@ -401,7 +422,7 @@ async function handleForeignCode(contact: Contact, owner: Contact, text: string)
 ` +
       `Пишет: ${writer}
 ${verdict}
-Бот ссылку сам НЕ выдавал.`
+Бот ссылку сам НЕ выдавал.`,
   );
   logInfo("course:recovery", `код другого контакта: пишет ${contact.id}, покупатель ${owner.id}`);
   return { handled: true, outcome: "escalated" };
@@ -447,7 +468,7 @@ async function tellOwner(
   what: string,
   purchases: number,
   reissues: number,
-  opts: { always?: boolean } = {}
+  opts: { always?: boolean } = {},
 ): Promise<void> {
   const who = contact.username ? `@${contact.username}` : contact.name || contact.igUserId;
   const text = `${who}: ${what}

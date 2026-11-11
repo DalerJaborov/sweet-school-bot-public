@@ -414,3 +414,18 @@ export async function recordPanelInviteJoin(link: string, user: JoinedUser, join
   }
   return true;
 }
+
+/**
+ * Приглашение из панели по ссылке, как её написала Ширин (с https:// или без) —
+ * для сверки «ссылка Ширин ведёт в группу оплаченного курса» (course/handedOut.ts).
+ */
+export async function findPanelInviteByLink(
+  link: string,
+): Promise<{ chatId: string; contactId: string | null; revokedAt: Date | null; expiresAt: Date | null } | null> {
+  const m = /t\.me\/(\+|joinchat\/)([\w-]+)/i.exec(link);
+  if (!m) return null;
+  return prisma.telegramInvite.findFirst({
+    where: { inviteLink: { endsWith: `t.me/${m[1]}${m[2]}` } },
+    select: { chatId: true, contactId: true, revokedAt: true, expiresAt: true },
+  });
+}

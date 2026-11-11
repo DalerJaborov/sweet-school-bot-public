@@ -17,6 +17,9 @@ vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(async () => false),
   handleComment: vi.fn(),
+  cancelPendingFunnelSteps: vi.fn(async () => 0),
+  clientMessageStopsFunnel: vi.fn(async () => true),
+  settleDeferredFunnel: vi.fn(async () => undefined),
 }));
 const aiReply = vi.fn(async () => undefined);
 const rescueIncomingImages = vi.fn(async () => []);
@@ -25,6 +28,7 @@ vi.mock("../../src/ai.js", () => ({
   aiReply: (...a: unknown[]) => aiReply(...a),
   registerOfflineIfAsked: (...a: unknown[]) => registerOfflineIfAsked(...a),
   rescueIncomingImages: (...a: unknown[]) => rescueIncomingImages(...a),
+  verifyReceiptsNow: vi.fn(async () => undefined),
 }));
 const debounceMessage = vi.fn();
 vi.mock("../../src/debounce.js", () => ({ debounceMessage: (...a: unknown[]) => debounceMessage(...a) }));
@@ -96,7 +100,9 @@ describe("Фото пришло, но не скачалось — честный
   });
 
   it("картинка спаслась — обычный путь, без специального ответа", async () => {
-    rescueIncomingImages.mockResolvedValue([{ buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" }]);
+    rescueIncomingImages.mockResolvedValue([
+      { buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" },
+    ]);
     await handleMessage(photoEvent);
     expect(sendToContact).not.toHaveBeenCalled();
     expect(debounceMessage).toHaveBeenCalledTimes(1);
@@ -110,9 +116,11 @@ describe("Фото пришло, но не скачалось — честный
   });
 });
 
-
 describe("incoming message claim", () => {
-  const voice: MessagingEvent = { sender: { id: "customer" }, message: { mid: "voice-mid", attachments: [{ type: "audio", payload: { url: "https://example.invalid/voice" } }] } };
+  const voice: MessagingEvent = {
+    sender: { id: "customer" },
+    message: { mid: "voice-mid", attachments: [{ type: "audio", payload: { url: "https://example.invalid/voice" } }] },
+  };
   it("does not transcribe a duplicate delivery", async () => {
     db.model("message").create.mockRejectedValue(Object.assign(new Error("duplicate"), { code: "P2002" }));
     await handleMessage(voice);
@@ -124,8 +132,13 @@ describe("incoming message claim", () => {
     expect(voiceToText).not.toHaveBeenCalled();
   });
   it("replays AI work after a crash/error following the successful Message insert", async () => {
-    const incoming: MessagingEvent = { sender: { id: "customer" }, message: { mid: "persisted-before-crash", text: "Какие курсы есть?" } };
-    debounceMessage.mockImplementation(async (_id, text, attachments, rescued, flush) => flush(text, attachments, rescued));
+    const incoming: MessagingEvent = {
+      sender: { id: "customer" },
+      message: { mid: "persisted-before-crash", text: "Какие курсы есть?" },
+    };
+    debounceMessage.mockImplementation(async (_id, text, attachments, rescued, flush) =>
+      flush(text, attachments, rescued),
+    );
     aiReply.mockRejectedValueOnce(new Error("failure after Message commit")).mockResolvedValue(undefined);
     await expect(handleMessage(incoming, undefined, "INSTAGRAM", true)).rejects.toThrow("failure after Message commit");
     db.model("message").create.mockRejectedValue(Object.assign(new Error("already persisted"), { code: "P2002" }));
@@ -141,18 +154,65 @@ describe("incoming message claim", () => {
   });
 });
 
-
 describe("delivery choice after human takeover", () => {
   it("routes a pending course choice to its evidence gate while ordinary AI stays silent", async () => {
     vi.mocked(upsertContact).mockResolvedValueOnce({ ...fakeContact(), humanTakenOverAt: new Date() } as never);
     vi.mocked(handleDeliveryChoiceReply).mockResolvedValueOnce(true);
     await handleMessage({ sender: { id: "customer" }, message: { mid: "choice", text: "Telegram есть" } });
-    expect(handleDeliveryChoiceReply).toHaveBeenCalledWith(expect.objectContaining({ humanTakenOverAt: expect.any(Date) }), "Telegram есть");
+    expect(handleDeliveryChoiceReply).toHaveBeenCalledWith(
+      expect.objectContaining({ humanTakenOverAt: expect.any(Date) }),
+      "Telegram есть",
+    );
     expect(debounceMessage).not.toHaveBeenCalled();
   });
   it("never routes a choice through the frozen gate", async () => {
     db.model("setting").findUnique.mockResolvedValue({ value: "true" });
     await handleMessage({ sender: { id: "customer" }, message: { mid: "choice", text: "Telegram есть" } });
     expect(handleDeliveryChoiceReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("п.9 чек при Ширин и п.6 отмена шагов воронки (11.11.2026)", () => {
+  it("Ширин ведёт разговор, клиент прислал чек — чек проверяется сразу, текстом бот не отвечает", async () => {
+    const { verifyReceiptsNow } = await import("../../src/ai.js");
+    vi.mocked(upsertContact).mockResolvedValueOnce({ ...fakeContact(), humanTakenOverAt: new Date() } as never);
+    const rescued = [
+      { buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" },
+    ];
+    rescueIncomingImages.mockResolvedValue(rescued);
+    await handleMessage(photoEvent);
+    expect(verifyReceiptsNow).toHaveBeenCalledWith(expect.objectContaining({ id: "contact-1" }), rescued);
+    expect(debounceMessage).not.toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
+  it("клиент написал сам — отложенные шаги воронки отменяются; нажатие кнопки — нет", async () => {
+    const { cancelPendingFunnelSteps } = await import("../../src/funnel.js");
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "q1", text: "Кай сар мешавад?" } });
+    expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("клиент"));
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    await handleMessage({
+      sender: { id: "customer" },
+      message: { mid: "tap", text: "💚ОНЛАЙН 21 РЕЦЕПТ", quick_reply: { payload: "step:f:20" } },
+    });
+    expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
+  });
+  it("ревью 11.11: ИИ недоступен или сообщение-пустяк — шаги воронки НЕ отменяются (некому ответить вместо них)", async () => {
+    const { cancelPendingFunnelSteps, clientMessageStopsFunnel } = await import("../../src/funnel.js");
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    vi.mocked(clientMessageStopsFunnel).mockResolvedValueOnce(false);
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "q2", text: "рахмат" } });
+    expect(clientMessageStopsFunnel).toHaveBeenCalledWith("рахмат", []);
+    expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
+  });
+  it("ревью 11.11: экстренная пауза — шаги воронки не отменяются (работает только воронка)", async () => {
+    const { cancelPendingFunnelSteps } = await import("../../src/funnel.js");
+    vi.mocked(cancelPendingFunnelSteps).mockClear();
+    db.model("setting").findUnique.mockImplementation(async (args) => {
+      const key = (args as { where: { key: string } }).where.key;
+      return key === "botFrozen" ? { value: "true" } : null;
+    });
+    await handleMessage({ sender: { id: "customer" }, message: { mid: "q3", text: "Кай сар мешавад?" } });
+    expect(cancelPendingFunnelSteps).not.toHaveBeenCalled();
   });
 });

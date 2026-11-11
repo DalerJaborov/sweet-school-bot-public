@@ -39,7 +39,7 @@ vi.mock("../../src/ai/styleLearning.js", () => ({ buildStyleBlock: vi.fn(async (
 vi.mock("../../src/nightlyLearning.js", () => ({ buildInsightsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/objectionLibrary.js", () => ({ buildObjectionsBlock: vi.fn(async () => "") }));
 vi.mock("../../src/ai/mediaReuse.js", () => ({ findReusableMedia: vi.fn(async () => null), sendReusedMedia: vi.fn() }));
-vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn() }));
+vi.mock("../../src/ai/menuImages.js", () => ({ sendMenuImages: vi.fn(), maybeSendCourseMenuPhoto: vi.fn(async () => undefined), sendOfflineMenuPhoto: vi.fn(async () => undefined) }));
 vi.mock("../../src/ai/testimonials.js", async (original) => ({
   ...(await original<typeof import("../../src/ai/testimonials.js")>()),
   maybeSendTestimonial: vi.fn(async () => undefined),
@@ -47,7 +47,7 @@ vi.mock("../../src/ai/testimonials.js", async (original) => ({
 vi.mock("../../src/learningCheckIn.js", () => ({ markStartedLearningIfReplied: vi.fn(async () => undefined) }));
 vi.mock("../../src/stuckAlert.js", () => ({ notifyIfStuck: vi.fn(async () => undefined) }));
 vi.mock("../../src/course/recovery.js", () => ({ maybeRestoreAccess: vi.fn(async () => ({ handled: false })) }));
-vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false) }));
+vi.mock("../../src/ai/offlineSignup.js", () => ({ registerOfflineSignup: vi.fn(async () => false), extractPhone: (t: string) => (/9[0-9]{8}/.exec(t ?? "") ?? [null])[0] }));
 const maybeSendOfflineCard = vi.fn(async () => false);
 vi.mock("../../src/ai/offlineCourse.js", async (original) => ({
   ...(await original<typeof import("../../src/ai/offlineCourse.js")>()),
@@ -255,3 +255,104 @@ describe("офлайн передан Ширин — где молчать не�
   });
 });
 
+
+describe("разбор 11.11.2026 — ход aiReply целиком", () => {
+  it.each(["Курс", "Кай сар мешавад", "Онлаен", "ани арзон", "ҲАР ДУ ҚУРС"])(
+    "п.3 «%s» — карточку офлайна не шлём и разговор не передаём, отвечает модель",
+    async (text) => {
+      generateWithFallback.mockResolvedValue(said("Онлайн курс 70 сомони."));
+      await aiReply(lead, text, [], []);
+      expect(maybeSendOfflineCard).not.toHaveBeenCalled();
+      expect(generateWithFallback).toHaveBeenCalled();
+      expect(lastContactUpdate()?.offlineHandoffAt).toBeUndefined();
+    },
+  );
+
+  it("п.1 готовый вопрос Instagram — точный ответ из фактов без хода модели", async () => {
+    await aiReply(lead, "Можно ли купить отдельные рецепты?", [], []);
+    expect(generateWithFallback).not.toHaveBeenCalled();
+    expect(sendToContact.mock.calls.map((c) => String(c[1])).join("\n")).toContain("отдельно не продаются");
+  });
+
+  it("п.7 модель сказала [ASK_SHIRIN] — клиенту «сейчас уточню и напишу» (от первого лица), бот молчит час, вопрос в списке ждущих", async () => {
+    generateWithFallback.mockResolvedValue(said("[ASK_SHIRIN]"));
+    await aiReply(lead, "Из Казахстана с Kaspi можно оплатить?", [], []);
+    expect(sendToContact.mock.calls.map((c) => String(c[1]))).toEqual(["Сейчас уточню и напишу вам"]);
+    expect(db.model("contact").update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { humanSilencedUntil: expect.any(Date), humanRequestedAt: expect.any(Date) } }),
+    );
+  });
+
+  it("п.7 выдумка осталась и после исправления — не держим молча, а зовём Ширин", async () => {
+    generateWithFallback.mockResolvedValue(said("Видео можно скачать на телефон."));
+    await aiReply(lead, "Видеохоро скачать кардан мешавад?", [], []);
+    // Вопрос по-таджикски — и ответ по-таджикски.
+    expect(sendToContact.mock.calls.map((c) => String(c[1]))).toEqual(["Хозир аник карда ба шумо менависам"]);
+  });
+
+  it("п.5 номер ушёл минуту назад — в новом ответе его нет", async () => {
+    db.model("message").findMany.mockImplementation(async (args: unknown) => {
+      const a = args as { where?: { direction?: string }; select?: { createdAt?: boolean } };
+      return a?.select?.createdAt && a.where?.direction === "OUT"
+        ? [{ text: "905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф)", createdAt: new Date() }]
+        : [];
+    });
+    generateWithFallback.mockResolvedValue(said("Курс 70 сомони.\n905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф)"));
+    await aiReply(lead, "Нархаш чанд?", [], []);
+    const out = sendToContact.mock.calls.map((c) => String(c[1])).join("\n");
+    expect(out).toContain("70 сомони");
+    expect(out).not.toContain("905 355 355");
+  });
+});
+
+describe("ревью 11.11: после фильтров ответ пуст — бот не молчит", () => {
+  const receiptAskedMinuteAgo = () =>
+    db.model("message").findMany.mockImplementation(async (args: unknown) => {
+      const a = args as { where?: { direction?: string }; select?: { createdAt?: boolean } };
+      return a?.select?.createdAt && a.where?.direction === "OUT" ? [{ text: "Пришлите чек, пожалуйста", createdAt: new Date() }] : [];
+    });
+  it("вырезали всё (повторная просьба чека) — один повторный ход, уходит его ответ", async () => {
+    receiptAskedMinuteAgo();
+    generateWithFallback.mockResolvedValueOnce(said("Пришлите чек, пожалуйста")).mockResolvedValueOnce(said("Доступ к урокам остаётся у вас навсегда"));
+    await aiReply(lead, "Курс навсегда остаётся?", [], []);
+    expect(generateWithFallback).toHaveBeenCalledTimes(2);
+    expect(sendToContact.mock.calls.map((c) => String(c[1]))).toEqual(["Доступ к урокам остаётся у вас навсегда"]);
+  });
+  it("и повтор пуст — «сейчас уточню и напишу вам» и зовём человека, а не тишина", async () => {
+    receiptAskedMinuteAgo();
+    generateWithFallback.mockResolvedValue(said("Пришлите чек, пожалуйста"));
+    await aiReply(lead, "Курс навсегда остаётся?", [], []);
+    expect(sendToContact.mock.calls.map((c) => String(c[1]))).toEqual(["Сейчас уточню и напишу вам"]);
+    expect(db.model("contact").update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ humanRequestedAt: expect.any(Date) }) }),
+    );
+  });
+});
+
+describe("ревью 11.11: строка «Офлайн-курс: …» из настроек — в промпте всегда", () => {
+  it("вопрос про онлайн — строка с фактами офлайна всё равно есть (дата из настроек главнее даты в промпте)", async () => {
+    generateWithFallback.mockResolvedValue(said("Курс 70 сомони."));
+    await aiReply(lead, "Нархаш чанд?", [], []);
+    const build = generateWithFallback.mock.calls[0][2] as (m: string) => string;
+    const body = JSON.parse(build("gemini-test")) as { system_instruction: { parts: { text: string }[] } };
+    expect(body.system_instruction.parts[0].text).toMatch(/Офлайн-курс: .*Рудаки 177/);
+  });
+});
+
+describe("ревью 11.11: [ASK_SHIRIN] под комментарием", () => {
+  it("метка не уходит буквально: «сейчас уточню и напишу вам» приватным ответом, вопрос в списке ждущих", async () => {
+    const { aiReplyToComment } = await import("../../src/ai.js");
+    const { sendPrivateReply } = await import("../../src/instagram.js");
+    vi.mocked(sendPrivateReply).mockResolvedValue("pr-1" as never);
+    db.model("contact").findUnique.mockResolvedValue(lead);
+    generateWithFallback.mockResolvedValue(said("[ASK_SHIRIN]"));
+    const outcome = await aiReplyToComment(lead, "comment-1", "Из Казахстана можно оплатить?");
+    expect(outcome).toBe("waiting_human");
+    const sent = vi.mocked(sendPrivateReply).mock.calls.map((c) => String(c[1]));
+    expect(sent).toEqual(["Сейчас уточню и напишу вам"]);
+    expect(sent.join(" ")).not.toContain("[");
+    expect(db.model("contact").update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ humanRequestedAt: expect.any(Date) }) }),
+    );
+  });
+});

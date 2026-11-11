@@ -86,7 +86,7 @@ describe("maybeRestoreAccess: код из ссылки", () => {
     expect(db.model("purchase").update).not.toHaveBeenCalled();
     expect(sendText).toHaveBeenCalledTimes(1);
     expect(String(sendText.mock.calls[0][1])).not.toMatch(/\/l\//);
-    expect(String(sendText.mock.calls[0][1])).toContain("Передала Ширин");
+    expect(String(sendText.mock.calls[0][1])).toContain("проверю покупку");
     const alert = String(sendTelegramMessage.mock.calls[0][2]);
     expect(alert).toContain("Гулнора");
     expect(alert).toContain("@gulnora");
@@ -101,7 +101,9 @@ describe("maybeRestoreAccess: код из ссылки", () => {
     db.model("purchase").findMany.mockResolvedValue([purchase(buyer.id)]);
     await maybeRestoreAccess(writer, `Ассалому алейкум! Пайванди дарсҳои ман кушода намешавад. Рамзи ман: ${CODE}`);
     const text = String(sendText.mock.calls[0][1]);
-    expect(text).toContain("Ширин");
+    // От первого лица, без «Ширин сама» (ревью 11.11.2026).
+    expect(text).toContain("тафтиш карда");
+    expect(text).not.toContain("Ширин");
     // Таджикский разговорный, особые буквы по стилю клиента (клиент пишет без них).
     expect(text).toMatch(/Фахмидам|дарсхо/);
     expect(text).not.toMatch(/[—–]/);
