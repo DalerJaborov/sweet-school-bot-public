@@ -17,7 +17,7 @@ import {
   mentionsPaymentPhone,
   regenerateAfterFilters,
 } from "./ai/repeatGuard.js";
-import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
+import { replyDeliveryMode, deliveryPrompt, videoHelpPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
@@ -509,6 +509,7 @@ export async function aiReply(
     (await freeLessonBlock()) +
     webChannelBlock(contact) +
     (await deliveryPrompt(contact)) +
+    (await videoHelpPrompt()) +
     REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).

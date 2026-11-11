@@ -1,4 +1,26 @@
 import { deliveryModeFor } from "../course/delivery.js";
+import { getSetting } from "../db.js";
+
+/**
+ * ВИДЕО-ПОДСКАЗКА «НЕ ОТКРЫВАЕТСЯ ВИДЕО» (владелец 12.11.2026).
+ * Бот писал длинную инструкцию на таджикском («Данные и память», кэш, перезагрузка) —
+ * люди её не понимают. Вместо неё — короткая фраза и видео, где всё показано.
+ * Настройка videoHelpUrl: не задана — видео владельца ниже; "" или "false" — выключено.
+ */
+export const VIDEO_HELP_SETTING = "videoHelpUrl";
+export const DEFAULT_VIDEO_HELP_URL = "https://youtube.com/shorts/9aTIJj4tMd8";
+
+export async function videoHelpPrompt(): Promise<string> {
+  const raw = await getSetting(VIDEO_HELP_SETTING);
+  const url = raw === null ? DEFAULT_VIDEO_HELP_URL : raw.trim();
+  if (!/^https:\/\/\S+$/u.test(url)) return "";
+  return (
+    "\nВИДЕО НЕ ОТКРЫВАЕТСЯ: если пишут, что урок или видео не открывается, не грузится, Telegram не показывает видео, " +
+    "не пиши инструкцию про кэш, настройки и перезагрузку. Одна короткая фраза и ссылка на видео, где всё показано: " +
+    `по-таджикски «Ин видеоро бинен, хамааш нишон дода шудааст: ${url}», по-русски «Посмотрите это короткое видео, там всё показано: ${url}». ` +
+    "Если после видео всё равно не открывается — верни ровно [ASK_SHIRIN]."
+  );
+}
 
 type DeliveryContact = { channel: string; courseDeliveryChoice?: string | null };
 
