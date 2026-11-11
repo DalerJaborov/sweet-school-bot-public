@@ -40,7 +40,7 @@ export const MAX_MEDIA_PER_REPLY = 2;
 export const DEFAULT_MENU_MEDIA: Record<CourseKey, string[]> = {
   online70: ["https://shirinsweets.online/media/2a63855d-368c-40fc-b642-037a431e4def.jpg"],
   online50: [
-    "https://manybot-thumbnails.s3.eu-central-1.amazonaws.com/fb4433534/ca/big_69c2e6c900233215cc5859be98a8dfac.png",
+    "https://shirinsweets.online/media/mb-f7e90459f2bd2579.png",
   ],
   offline: ["https://shirinsweets.online/media/11711421-2fc6-462b-9127-ec74e194ab97.jpg"],
 };
