@@ -127,7 +127,7 @@ describe("случай 2: отложенная автоматика после �
     db.model("receiptCheck").findUnique.mockImplementation(queuedRow);
     db.model("purchase").findMany.mockResolvedValue([]);
     db.model("setting").findUnique.mockResolvedValue({ key: "telegramBotToken", value: "t" });
-    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+2lICxrvXYYY5OGFi" }]);
+    db.model("message").findMany.mockResolvedValue([{ text: "https://t.me/+testInviteLink01" }]);
     await handleReceiptVerdict(contact, verdict({ recipientMatches: false }), "q1");
     expect(grantCourses).not.toHaveBeenCalled();
     expect(db.model("purchase").create).not.toHaveBeenCalled();
