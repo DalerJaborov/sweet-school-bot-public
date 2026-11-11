@@ -59,15 +59,10 @@ describe("получатели", () => {
     expect(await techChatIds()).toEqual([]);
   });
 
-  it("сводка и чеки: по умолчанию владелец и сестра без дублей", async () => {
-    expect((await summaryChatIds()).sort()).toEqual([OWNER, SISTER].sort());
-    settings.telegramReportChatId = SISTER;
-    expect(await summaryChatIds()).toEqual([SISTER]);
-  });
-
-  it("сводка и чеки: явная telegramSummaryChatIds главнее", async () => {
-    settings.telegramSummaryChatIds = `${OWNER},${SISTER}`;
-    expect(await summaryChatIds()).toEqual([OWNER, SISTER]);
+  it("карточки чеков (summaryChatIds): ТОЛЬКО владелец, Ширин — никогда (11.11.2026)", async () => {
+    expect(await summaryChatIds()).toEqual([OWNER]);
+    settings.telegramSummaryChatIds = `${OWNER},${SISTER}`; // устаревшая настройка на получателей не влияет
+    expect(await summaryChatIds()).toEqual([OWNER]);
   });
 
   it("telegramAdminIds (вход в панель) не влияет на получателей", async () => {
@@ -110,20 +105,20 @@ describe("технические уведомления идут только в
     const t0 = 1_800_000_000_000;
     const spy = vi.spyOn(Date, "now");
     spy.mockReturnValue(t0);
-    await notifyOwnerOfSystemError("whatsapp:connection", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
     spy.mockReturnValue(t0 + 10 * 60_000);
-    await notifyOwnerOfSystemError("whatsapp:connection", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
     expect(sendTelegramMessageMock).not.toHaveBeenCalled(); // мост перезапустился — тишина
 
     spy.mockReturnValue(t0 + 20 * 60_000);
-    await notifyOwnerOfSystemError("whatsapp:connection", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
     spy.mockReturnValue(t0 + 31 * 60_000);
-    await notifyOwnerOfSystemError("whatsapp:connection", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
     expect(sendTelegramMessageMock).toHaveBeenCalledTimes(1);
     expect(sendTelegramMessageMock.mock.calls[0]?.[1]).toBe(OWNER);
 
     spy.mockReturnValue(t0 + 41 * 60_000);
-    await notifyOwnerOfSystemError("whatsapp:connection", "ECONNREFUSED");
+    await notifyOwnerOfSystemError("ai", "ECONNREFUSED");
     expect(sendTelegramMessageMock).toHaveBeenCalledTimes(1); // дедуп 6 часов
   });
 });

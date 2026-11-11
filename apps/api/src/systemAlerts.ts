@@ -1,44 +1,49 @@
-import { getSetting, logError } from "./db.js";
-import { sendTelegramMessage, techChatIds } from "./telegram.js";
-import { shouldSendAlert, ALERT_SUSTAINED_MS } from "./alertGate.js";
+import { sendKind } from "./notify.js";
+import { ALERT_SUSTAINED_MS } from "./alertGate.js";
+import type { NotifyKind } from "./notifyKinds.js";
 
 /**
- * ПРЯМАЯ ТРЕВОГА БЕЗ ДЕДУПА — владельцу и в чат сводок.
+ * ПРЯМАЯ ТРЕВОГА — ТОЛЬКО ВЛАДЕЛЬЦУ (вид «сбои», если не сказано иное).
  *
- * Для случаев, где каждое срабатывание важно само по себе: сторож входящих,
- * зависшая фоновая задача, отказ воронки на конкретном человеке. Отказ
- * отправки НЕ глотается: раньше здесь стояло `.catch(() => {})`, и если
- * токен бота отозван или чат заблокировал бота, все тревоги проекта уходили
- * в никуда без единого следа (разбор надёжности 03.09.2026). Теперь это
- * попадает в журнал — а журнал виден в панели.
+ * Для случаев, где каждое срабатывание важно само по себе: зависшая фоновая
+ * задача, лимит ИИ, отказ повтора ответа. Отказ отправки НЕ глотается (разбор
+ * надёжности 03.09.2026): он попадает в журнал, а журнал виден в панели.
+ * Получатели и выключенные виды — в telegram.ts chatsForKind (11.11.2026);
+ * Ширин служебного не получает никогда.
  */
 export async function notifyOwnerDirect(
   text: string,
-  opts: { dedupeKey?: string; cooldownMs?: number } = {}
+  opts: { dedupeKey?: string; cooldownMs?: number; kind?: NotifyKind } = {}
 ): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  if (!botToken) return;
-  // Только технический получатель (владелец), не сестра (08.11.2026).
-  const unique = await techChatIds();
-  if (unique.length === 0) return;
-  // dedupeKey — один и тот же алерт не чаще раза в 6 часов (по умолчанию).
-  if (opts.dedupeKey && !(await shouldSendAlert(opts.dedupeKey, { cooldownMs: opts.cooldownMs }))) return;
-  for (const chatId of unique) {
-    await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("systemAlerts:send", err));
-  }
+  await sendKind(opts.kind ?? "failure", text, { dedupeKey: opts.dedupeKey, cooldownMs: opts.cooldownMs });
 }
 
 /**
- * ХОЗЯЙКЕ — СРАЗУ, НЕ ДОЖИДАЯСЬ ВЕЧЕРНЕЙ СВОДКИ, НО ТОЛЬКО НА НОВЫЙ ВИД
- * ПОЛОМКИ (30.08.2026, по образцу Royal Home CRM: apps/api/src/push.ts,
- * notifyDirectorsAboutNewError).
+ * «ОЖИДАЕМЫЕ» ОТКАЗЫ — НЕ ПОВОД БУДИТЬ ВЛАДЕЛЬЦА (11.11.2026).
  *
- * Живёт отдельным файлом, а не в db.ts: тот модуль зовёт эту функцию через
- * крючок (onNewSystemError, регистрируется в index.ts) — прямой импорт
- * telegram.ts из db.ts создал бы цикл, потому что telegram.ts сам импортирует
- * logError из db.ts.
+ * Бот сам отказывается писать человеку, у которого стоит пауза после ответа
+ * Ширин, отметка «знакомый», спам-блок и т. п. (messaging/automation.ts, «contact
+ * policy»), а Instagram не пускает писать вне 24-часового окна. Это работа
+ * защиты, а не поломка: раньше из-за них приходили «Новая проблема funnel:step
+ * Contact messaging blocked» и «воронка 11 раз не смогла отправить и сдалась».
  */
-const SOURCE_LABELS: Record<string, string> = {
+export function isExpectedFailure(message: string | null | undefined): boolean {
+  const m = message ?? "";
+  return (
+    /Contact messaging blocked/i.test(m) ||
+    /contact policy/i.test(m) ||
+    /Meta delivery WINDOW/i.test(m) ||
+    /outside.*(?:window|24)|24.hour.*window/i.test(m) ||
+    /Meta delivery (?:RATE|TRANSIENT)/i.test(m)
+  );
+}
+
+/**
+ * Какие внутренние ошибки вообще имеют право стать сообщением. Остальные —
+ * только в журнал (панель → «Журнал»): сеть моргнула, один клиент закрыл
+ * сообщения, Telegram отклонил чужой запрос. Список короткий и осознанный.
+ */
+const ALERTING_SOURCES: Record<string, string> = {
   ai: "ИИ-ответ",
   "webhook:message": "приём сообщения",
   "webhook:comment": "приём комментария",
@@ -49,51 +54,40 @@ const SOURCE_LABELS: Record<string, string> = {
   uncaughtException: "падение процесса",
 };
 
+export function systemErrorMayAlert(source: string, message: string): boolean {
+  return source in ALERTING_SOURCES && !isExpectedFailure(message);
+}
+
 export async function notifyOwnerOfSystemError(source: string, message: string): Promise<void> {
   try {
-    const botToken = (await getSetting("telegramBotToken"))?.trim();
-    if (!botToken) return;
-
-    // Только владелец (08.11.2026): сестре техника не нужна. И только если сбой
-    // длится дольше 30 минут (перезапуск моста, обрыв сети — не повод будить);
-    // один и тот же сбой — не чаще раза в 6 часов.
-    const unique = await techChatIds();
-    if (unique.length === 0) return;
-    if (!(await shouldSendAlert(`sys:${source}:${message.slice(0, 80)}`, { sustainedMs: ALERT_SUSTAINED_MS }))) return;
-
-    const label = SOURCE_LABELS[source] ?? source;
-    const text = `⚠️ Новая проблема в боте (${label})\n${message.slice(0, 300)}`;
-    for (const chatId of unique) {
-      // Отказ отправки — в консоль, а не в logError: тот снова позвал бы этот
-      // же крючок, и при мёртвом Telegram получился бы бесконечный круг.
-      await sendTelegramMessage(botToken, chatId, text).catch((err) =>
-        console.error(`[systemAlerts:send] ${err instanceof Error ? err.message : String(err)}`)
-      );
-    }
+    if (!systemErrorMayAlert(source, message)) return;
+    // Только если сбой длится дольше 30 минут (перезапуск моста, обрыв сети — не
+    // повод будить); один и тот же сбой — не чаще раза в 6 часов.
+    await sendKind("failure", `⚠️ Новая проблема в боте (${ALERTING_SOURCES[source]})\n${message.slice(0, 300)}`, {
+      dedupeKey: `sys:${source}:${message.slice(0, 80)}`,
+      sustainedMs: ALERT_SUSTAINED_MS,
+      // В журнал нельзя: тот снова позвал бы этот же крючок, и при мёртвом Telegram получился бы бесконечный круг.
+      quietErrors: true,
+    });
   } catch {
     // Уведомление не должно ронять запись самой ошибки.
   }
 }
 
 /**
- * ЧЕЛОВЕК ИЗ РЕКЛАМЫ ТАК И НЕ ПОЛУЧИЛ ОТВЕТ — ПЕРСОНАЛЬНАЯ ТРЕВОГА, А НЕ ОБЩИЙ
- * ДЕДУП (30.08.2026).
- *
- * `notifyOwnerOfSystemError` намеренно молчит на повтор уже известного вида
- * поломки — это верно для технических ошибок («опять не отвечает Instagram
- * API»), но неверно здесь: каждый такой случай — это ДРУГОЙ, конкретный
- * человек, которого мы теряем, и про КАЖДОГО стоит узнать отдельно, даже если
- * причина отказа технически одна и та же. Отправляется напрямую, без дедупа.
+ * ВОРОНКА СДАЛАСЬ НА ЧЕЛОВЕКЕ. Раньше — по тревоге на каждого. Теперь: молчим,
+ * если причина «ожидаемая» (защита, окно Instagram — isExpectedFailure); по
+ * настоящей причине (Meta отклоняет, маркер истёк) — одно сообщение на причину
+ * раз в 6 часов. Человек при этом виден в панели (Журнал → Сбои).
  */
 export async function notifyFunnelGaveUp(who: string, attempts: number, lastError: string | null): Promise<void> {
   try {
-    await notifyOwnerDirect(
+    if (isExpectedFailure(lastError)) return;
+    await sendKind(
+      "failure",
       `🚨 ${who} написал(а) с рекламы, воронка ${attempts} раз не смогла отправить ответ и сдалась.\n` +
-        `Человек НЕ получил ничего — посмотрите вручную (Журнал → Сбои). ` +
-        `Такие сообщения приходят не чаще раза в 6 часов.` +
+        `Посмотрите вручную (Журнал → Сбои).` +
         (lastError ? `\nПричина: ${lastError.slice(0, 200)}` : ""),
-      // Одна и та же причина (например, истёкший маркер Instagram) — одно
-      // сообщение в 6 часов, а не по алерту на каждого человека (08.11.2026).
       { dedupeKey: `funnel-gaveup:${(lastError ?? "").slice(0, 60)}` }
     );
   } catch {

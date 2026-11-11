@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { chatsForKind, sendTelegramMessage } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { canTransferNow, describeDevice, issueMagicLink, transferToNewPhone } from "./access.js";
 import { parseRecoveryCode, recoveryCodeFor } from "./linkCode.js";
@@ -297,7 +298,7 @@ const PROOF_NAME: Record<ProofKind, string> = {
 
 async function ownerChat(): Promise<{ botToken: string; chatId: string } | null> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
+  const chatId = (await chatsForKind("security"))[0];
   return botToken && chatId ? { botToken, chatId } : null;
 }
 
@@ -337,11 +338,7 @@ async function askOwner(contact: Contact, what: string, key = "ask"): Promise<vo
 }
 
 async function notifyOwner(contact: Contact, what: string): Promise<void> {
-  const chat = await ownerChat();
-  if (!chat) return;
-  await sendTelegramMessage(chat.botToken, chat.chatId, `${who(contact)}: ${what}`).catch((err) =>
-    logError("phoneChange:notifyOwner", err),
-  );
+  await sendKind("security", `🔓 ${who(contact)}: ${what}`);
 }
 
 /**

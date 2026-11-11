@@ -1,4 +1,5 @@
-import { getSetting, logError } from "./db.js";
+import { getSetting, setSetting, logError } from "./db.js";
+import { NOTIFY_INFO, isNotifyKind, type NotifyKind } from "./notifyKinds.js";
 
 const API = "https://api.telegram.org";
 const TIMEOUT_MS = 15_000;
@@ -85,6 +86,23 @@ export async function downloadTelegramFile(
   }
 }
 
+/**
+ * КАРТОЧКА ЧЕКА, КОТОРАЯ НЕ ПОВОД ТРЕВОЖИТЬ (11.11.2026, фильтр маршрутизации).
+ *
+ * Если единственное, что «смущает», — «Ширин уже отправила ссылку вне системы»,
+ * человек доступ получил: карточка с кнопками только пугала («Чек требует
+ * проверки», хотя всё выдано). Такой чек остаётся в панели («Чеки» и «Сегодня»),
+ * а в Telegram не приходит. Любое другое сомнение рядом с этим — карточка идёт.
+ */
+const RESOLVED_DOUBTS = [/Ширин уже отправила ссылку вне системы/i];
+
+export function isResolvedReviewCard(caption: string): boolean {
+  const m = /Что смущает:[ ]*([^\n]*)/.exec(caption);
+  if (!m) return false;
+  const doubts = m[1].split(";").map((d) => d.trim()).filter(Boolean);
+  return doubts.length > 0 && doubts.every((d) => RESOLVED_DOUBTS.some((re) => re.test(d)));
+}
+
 /** Карточка сомнительного чека владельцу — с фото и двумя кнопками. Дёргаем
  *  ТОЛЬКО когда бот сам не разобрался (не читается сумма/дата или подозрение на
  *  подделку): чёткий чек уходит клиенту автоматически, владельца не трогаем. */
@@ -103,6 +121,7 @@ export async function sendReceiptForReview(
     closeAsDuplicate?: boolean;
   },
 ): Promise<{ chatId: string; messageId: number } | null> {
+  if (isResolvedReviewCard(input.caption)) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const inline_keyboard = input.needsCourseChoice
@@ -242,6 +261,34 @@ export async function editMessageText(
     if (!res.ok || !data.ok) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
   } catch (err) {
     logError("telegram:editMessageText", err);
+  }
+}
+
+/** Переписать текст сообщения вместе с кнопками под ним (меню управления обновляется на месте). */
+export async function editMessageWithMarkup(
+  botToken: string,
+  chatId: number | string,
+  messageId: number,
+  text: string,
+  replyMarkup: { inline_keyboard: { text: string; callback_data: string }[][] },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/bot${botToken}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: replyMarkup }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const data = (await res.json()) as { ok?: boolean; description?: string };
+    // «message is not modified» — нажали то же самое второй раз: не ошибка.
+    if (!res.ok || !data.ok) {
+      if (/not modified/i.test(data.description ?? "")) return true;
+      throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+    }
+    return true;
+  } catch (err) {
+    logError("telegram:editMarkup", err);
+    return false;
   }
 }
 
@@ -396,42 +443,111 @@ export async function revokeInviteLink(botToken: string, chatId: string, inviteL
   }
 }
 
-/**
- * ТЕХНИЧЕСКИЕ УВЕДОМЛЕНИЯ — ТОЛЬКО ВЛАДЕЛЬЦУ (решение 08.11.2026).
- *
- * Сбои, токены Instagram, зависания, тревоги доступа, напоминания — всё, что
- * не нужно сестре. Явная настройка `telegramTechChatId` (через запятую); пока
- * она пуста — чат сводок владельца (`telegramReportChatId`). Личный чат сестры
- * (`telegramOwnerChatId`) сюда НЕ входит никогда.
- *
- * Не путать с `telegramAdminIds` — это список тех, кто может войти в панель.
- */
-export async function techChatIds(): Promise<string[]> {
+// ---------- КОМУ ЧТО ИДЁТ (11.11.2026) ----------
+//
+// Две роли, чат-id берутся из настроек (проверено по проду 11.11.2026):
+//  • ВЛАДЕЛЕЦ ПЛАТФОРМЫ (Далер) — `telegramTechChatId`, пока пусто — чат сводок
+//    `telegramReportChatId`. Получает ВСЁ: и главное, и служебное.
+//  • ШИРИН (хозяйка школы) — `telegramOwnerChatId` (исторически «чат хозяйки») и
+//    её Telegram-id `telegramQaOwnerId`. Получает ТОЛЬКО «главное» (деньги,
+//    запись на офлайн, итог дня) и только пока включена (`notifyShirinEnabled`).
+// Любой вид уведомления можно выключить по роли (`notifyOff:owner`/`notifyOff:shirin`
+// — JSON-список видов из notifyKinds.ts). `telegramAdminIds` (вход в панель) сюда
+// не входит. Устаревшая `telegramSummaryChatIds` на получателей больше не влияет.
+
+export type ChatRole = "owner" | "shirin";
+
+const OFF_KEY: Record<ChatRole, string> = { owner: "notifyOff:owner", shirin: "notifyOff:shirin" };
+export const SHIRIN_ENABLED_KEY = "notifyShirinEnabled";
+
+/** Владелец платформы: явная `telegramTechChatId`, иначе чат сводок. Её собственный Telegram-id сюда не попадает. */
+export async function ownerChatIds(): Promise<string[]> {
   const explicit = parseChatIds(await getSetting("telegramTechChatId"));
-  if (explicit.length > 0) return [...new Set(explicit)];
-  const report = (await getSetting("telegramReportChatId"))?.trim();
-  return report ? [report] : [];
+  let ids = explicit;
+  if (ids.length === 0) {
+    const report = (await getSetting("telegramReportChatId"))?.trim();
+    ids = report ? [report] : [];
+  }
+  const shirinSelf = (await getSetting("telegramQaOwnerId"))?.trim();
+  return [...new Set(ids.filter((id) => id && id !== shirinSelf))];
 }
 
 /**
- * ВЕЧЕРНЯЯ СВОДКА И КАРТОЧКИ ПОДОЗРИТЕЛЬНЫХ ЧЕКОВ — ВЛАДЕЛЬЦУ И СЕСТРЕ.
- * Настройка `telegramSummaryChatIds`; пока пуста — прежняя пара
- * (`telegramOwnerChatId` + `telegramReportChatId`).
+ * Прежнее имя. Остался один вызывающий — ai.ts (клиент просит живого человека),
+ * поэтому это получатели вида «human»: только владелец и только пока вид не
+ * выключен. Новый код берёт chatsForKind(вид) или sendKind (notify.ts).
+ */
+export async function techChatIds(): Promise<string[]> {
+  return chatsForKind("human");
+}
+
+/** Чаты Ширин: личный чат хозяйки и её Telegram-id, без чатов владельца. */
+export async function shirinChatIds(): Promise<string[]> {
+  const owners = new Set(await ownerChatIds());
+  const raw = [
+    ...parseChatIds(await getSetting("telegramOwnerChatId")),
+    ...parseChatIds(await getSetting("telegramQaOwnerId")),
+  ];
+  return [...new Set(raw.filter((id) => !owners.has(id)))];
+}
+
+export async function chatRole(chatId: string): Promise<ChatRole | null> {
+  if ((await ownerChatIds()).includes(chatId)) return "owner";
+  if ((await shirinChatIds()).includes(chatId)) return "shirin";
+  return null;
+}
+
+export async function shirinEnabled(): Promise<boolean> {
+  return (await getSetting(SHIRIN_ENABLED_KEY))?.trim() !== "false";
+}
+
+export async function setShirinEnabled(on: boolean): Promise<void> {
+  await setSetting(SHIRIN_ENABLED_KEY, on ? "true" : "false");
+}
+
+/** Какие виды у роли выключены. Мусор в настройке — ничего не выключено. */
+export async function mutedKinds(role: ChatRole): Promise<Set<NotifyKind>> {
+  try {
+    const raw = await getSetting(OFF_KEY[role]);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(Array.isArray(list) ? list.filter((v): v is NotifyKind => typeof v === "string" && isNotifyKind(v)) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Включить/выключить вид для роли. Виды «только владельцу» Ширин не трогает. */
+export async function setKindEnabled(role: ChatRole, kind: NotifyKind, enabled: boolean): Promise<void> {
+  const off = await mutedKinds(role);
+  if (enabled) off.delete(kind);
+  else off.add(kind);
+  await setSetting(OFF_KEY[role], JSON.stringify([...off]));
+}
+
+/** Кому слать вид уведомления прямо сейчас — с учётом ролей, «только владельцу» и выключенных видов. */
+export async function chatsForKind(kind: NotifyKind): Promise<string[]> {
+  const out: string[] = [];
+  if (!(await mutedKinds("owner")).has(kind)) out.push(...(await ownerChatIds()));
+  if (NOTIFY_INFO[kind].audience === "main" && (await shirinEnabled()) && !(await mutedKinds("shirin")).has(kind)) {
+    out.push(...(await shirinChatIds()));
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Карточки сомнительных чеков и тексты про них — ТОЛЬКО владельцу (11.11.2026,
+ * раньше уходили и Ширин). Имя осталось прежним ради вызывающих мест.
  */
 export async function summaryChatIds(): Promise<string[]> {
-  const explicit = parseChatIds(await getSetting("telegramSummaryChatIds"));
-  const ids =
-    explicit.length > 0
-      ? explicit
-      : [(await getSetting("telegramOwnerChatId"))?.trim(), (await getSetting("telegramReportChatId"))?.trim()];
-  return [...new Set(ids.filter((id): id is string => Boolean(id)))];
+  return chatsForKind("review");
 }
 
 /** Все свои чаты: кому разрешено нажимать кнопки и писать боту. */
 export async function trustedChatIds(): Promise<string[]> {
   const ids = [
-    ...(await summaryChatIds()),
-    ...(await techChatIds()),
+    ...(await ownerChatIds()),
+    ...(await shirinChatIds()),
+    ...parseChatIds(await getSetting("telegramSummaryChatIds")),
     (await getSetting("telegramOwnerChatId"))?.trim(),
     (await getSetting("telegramReportChatId"))?.trim(),
   ];

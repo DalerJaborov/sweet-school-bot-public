@@ -14,7 +14,7 @@ vi.mock("../../src/telegram.js", () => ({
 }));
 vi.mock("../../src/funnel.js", () => ({ COMMENT_WAITING_OUTCOMES: ["waiting_human", "ai_off", "no_keys", "budget", "ai_error"] }));
 
-import { runUnansweredWatch, needsAnswer, unansweredRecipients } from "../../src/unansweredWatch.js";
+import { runUnansweredWatch } from "../../src/unansweredWatch.js";
 import { resetHumanSilenceMs } from "../../src/messaging/automation.js";
 import { FOLLOW_PERSONAL_REASON } from "../../src/profiles.js";
 
@@ -83,68 +83,42 @@ describe("сторож: директ Instagram", () => {
     expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
-  it("пауза ещё идёт — бот не встревает, Ширин получает напоминание с временем конца паузы", async () => {
+  it("пауза ещё идёт — бот не встревает и в Telegram НЕ пишет (11.11.2026: «Ждут ответа» — шум)", async () => {
     db.model("contact").findMany.mockResolvedValue([
       contactWith([msg("OUT", 60, "Ҳа"), msg("IN", 30, "Кай сар мешавад?")], { humanTakenOverAt: new Date(NOON.getTime() - 60 * MIN) }),
     ]);
     await runUnansweredWatch(NOON);
     expect(aiReply).not.toHaveBeenCalled();
-    expect(sendTelegramMessage).toHaveBeenCalledWith("bot", "tech-chat", expect.any(String));
-    expect(telegramText()).toContain("@client");
-    expect(telegramText()).toContain("Кай сар мешавад?");
-    expect(telegramText()).toContain("до 14:00");
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
-  it("офлайн передан Ширин — бот молчит, но напоминание уходит", async () => {
+  it("офлайн передан Ширин, «знакомая», клиент просил человека — бот молчит и никому не пишет", async () => {
     db.model("contact").findMany.mockResolvedValue([
       contactWith([msg("OUT", 60, "Карточка"), msg("IN", 20, "А адрес?")], { offlineHandoffAt: new Date(NOON.getTime() - 60 * MIN) }),
+      contactWith([msg("IN", 30, "Курс чанд?")], { id: "c2", username: "friend", personal: true, personalReason: FOLLOW_PERSONAL_REASON }),
     ]);
     await runUnansweredWatch(NOON);
     expect(aiReply).not.toHaveBeenCalled();
-    expect(telegramText()).toContain("офлайн");
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
-  it("«спасибо», «ок», смайлик — ответа не ждут, никого не будим", async () => {
+  it("КЛАСС: сторож не отправляет в Telegram ни при каких входных данных (дневное и ночное время)", async () => {
+    db.model("contact").findMany.mockResolvedValue([
+      contactWith([msg("IN", 30, "Курс чанд?")]),
+      contactWith([msg("IN", 30, "Курс чанд?", NIGHT)], { id: "c2" }),
+    ]);
+    await runUnansweredWatch(NOON);
+    await runUnansweredWatch(NIGHT);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("«спасибо», «ок», смайлик — ответа не ждут", async () => {
     db.model("contact").findMany.mockResolvedValue([
       contactWith([msg("OUT", 60, "Ссылка"), msg("IN", 30, "Рахмат")]),
       contactWith([msg("OUT", 60, "Ссылка"), msg("IN", 30, "ок 👍")], { id: "c2" }),
     ]);
     await runUnansweredWatch(NOON);
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
-    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
-  });
-
-  it("ручная отметка «личный» — не трогаем; авто «знакомая» — напоминаем", async () => {
-    db.model("contact").findMany.mockResolvedValue([
-      contactWith([msg("IN", 30, "Курс чанд?")], { personal: true, personalReason: "Отмечен вручную" }),
-      contactWith([msg("IN", 30, "Курс чанд?")], { id: "c2", username: "friend", personal: true, personalReason: FOLLOW_PERSONAL_REASON }),
-    ]);
-    await runUnansweredWatch(NOON);
-    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(telegramText()).toContain("@friend");
-    expect(telegramText()).not.toContain("@client");
-  });
-
-  it("свежее (младше 15 минут) и уже напомненное — пропускаем", async () => {
-    db.model("contact").findMany.mockResolvedValue([
-      contactWith([msg("IN", 5, "Курс чанд?")]),
-      contactWith([msg("IN", 30, "Курс чанд?")], { id: "c2", unansweredAlertAt: new Date(NOON.getTime() - 10 * MIN) }),
-    ]);
-    await runUnansweredWatch(NOON);
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
-  });
-
-  it("фильтр «не по делу» уже решил молчать (курьер, магазин) — не напоминаем", async () => {
-    db.model("contact").findMany.mockResolvedValue([contactWith([msg("IN", 30, "Курьер внизу, заберите посылку")])]);
-    db.model("replyGate").findFirst.mockResolvedValue({ id: "gate" });
-    await runUnansweredWatch(NOON);
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
-  });
-
-  it("ночью Telegram не будим и ожидание не помечаем — напомним утром", async () => {
-    db.model("contact").findMany.mockResolvedValue([contactWith([msg("IN", 30, "Курс чанд?", NIGHT)], { offlineHandoffAt: new Date() })]);
-    await runUnansweredWatch(NIGHT);
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(aiReply).not.toHaveBeenCalled();
     expect(db.model("contact").updateMany).not.toHaveBeenCalled();
   });
 
@@ -152,25 +126,5 @@ describe("сторож: директ Instagram", () => {
     settings.unansweredWatchdogEnabled = "false";
     await runUnansweredWatch(NOON);
     expect(db.model("contact").findMany).not.toHaveBeenCalled();
-  });
-
-  it("не чаще раза в 15 минут: только что писали — копим до следующего раза", async () => {
-    settings.unansweredWatchSentAt = String(NOON.getTime() - 5 * MIN);
-    db.model("contact").findMany.mockResolvedValue([contactWith([msg("IN", 30, "Курс чанд?")], { offlineHandoffAt: new Date() })]);
-    await runUnansweredWatch(NOON);
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
-    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
-  });
-});
-
-describe("кому уходит напоминание (владелец 09.11.2026: только владельцу, не Ширин)", () => {
-  it("ГЛАВНОЕ: только технический чат владельца; telegramOwnerChatId (чат Ширин) и чат сводок не используются", async () => {
-    settings.telegramSummaryChatIds = "owner-chat,893446307";
-    expect(await unansweredRecipients()).toEqual(["tech-chat"]);
-  });
-
-  it("id Ширин (telegramQaOwnerId) вычёркивается, даже если совпал с техническим чатом", async () => {
-    settings.telegramQaOwnerId = "tech-chat";
-    expect(await unansweredRecipients()).toEqual([]);
   });
 });

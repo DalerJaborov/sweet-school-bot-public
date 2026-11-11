@@ -2,7 +2,7 @@ import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "./
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
 import { everTalkedWithShirin } from "./messaging/automation.js";
-import { techChatIds, sendTelegramMessage } from "./telegram.js";
+import { sendKind } from "./notify.js";
 import { offsetMs } from "./dailyReport.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
 import { offlineStartDate } from "./ai/courseDate.js";
@@ -105,8 +105,6 @@ async function sweep(): Promise<void> {
   });
   if (signups.length === 0) return;
 
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const ownerChat = (await techChatIds())[0];
   const forOwner: string[] = [];
   let reachedInInstagram = 0;
 
@@ -157,15 +155,15 @@ async function sweep(): Promise<void> {
     );
   }
 
-  if (botToken && ownerChat && forOwner.length > 0) {
-    await sendTelegramMessage(
-      botToken,
-      ownerChat,
+  if (forOwner.length > 0) {
+    // «Главное»: владельцу и Ширин (она обзванивает записавшихся).
+    await sendKind(
+      "offline",
       `📣 Завтра начинается очный курс. Записалось: ${forOwner.length}\n` +
         `Боту удалось написать в Instagram: ${reachedInInstagram}\n\n` +
         `${forOwner.join("\n")}\n\n` +
         `Нажмите на ссылку под нужным человеком — откроется WhatsApp с уже написанным сообщением.`,
-    ).catch((err) => logError("offlineReminder:notifyOwner", err));
+    );
   }
 
   logInfo("offlineReminder", `напомнили ${forOwner.length}, из них в Instagram ${reachedInInstagram}`);

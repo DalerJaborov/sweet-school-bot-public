@@ -49,28 +49,20 @@ describe("Сторож WhatsApp", () => {
     expect(sendTelegramMessage).not.toHaveBeenCalled();
     expect(whatsappProblem(T0 + WHATSAPP_SUSTAINED_MS - 60_000)).toBeNull();
   });
-  it("дольше 10 минут — одно сообщение владельцу и строка в панели", async () => {
+  it("дольше 10 минут — строка в панели, а в Telegram НЕ пишем (11.11.2026: «WhatsApp отключился» — шум)", async () => {
     bridgeRequest.mockResolvedValue({ state: "pairing", contactsReady: false });
     await checkWhatsappConnection(T0);
     await checkWhatsappConnection(T0 + WHATSAPP_SUSTAINED_MS);
-    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(sendTelegramMessage.mock.calls[0]?.[1]).toBe("owner-1");
-    expect(String(sendTelegramMessage.mock.calls[0]?.[2])).toContain("повторная привязка");
+    await checkWhatsappConnection(T0 + 7 * 3_600_000);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
     expect(whatsappProblem(T0 + WHATSAPP_SUSTAINED_MS)).toContain("Настройки → WhatsApp → Подключить");
   });
-  it("шлюз дублей говорит «не надо» — не шлём, но в панели видно", async () => {
-    shouldSendAlert.mockResolvedValue(false);
-    bridgeRequest.mockResolvedValue({ state: "disconnected", contactsReady: false });
-    await checkWhatsappConnection(T0);
-    await checkWhatsappConnection(T0 + WHATSAPP_SUSTAINED_MS);
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
-    expect(whatsappProblem(T0 + WHATSAPP_SUSTAINED_MS)).not.toBeNull();
-  });
-  it("мост не отвечает — отдельный текст", async () => {
+  it("мост не отвечает — отдельный текст в панели", async () => {
     bridgeRequest.mockRejectedValue(new Error("down"));
     await checkWhatsappConnection(T0);
     await checkWhatsappConnection(T0 + WHATSAPP_SUSTAINED_MS);
-    expect(String(sendTelegramMessage.mock.calls[0]?.[2])).toContain("мост связи не отвечает");
+    expect(whatsappProblem(T0 + WHATSAPP_SUSTAINED_MS)).toContain("мост связи не отвечает");
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
   it("ожил — проблема снимается", async () => {
     bridgeRequest.mockResolvedValue({ state: "auth_failure", contactsReady: false });

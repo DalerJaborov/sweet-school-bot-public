@@ -10,7 +10,14 @@ import { getPrices } from "../services/priceService.js";
 import { getOfflineFacts } from "../services/salesTextsService.js";
 import { offlineCourseCard } from "../ai/offlineCourse.js";
 import { courseDateLabel, toIsoDay, upcomingOfflineStartDate } from "../ai/courseDate.js";
-import { daysWordRu, dessertsWordRu, hoursValue, offlineAddress, parseHours, streetAddress } from "../ai/offlineFacts.js";
+import {
+  daysWordRu,
+  dessertsWordRu,
+  hoursValue,
+  offlineAddress,
+  parseHours,
+  streetAddress,
+} from "../ai/offlineFacts.js";
 import { onOfferSaved } from "../services/offerService.js";
 import { notifyOwnerDirect } from "../systemAlerts.js";
 import { clientIp } from "../course/access.js";
@@ -40,7 +47,9 @@ siteRouter.get(`${API_BASE}/chat-status`, async (_req, res) => {
     const [frozen, enabled] = await Promise.all([getSetting("botFrozen"), getSetting("aiEnabled")]);
     res.setHeader("Cache-Control", "no-store");
     res.json({ enabled: enabled === "true" && frozen !== "true" });
-  } catch { res.status(503).json({ enabled: false }); }
+  } catch {
+    res.status(503).json({ enabled: false });
+  }
 });
 
 const HISTORY_TAKE = 50;
@@ -99,10 +108,12 @@ siteRouter.get(`${API_BASE}/catalog-fragment`, async (req: Request, res: Respons
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   res.type("html");
-  const query = z.object({
-    lang: z.enum(["ru", "tg"]),
-    only: z.enum(["COURSE50", "COURSE70"]).optional(),
-  }).safeParse(req.query);
+  const query = z
+    .object({
+      lang: z.enum(["ru", "tg"]),
+      only: z.enum(["COURSE50", "COURSE70"]).optional(),
+    })
+    .safeParse(req.query);
   if (!query.success) {
     res.status(400).send(renderCatalogUnavailable("ru"));
     return;
@@ -144,7 +155,10 @@ const OFFER_FACT_KEYS = [
 ] as const;
 
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+  return value.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
 }
 siteRouter.get(`${API_BASE}/offer-fact`, async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "no-store");
@@ -207,7 +221,9 @@ function visitor(res: Response): Visitor {
 
 function tooMany(res: Response, verdict: { retryAfterSec: number }): void {
   res.setHeader("Retry-After", String(verdict.retryAfterSec));
-  res.status(429).json({ error: "Слишком много запросов, попробуйте чуть позже", retryAfterSec: verdict.retryAfterSec });
+  res
+    .status(429)
+    .json({ error: "Слишком много запросов, попробуйте чуть позже", retryAfterSec: verdict.retryAfterSec });
 }
 
 // ---------- каталог ----------
@@ -455,9 +471,7 @@ siteRouter.post(`${API_BASE}/chat/send`, parseImage, async (req: Request, res: R
   const byIp = chatPerIp.hit(ip);
   if (!byIp.ok) return tooMany(res, byIp);
 
-  const parsed = z
-    .object({ text: z.string().trim().min(1).max(2000).optional() })
-    .safeParse(req.body ?? {});
+  const parsed = z.object({ text: z.string().trim().min(1).max(2000).optional() }).safeParse(req.body ?? {});
   const file = req.file;
   if (!parsed.success || (!parsed.data.text && !file)) {
     res.status(400).json({ error: "Нужен текст (1–2000 знаков) или картинка" });
@@ -575,7 +589,8 @@ siteRouter.post(`${API_BASE}/offline-signup`, async (req: Request, res: Response
       `👤 ${name}\n` +
       `📲 ${phone}\n` +
       `🌐 ${contact.username ?? "сайт"}${lang ? `, язык: ${lang}` : ""}\n` +
-      `\nПросит записать. Предоплаты нет — позвонить за день до курса.`
+      `\nПросит записать. Предоплаты нет — позвонить за день до курса.`,
+    { kind: "offline" },
   ).catch((err) => logError("site:signup:notify", err));
 
   res.json({ ok: true });
