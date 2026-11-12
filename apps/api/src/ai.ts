@@ -471,9 +471,13 @@ export async function aiReply(
     // Ничего не подошло — самый частый случай, отвечает модель как обычно.
     const reusableMedia = await findReusableMedia(text);
     if (reusableMedia) {
-      await sendReusedMedia(contact, reusableMedia);
-      notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
-      return;
+      // false = отправлять нечего: пример голосовой, а голосовые ответы
+      // выключены. Молчать нельзя — вопрос уходит модели, клиент получает текст.
+      const sent = await sendReusedMedia(contact, reusableMedia);
+      if (sent) {
+        notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+        return;
+      }
     }
   }
 
