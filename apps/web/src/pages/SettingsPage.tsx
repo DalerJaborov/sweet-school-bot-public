@@ -95,6 +95,16 @@ const FIELDS = defineFields([
   },
   { key: "fbPageId", label: "ID страницы Facebook", hint: "Нужен для проверки, что вебхук пришёл от нашей страницы" },
   {
+    key: "igSendVia",
+    label: "Как бот отвечает в Instagram",
+    hint: "«Через Страницу» — ключом Страницы от системного пользователя shirin-bot: не истекает и не ломается при смене пароля. Включайте, когда в поле выше вставлен такой ключ с правом instagram_manage_messages, и проверьте одним сообщением в директ",
+    kind: "radio",
+    options: [
+      { value: "instagram", label: "Через ключ Instagram (как раньше)" },
+      { value: "page", label: "Через Страницу Facebook (вечный ключ)" },
+    ],
+  },
+  {
     key: "telegramBotToken",
     label: "Токен Telegram-бота",
     secret: true,

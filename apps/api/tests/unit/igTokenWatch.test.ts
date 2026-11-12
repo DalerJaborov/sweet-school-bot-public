@@ -74,7 +74,7 @@ describe("checkIgToken", () => {
   it("новый маркер: запоминает момент вставки и не продлевает сразу", async () => {
     store.set("igToken", "manual");
     await checkIgToken(T0);
-    expect(igGet).not.toHaveBeenCalled();
+    expect(igGet).not.toHaveBeenCalledWith("/refresh_access_token", expect.anything(), expect.anything());
     expect(store.get("igTokenFingerprint")).toBe(fingerprint("manual"));
     expect(store.get("igTokenObtainedAt")).toBe(String(T0));
   });
@@ -109,6 +109,34 @@ describe("checkIgToken", () => {
     expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("Маркер доступа Instagram недействителен");
     await checkIgToken(T0 + 12 * 3_600_000);
     expect(sendTelegramMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("ключ умер между продлениями (сменили пароль) — тревога в тот же прогон, а не через неделю", async () => {
+    seed("killed", { igTokenObtainedAt: T0, igTokenRefreshedAt: T0, igTokenExpiresAt: T0 + 60 * DAY });
+    igGet.mockRejectedValue(
+      new Error('Instagram API 401: {"error":{"message":"The session has been invalidated because the user changed their password","type":"OAuthException","code":190}}')
+    );
+    await checkIgToken(T0 + 2 * DAY);
+    expect(igGet).toHaveBeenCalledWith("/me", { fields: "user_id" }, "killed");
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(String(sendTelegramMessage.mock.calls[0][2])).toContain("системного пользователя shirin-bot");
+  });
+
+  it("ключ умер, но Instagram уже идёт через Страницу — владельца не будим", async () => {
+    seed("killed", { igTokenObtainedAt: T0, igTokenRefreshedAt: T0, igTokenExpiresAt: T0 + 60 * DAY });
+    store.set("igSendVia", "page");
+    igGet.mockRejectedValue(new Error('Instagram API 401: {"error":{"type":"OAuthException","code":190}}'));
+    await checkIgToken(T0 + 2 * DAY);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(store.get("igTokenLastError")).toContain("190");
+  });
+
+  it("живой ключ между продлениями — одна дешёвая проверка, тишина", async () => {
+    seed("live", { igTokenObtainedAt: T0, igTokenRefreshedAt: T0, igTokenExpiresAt: T0 + 60 * DAY });
+    igGet.mockResolvedValue({ user_id: "1" });
+    await checkIgToken(T0 + 2 * DAY);
+    expect(igGet).toHaveBeenCalledTimes(1);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("сетевой сбой далеко от истечения — молчит; за неделю до конца — предупреждает", async () => {

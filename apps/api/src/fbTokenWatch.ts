@@ -1,5 +1,6 @@
 import { getSetting, logInfo, logWarn, setSetting } from "./db.js";
 import { sendKind } from "./notify.js";
+import { instagramViaPage } from "./metaTokenAlarm.js";
 
 /**
  * СТОРОЖ МАРКЕРА СТРАНИЦЫ FACEBOOK (fbPageToken).
@@ -25,21 +26,44 @@ export type FbTokenInfo = {
   expires_at?: number;
   /** Секунды Unix; после этой даты Meta перестаёт отдавать данные приложению. */
   data_access_expires_at?: number;
+  /** PAGE / USER / SYSTEM_USER. */
+  type?: string;
+  scopes?: string[];
 };
 
 const HOW_TO_RENEW =
-  "Как продлить: developers.facebook.com → приложение → Messenger/Instagram → «Generate token» для страницы школы " +
-  "(или бессрочный маркер системного пользователя в Business Settings → System users), затем вставить в админке: " +
-  "Настройки → маркер страницы Facebook.";
+  "Как сделать навсегда: business.facebook.com → Настройки компании → Пользователи → Системные пользователи → shirin-bot → " +
+  "«Создать маркер» (приложение Shirin Sweets Bot, срок «Никогда», права pages_messaging, pages_manage_metadata, pages_show_list, " +
+  "instagram_basic, instagram_manage_messages, instagram_manage_comments); по нему взять ключ Страницы и вставить в админке: " +
+  "Настройки → «Маркер страницы Facebook». Такой ключ не истекает и не зависит от пароля. Пошагово — docs/meta-tokens.md.";
+
+/** Дата «доступ к данным до» бывает только у ключа, выпущенного от личного профиля:
+ *  у ключа системного пользователя её нет (ОЦЕНКА по документации Meta о data access
+ *  expiration — она привязана ко входу живого человека; сверить на первом ключе shirin-bot). */
+export function isPersonalPageToken(info: FbTokenInfo): boolean {
+  return (info.data_access_expires_at ?? 0) > 0;
+}
 
 export function formatDate(ms: number): string {
   return new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Asia/Dushanbe", day: "numeric", month: "long", year: "numeric" });
 }
 
 /** Что с маркером: null — всё хорошо, иначе текст тревоги (уровень уже в тексте). */
-export function assessFbToken(info: FbTokenInfo, now: number): string | null {
+export function assessFbToken(info: FbTokenInfo, now: number, opts: { igViaPage?: boolean } = {}): string | null {
   if (info.is_valid === false) {
-    return "🔴 Маркер страницы Facebook недействителен — ответы на комментарии и ссылки на посты не работают.\n\n" + HOW_TO_RENEW;
+    return (
+      "🔴 Маркер страницы Facebook недействителен — ответы на комментарии и ссылки на посты не работают" +
+      (opts.igViaPage ? ", а Instagram идёт через Страницу — бот молчит и там" : "") +
+      ".\n\n" +
+      HOW_TO_RENEW
+    );
+  }
+  if (opts.igViaPage && Array.isArray(info.scopes) && !info.scopes.includes("instagram_manage_messages")) {
+    return (
+      "🔴 В Настройках выбрано «Instagram через Страницу Facebook», но у ключа Страницы нет права instagram_manage_messages — " +
+      "ответы в Instagram не уходят. Перевыпустите ключ с этим правом или верните «через Instagram».\n\n" +
+      HOW_TO_RENEW
+    );
   }
   const soonest = [info.expires_at, info.data_access_expires_at]
     .filter((s): s is number => typeof s === "number" && s > 0)
@@ -85,12 +109,16 @@ export async function checkFbToken(now = Date.now()): Promise<void> {
     return;
   }
   if (!info) return;
-  const alert = assessFbToken(info, now);
+  const alert = assessFbToken(info, now, { igViaPage: await instagramViaPage() });
   if (alert) {
     logWarn("fbToken", alert.split("\n")[0]);
     await alertOwner(alert, now);
     return;
   }
   const until = info.data_access_expires_at ? formatDate(info.data_access_expires_at * 1000) : "бессрочно";
-  logInfo("fbToken", `маркер страницы в порядке, доступ к данным до: ${until}`);
+  logInfo(
+    "fbToken",
+    `маркер страницы в порядке, доступ к данным до: ${until}` +
+      (isPersonalPageToken(info) ? " (ключ личный — после смены пароля Facebook умрёт; нужен ключ системного пользователя)" : "")
+  );
 }
