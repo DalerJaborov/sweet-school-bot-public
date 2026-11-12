@@ -14,7 +14,7 @@ vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
-import { assessFbToken, checkFbToken } from "../../src/fbTokenWatch.js";
+import { assessFbToken, checkFbToken, isPersonalPageToken } from "../../src/fbTokenWatch.js";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 8, 12);
@@ -49,7 +49,32 @@ describe("assessFbToken", () => {
   });
 });
 
+describe("ключ системного пользователя и Instagram через Страницу", () => {
+  it("дата доступа к данным есть только у личного ключа", () => {
+    expect(isPersonalPageToken({ is_valid: true, data_access_expires_at: sec(NOW + 7 * DAY) })).toBe(true);
+    expect(isPersonalPageToken({ is_valid: true, expires_at: 0, data_access_expires_at: 0 })).toBe(false);
+  });
+  it("Instagram через Страницу, а права instagram_manage_messages у ключа нет — красная тревога", () => {
+    const info = { is_valid: true, expires_at: 0, data_access_expires_at: 0, scopes: ["pages_messaging", "public_profile"] };
+    expect(assessFbToken(info, NOW, { igViaPage: true })).toMatch(/^🔴.*instagram_manage_messages/);
+    expect(assessFbToken(info, NOW)).toBeNull();
+  });
+  it("бессрочный ключ с нужными правами — тишина", () => {
+    const info = { is_valid: true, expires_at: 0, data_access_expires_at: 0, scopes: ["pages_messaging", "instagram_manage_messages"] };
+    expect(assessFbToken(info, NOW, { igViaPage: true })).toBeNull();
+  });
+  it("тревога ведёт к системному пользователю shirin-bot, а не к личному «Generate token»", () => {
+    expect(assessFbToken({ is_valid: false }, NOW)).toContain("shirin-bot");
+  });
+});
+
 describe("checkFbToken", () => {
+  it("Instagram через Страницу без нужного права — тревога и в плановой проверке", async () => {
+    store.set("igSendVia", "page");
+    mockMeta({ data: { is_valid: true, expires_at: 0, data_access_expires_at: 0, scopes: ["pages_messaging"] } });
+    await checkFbToken(NOW);
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+  });
   it("без маркера ничего не делает", async () => {
     store.delete("fbPageToken");
     mockMeta({});

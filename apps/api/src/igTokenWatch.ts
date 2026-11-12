@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { getSetting, logInfo, logWarn, prisma, setSetting } from "./db.js";
 import { igGet } from "./ai/igGet.js";
 import { sendKind } from "./notify.js";
+import { DEAD_TOKEN_TEXT, instagramViaPage } from "./metaTokenAlarm.js";
 
 /**
  * АВТОПРОДЛЕНИЕ МАРКЕРА INSTAGRAM.
@@ -131,13 +132,37 @@ async function refresh(token: string, now: number): Promise<string | null> {
   return null;
 }
 
+/** Дешёвая проверка ключа: null — ответил, иначе текст ошибки. */
+async function probeToken(token: string): Promise<string | null> {
+  try {
+    await igGet("/me", { fields: "user_id" }, token);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
 /** Раз в несколько часов: продлить маркер, если пора, и предупредить, если не выходит. */
 export async function checkIgToken(now = Date.now()): Promise<void> {
   const token = (await getSetting("igToken"))?.trim();
   if (!token) return;
 
   const state = await loadState(token, now);
-  if (!shouldRefresh(state, now)) return;
+
+  if (!shouldRefresh(state, now)) {
+    // ЖИВ ЛИ КЛЮЧ — на каждом прогоне (раз в 6 часов), а не только в день продления
+    // (продление само проверяет ключ). Смена пароля Instagram убивает ключ сразу
+    // (CRM Royal Home, 12.11.2026: сутки тишины), а продление бывает раз в неделю —
+    // без этой проверки бот мог молчать до семи дней. Сетевой сбой мёртвым не считаем.
+    const probe = await probeToken(token);
+    if (probe === null || !isTokenDead(probe)) return;
+    await setSetting(K.lastError, probe.slice(0, 300));
+    logWarn("igToken", `ключ Instagram недействителен: ${probe.slice(0, 200)}`);
+    // Instagram уже идёт через Страницу — Instagram-ключ нужен только дозаправке
+    // комментариев и импорту истории; будить владельца ради этого не стоит.
+    if (!(await instagramViaPage())) await alertOwner(DEAD_TOKEN_TEXT.igToken, now);
+    return;
+  }
 
   const error = await refresh(token, now);
   if (error === null) return;

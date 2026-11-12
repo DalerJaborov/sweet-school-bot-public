@@ -129,6 +129,10 @@ export const SETTING_KEYS = [
   "stuckAlertCooldownHours",
   "fbPageToken",
   "fbPageId",
+  // Как бот ходит в Instagram: "instagram" (по умолчанию, ключ Instagram Login —
+  // умирает при смене пароля) или "page" (через Страницу Facebook ключом
+  // системного пользователя — вечный). См. metaTokenAlarm.ts, docs/meta-tokens.md.
+  "igSendVia",
   // JSON-массив [{label, text}] — кнопки быстрых ответов под Telegram-уведомлением
   // «серой зоны» (см. quickReplies.ts). Панель не единственный способ править:
   // Ширин ей не пользуется, но владелец иногда правит текст отсюда.
