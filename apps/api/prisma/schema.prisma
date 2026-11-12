@@ -364,6 +364,8 @@ model Message {
   /// Последнее сообщение разговора ищут по (contactId, createdAt): экран «Сегодня»
   /// и сводки. Без индекса это полный проход по таблице.
   @@index([contactId, createdAt])
+  /// Сторож неотвеченных (inboundWatch.ts) каждую минуту читает входящие за сутки.
+  @@index([direction, createdAt])
 }
 
 /// Воронка. trigger:

@@ -79,6 +79,7 @@ describe("одна дверь для паузы", () => {
     "messaging/automation.ts",
     "webhook.ts", // пишет отметку в handleEcho
     "db.ts", // чинит ложную отметку от нашего же эха
+    "ai/takeoverHeal.ts", // самолечение: снимает отметку, поставленную эхом нашего же сообщения
     "whatsapp/routes.ts",
     "whatsapp/worker.ts",
   ]);

@@ -4,6 +4,7 @@ import { getSetting, prisma, logWarn } from "./db.js";
 import { stripRepeatGreeting } from "./greeting.js";
 import { toOwnerVoice } from "./voice.js";
 import { assertMessagingAllowed } from "./messaging/automation.js";
+import { trackOwnSend } from "./ai/ownSendLedger.js";
 
 const GRAPH_VERSION = "v23.0";
 const TIMEOUT_MS = 15_000;
@@ -67,7 +68,7 @@ async function callGraph(
   path: string,
   body: unknown,
   channel: MetaChannel = "INSTAGRAM",
-  timeoutMs: number = TIMEOUT_MS
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<Record<string, unknown>> {
   const { url, headers } =
     channel === "MESSENGER"
@@ -135,7 +136,12 @@ function buildMessage(text: string, buttons: QuickButton[]): Record<string, unkn
  */
 async function senderAction(igUserId: string, action: "mark_seen" | "typing_on", channel: MetaChannel): Promise<void> {
   try {
-    await callGraph(`/${GRAPH_VERSION}/me/messages`, { recipient: { id: igUserId }, sender_action: action }, channel, 8_000);
+    await callGraph(
+      `/${GRAPH_VERSION}/me/messages`,
+      { recipient: { id: igUserId }, sender_action: action },
+      channel,
+      8_000,
+    );
   } catch {
     // Тишина намеренно: индикатор не стоит ни одной строки в журнале ошибок.
   }
@@ -150,9 +156,13 @@ export async function reactToInstagramMessage(igUserId: string, messageId: strin
   await assertMessagingAllowed();
   await callGraph(
     `/${GRAPH_VERSION}/me/messages`,
-    { recipient: { id: igUserId }, sender_action: "react", payload: { message_id: messageId, reaction: emoji === "❤️" ? "love" : emoji } },
+    {
+      recipient: { id: igUserId },
+      sender_action: "react",
+      payload: { message_id: messageId, reaction: emoji === "❤️" ? "love" : emoji },
+    },
     "INSTAGRAM",
-    8_000
+    8_000,
   );
 }
 
@@ -189,7 +199,7 @@ export async function sendText(
   igUserId: string,
   text: string,
   buttons: QuickButton[] = [],
-  channel: MetaChannel = "INSTAGRAM"
+  channel: MetaChannel = "INSTAGRAM",
 ): Promise<string | null> {
   await assertMessagingAllowed();
   const clean = await withoutRepeatGreeting(igUserId, text, channel);
@@ -199,9 +209,9 @@ export async function sendText(
   await sleep(typingDelayMs(clean));
 
   const payload = { recipient: { id: igUserId }, message: buildMessage(clean, buttons) };
-  const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel);
-  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
-  return res.message_id;
+  const mid = await trackOwnSend(igUserId, clean, () => callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel));
+  if (!mid) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return mid;
 }
 
 /** Ищет контакт по каналу и id, чтобы решить, здоровались ли уже. Контакта нет
@@ -224,16 +234,18 @@ export async function sendPrivateReply(
   commentId: string,
   text: string,
   buttons: QuickButton[] = [],
-  channel: MetaChannel = "INSTAGRAM"
+  channel: MetaChannel = "INSTAGRAM",
 ): Promise<string | null> {
   await assertMessagingAllowed();
-  const res = await callGraph(
-    `/${GRAPH_VERSION}/me/messages`,
-    { recipient: { comment_id: commentId }, message: buildMessage(toOwnerVoice(text), buttons) },
-    channel
+  const mid = await trackOwnSend(null, null, () =>
+    callGraph(
+      `/${GRAPH_VERSION}/me/messages`,
+      { recipient: { comment_id: commentId }, message: buildMessage(toOwnerVoice(text), buttons) },
+      channel,
+    ),
   );
-  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
-  return res.message_id;
+  if (!mid) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return mid;
 }
 
 /** Удаляет комментарий под нашей публикацией — для спама, флирта и оскорблений:
@@ -301,7 +313,7 @@ export async function mediaPermalink(mediaId: string, channel: MetaChannel = "IN
 export async function replyToComment(
   commentId: string,
   text: string,
-  channel: MetaChannel = "INSTAGRAM"
+  channel: MetaChannel = "INSTAGRAM",
 ): Promise<string | null> {
   await assertMessagingAllowed();
   const res = await callGraph(`/${commentId}/replies`, { message: text }, channel);
@@ -326,12 +338,14 @@ export async function sendAttachment(
   igUserId: string,
   url: string,
   type: "video" | "image" | "audio" | "file",
-  channel: MetaChannel = "INSTAGRAM"
+  channel: MetaChannel = "INSTAGRAM",
 ): Promise<string | null> {
   await assertMessagingAllowed();
   const payload = { recipient: { id: igUserId }, message: { attachment: { type, payload: { url } } } };
 
-  const res = await callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS);
-  if (typeof res.message_id !== "string" || !res.message_id) throw new MetaDeliveryError("AMBIGUOUS", 200);
-  return res.message_id;
+  const mid = await trackOwnSend(igUserId, null, () =>
+    callGraph(`/${GRAPH_VERSION}/me/messages`, payload, channel, ATTACHMENT_TIMEOUT_MS),
+  );
+  if (!mid) throw new MetaDeliveryError("AMBIGUOUS", 200);
+  return mid;
 }

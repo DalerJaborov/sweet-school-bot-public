@@ -1,7 +1,7 @@
 import express from "express";
 import os from "node:os";
 import fs from "node:fs";
-import { checkInboundSilence } from "./inboundWatch.js";
+import { checkInboundSilence, checkUnansweredInbound } from "./inboundWatch.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
 import { markWorkerOk, markWorkerTimeout, STUCK_AFTER } from "./workerHealth.js";
@@ -319,6 +319,13 @@ setTimeout(() => void checkInboundSilence().catch((err) => logError("inboundWatc
 setInterval(() => {
   void checkInboundSilence().catch((err) => logError("inboundWatch", err));
 }, 60 * 60_000);
+
+// СТОРОЖ НЕОТВЕЧЕННЫХ (inboundWatch.ts): клиент написал, а бот включён и молчит
+// дольше двух минут — тревога владельцу с именем и причиной; заодно самолечение
+// ложного «передано человеку». Раз в минуту, singleFlight не нужен: прогон короткий.
+setInterval(() => {
+  void checkUnansweredInbound().catch((err) => logError("inboundWatch:unanswered", err));
+}, 60_000);
 
 // СТОРОЖ «БЕЗ ОТВЕТА» (unansweredWatch.ts, владелец 09.11.2026): клиент в
 // Instagram ждёт ответа дольше 15 минут — бот отвечает сам после паузы Ширин

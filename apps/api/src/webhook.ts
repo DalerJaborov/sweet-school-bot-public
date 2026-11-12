@@ -29,6 +29,7 @@ import { fetchAttachment, type Attachment } from "./ai/media.js";
 import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
+import { classifyUnknownEcho } from "./ai/ownSendLedger.js";
 import { humanSilenceActive, loadHumanSilenceMs } from "./messaging/automation.js";
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
@@ -127,8 +128,8 @@ async function verifySignature(req: Request): Promise<boolean> {
       "webhook:signature",
       new Error(
         "Секрет приложения Meta не задан — входящий вебхук отклонён. " +
-          "Впишите «Секрет приложения Meta» в настройках, чтобы возобновить приём подписанных событий."
-      )
+          "Впишите «Секрет приложения Meta» в настройках, чтобы возобновить приём подписанных событий.",
+      ),
     );
     return false;
   }
@@ -163,11 +164,7 @@ async function verifySignature(req: Request): Promise<boolean> {
 // (у Instagram и Messenger он одинаковый, различаются только адреса).
 webhookRouter.get(["/webhooks/instagram", "/webhooks/messenger"], async (req, res) => {
   const verifyToken = await getSetting("verifyToken");
-  if (
-    req.query["hub.mode"] === "subscribe" &&
-    verifyToken &&
-    req.query["hub.verify_token"] === verifyToken
-  ) {
+  if (req.query["hub.mode"] === "subscribe" && verifyToken && req.query["hub.verify_token"] === verifyToken) {
     res.send(String(req.query["hub.challenge"] ?? ""));
     return;
   }
@@ -190,14 +187,20 @@ webhookRouter.post(["/webhooks/instagram", "/webhooks/messenger"], async (req, r
   // неожиданные поля приводят к silent undefined-access глубоко в логике.
   // Здесь проверяем только верхнюю структуру — детали парсятся ниже по мере
   // необходимости, чтобы не дублировать схему для каждого подтипа события.
-  const BodySchema = z.object({
-    object: z.enum(["instagram", "page"]),
-    entry: z.array(z.object({
-      id: z.string().optional(),
-      messaging: z.array(z.record(z.string(), z.unknown())).optional(),
-      changes: z.array(z.record(z.string(), z.unknown())).optional(),
-    }).passthrough()),
-  }).passthrough();
+  const BodySchema = z
+    .object({
+      object: z.enum(["instagram", "page"]),
+      entry: z.array(
+        z
+          .object({
+            id: z.string().optional(),
+            messaging: z.array(z.record(z.string(), z.unknown())).optional(),
+            changes: z.array(z.record(z.string(), z.unknown())).optional(),
+          })
+          .passthrough(),
+      ),
+    })
+    .passthrough();
   const parsed = BodySchema.safeParse(req.body);
   if (!parsed.success) {
     logError("webhook:invalidPayload", new Error(`Malformed webhook body: ${parsed.error.message}`));
@@ -208,8 +211,10 @@ webhookRouter.post(["/webhooks/instagram", "/webhooks/messenger"], async (req, r
   const channel: MetaChannel = body.object === "page" ? "MESSENGER" : "INSTAGRAM";
   const events: InboxEvent[] = [];
   for (const entry of body.entry ?? []) {
-    for (const event of entry.messaging ?? []) events.push({ channel, selfId: entry.id, kind: "message", event: event as Record<string, unknown> });
-    for (const event of entry.changes ?? []) events.push({ channel, selfId: entry.id, kind: "comment", event: event as Record<string, unknown> });
+    for (const event of entry.messaging ?? [])
+      events.push({ channel, selfId: entry.id, kind: "message", event: event as Record<string, unknown> });
+    for (const event of entry.changes ?? [])
+      events.push({ channel, selfId: entry.id, kind: "comment", event: event as Record<string, unknown> });
   }
   try {
     await acceptWebhookEvents(events);
@@ -232,16 +237,24 @@ export async function runWebhookInbox(): Promise<void> {
       return;
     }
     const change = event as CommentChange;
-    const isComment = channel === "INSTAGRAM" ? change.field === "comments"
-      : change.field === "feed" && change.value?.item === "comment" && change.value?.verb === "add";
+    const isComment =
+      channel === "INSTAGRAM"
+        ? change.field === "comments"
+        : change.field === "feed" && change.value?.item === "comment" && change.value?.verb === "add";
     if (!isComment || !change.value) return;
     const v = change.value;
     const commentId = v.id ?? v.comment_id;
     const authorId = v.from?.id;
     const text = v.text ?? v.message;
     if (!commentId || !authorId || !text || authorId === selfId) return;
-    await handleComment({ commentId, mediaId: v.media?.id ?? v.post_id ?? null,
-      igUserId: authorId, username: v.from?.username ?? v.from?.name ?? null, text, channel });
+    await handleComment({
+      commentId,
+      mediaId: v.media?.id ?? v.post_id ?? null,
+      igUserId: authorId,
+      username: v.from?.username ?? v.from?.name ?? null,
+      text,
+      channel,
+    });
   });
 }
 
@@ -268,6 +281,24 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 
   const known = await prisma.message.findUnique({ where: { mid: msg.mid } });
   if (known) return; // наша же отправка, эхо от Meta — не человек
+
+  // ЖУРНАЛ СВОИХ ОТПРАВОК (ai/ownSendLedger.ts): эхо могло обогнать запись mid
+  // (гонка) или относиться к отправке, на которую Graph не вернул mid. Это НАШИ
+  // сообщения — хозяйка тут ни при чём, и бота молчать заставлять нельзя.
+  const echoPlain = msg.text?.trim() || null;
+  const own = await classifyUnknownEcho(recipientId, msg.mid, echoPlain, (msg.attachments ?? []).length > 0);
+  if (own !== "unknown") {
+    if (own === "ambiguous") {
+      // mid мы так и не узнали — записываем сами, иначе история потеряет сообщение.
+      const ownContact = await upsertContact(recipientId, null, channel);
+      await prisma.message
+        .create({ data: { contactId: ownContact.id, direction: "OUT", mid: msg.mid, text: echoPlain, byHuman: false } })
+        .catch((err) => {
+          if ((err as { code?: string })?.code !== "P2002") logError("webhook:handleEcho:ownRecord", err);
+        });
+    }
+    return;
+  }
 
   const contact = await upsertContact(recipientId, null, channel);
 
@@ -330,7 +361,7 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
    * только дополняют историю и не оставляют окно для ответа бота.
    */
   const attachment = (msg.attachments ?? []).find(
-    (a) => a.type === "audio" || a.type === "image" || a.type === "video"
+    (a) => a.type === "audio" || a.type === "image" || a.type === "video",
   );
   const attachmentUrl = attachment?.payload?.url;
   const voiceText = attachment?.type === "audio" && attachmentUrl ? await voiceToText(attachmentUrl) : null;
@@ -348,9 +379,11 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 
   // Enrich the already-recorded echo only after the durable takeover is active.
   if (echoText || ownerMedia) {
-    await prisma.message.updateMany({ where: { mid: msg.mid, byHuman: true }, data: { text: echoText ?? null, ...(ownerMedia?.type === "image" ? { imageUrl: ownerMedia.url } : {}) } });
+    await prisma.message.updateMany({
+      where: { mid: msg.mid, byHuman: true },
+      data: { text: echoText ?? null, ...(ownerMedia?.type === "image" ? { imageUrl: ownerMedia.url } : {}) },
+    });
   }
-
 
   // ЖИВОЕ ОБУЧЕНИЕ. Хозяйка ответила сама — значит показала, как надо. Берём
   // последнее сообщение клиента и её ответ (текст и/или сам файл) как образец:
@@ -370,7 +403,7 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
       orderBy: { createdAt: "desc" },
     });
     await rememberOwnerReply(lastIn?.text ?? "", echoText ?? "", "TAKEOVER", ownerMedia, contact.id).catch((err) =>
-      logError("webhook:learn", err)
+      logError("webhook:learn", err),
     );
   }
 }
@@ -401,7 +434,11 @@ function isHumanSilenced(contact: { channel?: string; humanSilencedUntil: Date |
  * ЧЕЛОВЕК С НАШЕЙ СТОРОНЫ. Отличаем по отправителю: если реакцию поставил наш же
  * аккаунт — это она.
  */
-async function handleReaction(event: MessagingEvent, selfId?: string, channel: MetaChannel = "INSTAGRAM"): Promise<void> {
+async function handleReaction(
+  event: MessagingEvent,
+  selfId?: string,
+  channel: MetaChannel = "INSTAGRAM",
+): Promise<void> {
   const senderId = event.sender?.id;
   const recipientId = event.recipient?.id;
   // Реакция ОТ нас: отправитель — наш аккаунт, а собеседник лежит в recipient.
@@ -417,7 +454,12 @@ async function handleReaction(event: MessagingEvent, selfId?: string, channel: M
   });
 }
 
-export async function handleMessage(event: MessagingEvent, selfId?: string, channel: MetaChannel = "INSTAGRAM", resume = false): Promise<void> {
+export async function handleMessage(
+  event: MessagingEvent,
+  selfId?: string,
+  channel: MetaChannel = "INSTAGRAM",
+  resume = false,
+): Promise<void> {
   const msg = event.message;
   const senderId = event.sender?.id;
   if (event.reaction) {
@@ -521,7 +563,6 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     }
   }
 
-
   /**
    * ГОЛОСОВОЕ ОТ КЛИЕНТКИ — РАСШИФРОВЫВАЕМ СРАЗУ.
    *
@@ -577,7 +618,9 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     const abuse = textOrVoice ? detectAbuse(textOrVoice) : null;
     const videoOnly = !textOrVoice && attachments.some((a) => a.kind === "video");
     if (abuse || videoOnly) {
-      const reason = abuse ? `${ABUSE_LABEL[abuse]}: «${(textOrVoice ?? "").slice(0, 100)}»` : "видео без текста от нового человека";
+      const reason = abuse
+        ? `${ABUSE_LABEL[abuse]}: «${(textOrVoice ?? "").slice(0, 100)}»`
+        : "видео без текста от нового человека";
       await prisma.contact
         .update({ where: { id: contact.id }, data: { spamBlockedAt: new Date(), spamReason: reason } })
         .catch((err) => logError("webhook:spamBlock", err));
@@ -612,7 +655,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
 
   // Only the confirmed pending course delivery may continue after human takeover.
   // The deterministic handler reloads receipt evidence and all contact gates.
-  if (textOrVoice && await handleDeliveryChoiceReply(contact, textOrVoice)) return;
+  if (textOrVoice && (await handleDeliveryChoiceReply(contact, textOrVoice))) return;
 
   // Запись на офлайн-курс — детерминированно и до всех фильтров ниже: номер
   // телефона от желающего не должен пропасть из-за воронки, паузы или бюджета.
@@ -640,7 +683,13 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // вложение сообщения — картинка, текста нет, спасти не удалось (даже с
   // повтором в fetchAttachment) — отвечаем сами и честно, до модели этот ход
   // не доходит вовсе, тем же приёмом, что и ai/receiptClaim.ts.
-  if (hasImageAttachment && rescuedImages.length === 0 && !textOrVoice && !isHumanSilenced(contact) && (await getSetting("botFrozen")) !== "true") {
+  if (
+    hasImageAttachment &&
+    rescuedImages.length === 0 &&
+    !textOrVoice &&
+    !isHumanSilenced(contact) &&
+    (await getSetting("botFrozen")) !== "true"
+  ) {
     const lastIn = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "IN", text: { not: null } },
       orderBy: { createdAt: "desc" },
@@ -678,7 +727,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // всё сразу одним ответом (окно и потолок — debounce.ts).
   // Подсказка про нашу публикацию идёт вместе с текстом человека — модель должна
   // знать, о чём он спрашивает, ещё до того, как посмотрит обложку.
-  const textForAi = ownMediaHint ? `${ownMediaHint}\n${textOrVoice ?? ""}`.trim() : textOrVoice ?? "";
+  const textForAi = ownMediaHint ? `${ownMediaHint}\n${textOrVoice ?? ""}`.trim() : (textOrVoice ?? "");
 
   // С этого момента считаем «ответили ли человеку» — для отложенной воронки ниже.
   const answerWindowFrom = new Date();
