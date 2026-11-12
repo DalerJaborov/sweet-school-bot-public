@@ -249,6 +249,8 @@ export type CourseView = {
   message?: string;
   offlineUntil: string | null;
   offlineRendition?: string;
+  /** Рубильник «ускорение платформы» (courseSpeedMode): см. speed.ts. */
+  speed?: boolean;
   /** Водяной знак приходит с сервера: имя ученицы плюс хвост её номера. */
   watermark?: string;
   /** null в language — знакомство ещё не пройдено, показываем выбор языка. */

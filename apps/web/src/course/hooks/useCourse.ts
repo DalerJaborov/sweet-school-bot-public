@@ -40,6 +40,7 @@ import {
   updateCachedProgress,
   type OfflineLesson,
 } from "../offline";
+import { mayPrefetch, nextLessonOf, PREFETCH_NEXT_AT_PERCENT } from "../speed";
 import { environment } from "../install/detect";
 import { forgetPreviewTicket, isPreview, previewTicket } from "../preview";
 import { reloadWithoutToken } from "../install/reload";
@@ -91,12 +92,16 @@ export function useCourse() {
   const savingRef = useRef(saving);
   offlineRef.current = offline;
   savingRef.current = saving;
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   const lang: Lang = view?.profile?.language ?? "tg";
   const t = useMemo(() => dict(lang), [lang]);
   useEffect(() => applyLang(lang), [lang]);
 
   const courses: CourseInfo[] = useMemo(() => (view ? coursesOf(view) : []), [view]);
+  const coursesRef = useRef(courses);
+  coursesRef.current = courses;
   const lessons = useMemo(() => courses.flatMap(lessonsOf), [courses]);
 
   // Встроенный браузер + токен в адресе: сначала выводим в настоящий браузер.
@@ -293,6 +298,8 @@ export function useCourse() {
   const cacheLesson = useCallback(async (lesson: LessonView) => {
     if (isPreview()) return;
     if (offlineRef.current[lesson.id] || savingRef.current[lesson.id] !== undefined || !navigator.onLine) return;
+    // Claim synchronously: multiple progress callbacks can run before React renders.
+    savingRef.current = { ...savingRef.current, [lesson.id]: 0 };
     setSaving((s) => ({ ...s, [lesson.id]: 0 }));
     try {
       const payload = await offlinePayload(lesson.id);
@@ -338,7 +345,11 @@ export function useCourse() {
         void updateCachedProgress(lesson.id, positionSec, percent).catch(() => undefined);
       }
       // Смотрит по-настоящему — значит урок ей нужен и в дороге тоже.
-      if (positionSec >= AUTOSAVE_AFTER_SEC) void cacheLesson(lesson);
+      if (positionSec >= AUTOSAVE_AFTER_SEC && mayPrefetch()) void cacheLesson(lesson);
+      if (percent >= PREFETCH_NEXT_AT_PERCENT && viewRef.current?.speed === true && navigator.onLine && mayPrefetch(true)) {
+        const next = nextLessonOf(coursesRef.current, lesson.id);
+        if (next) void cacheLesson(next);
+      }
     },
     [cacheLesson],
   );

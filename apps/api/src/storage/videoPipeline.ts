@@ -6,6 +6,7 @@ import path from "node:path";
 import { prisma, logError, logInfo } from "../db.js";
 import { storageConfig, putObject, getObjectToFile, type StorageConfig } from "./s3.js";
 import { extractAudio, transcribeLesson } from "../course/transcribe.js";
+import { speedModeOn } from "../course/speed.js";
 import { renderLessonCover, renderStoryCover, type CoverInput } from "./coverArt.js";
 
 /**
@@ -45,7 +46,15 @@ const RENDITIONS = [
   { name: "480p", width: 854, height: 480, videoBitrate: "1200k", audioBitrate: "96k" },
 ] as const;
 
-type Rendition = (typeof RENDITIONS)[number];
+/**
+ * Лёгкая дорожка для слабой связи (рубильник `courseSpeedMode`): на канале
+ * ~1.5 Мбит/с 480p (1.3 Мбит/с вместе со звуком) почти не оставляет запаса,
+ * и плеер встаёт на буферизации. 360p в ~0.65 Мбит/с играет без остановок.
+ * Только для НОВЫХ перекодировок; офлайн-копия по-прежнему 480p.
+ */
+const LOW_RENDITION = { name: "360p", width: 640, height: 360, videoBitrate: "550k", audioBitrate: "64k" } as const;
+
+type Rendition = (typeof RENDITIONS)[number] | typeof LOW_RENDITION;
 
 export type Dimensions = { width: number | null; height: number | null };
 
@@ -68,10 +77,14 @@ export function qualitySide(dims: Dimensions | number | null): number | null {
  * всегда (иначе слабой связи нечего было бы играть). Размер неизвестен —
  * считаем 720, как у типичного телефона.
  */
-export function renditionsFor(source: Dimensions | number | null): readonly Rendition[] {
+export function renditionsFor(
+  source: Dimensions | number | null,
+  opts: { low?: boolean } = {}
+): readonly Rendition[] {
   const q = qualitySide(source) ?? 720;
   const fit = RENDITIONS.filter((r) => r.height <= q);
-  return fit.length > 0 ? fit : [RENDITIONS[RENDITIONS.length - 1]];
+  const base: readonly Rendition[] = fit.length > 0 ? fit : [RENDITIONS[RENDITIONS.length - 1]];
+  return opts.low ? [...base, LOW_RENDITION] : base;
 }
 
 /**
@@ -559,7 +572,7 @@ export async function processLesson(lessonId: string, keyUriBase: string): Promi
     const outDir = path.join(work, "out");
     await fs.promises.mkdir(outDir, { recursive: true });
     const dims = await probeDimensions(sourceFile);
-    await transcodeToHls(sourceFile, outDir, key, `${keyUriBase}/${lessonId}/key`, renditionsFor(dims));
+    await transcodeToHls(sourceFile, outDir, key, `${keyUriBase}/${lessonId}/key`, renditionsFor(dims, { low: await speedModeOn() }));
 
     const prefix = `courses/${lesson.moduleId}/${lessonId}`;
     const segments = await uploadDir(cfg, outDir, prefix);

@@ -6,6 +6,7 @@ import { RecipeCard } from "../components/RecipeCard";
 import { panelId, tabId, Tabs } from "../components/Tabs";
 import type { CourseState, ProgressVia } from "../hooks/useCourse";
 import { offlineUrls } from "../offline";
+import { mayPrefetch, playLocalFirst, swControlled } from "../speed";
 import { Player } from "../player/Player";
 import { BackButton } from "./BackButton";
 
@@ -44,10 +45,42 @@ export function Lesson({
   }, [lesson.id, nonce, startAt]);
   const saved = offline[lesson.id];
   const savingPercent = saving[lesson.id];
-  const useOffline = !online && Boolean(saved);
+  // Рубильник ускорения: сохранённый урок играет из памяти телефона и при
+  // интернете («один раз загрузился — больше не грузится»). Если копия не
+  // заиграла (срок истёк, сегмент потерян) — один раз падаем на сеть.
+  const fast = view?.speed === true;
+  const [localFailedFor, setLocalFailedFor] = useState<string | null>(null);
+  const [localAccess, setLocalAccess] = useState<{ key: string; allowed: boolean } | null>(null);
+  const [streamFor, setStreamFor] = useState<string | null>(null);
+  const controlled = swControlled();
+  const accessKey = `${lesson.id}:${nonce}`;
+  useEffect(() => {
+    setLocalAccess(null);
+    if (!fast || !online || !saved || !controlled || streamFor === accessKey) return;
+    const abort = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setLocalAccess({ key: accessKey, allowed: false });
+      abort.abort();
+    }, 5000);
+    // Do not turn a cached offline lease into an online access bypass.
+    // This endpoint checks the current device, purchase and revocation state.
+    void fetch(manifestUrl(lesson.id), { credentials: "include", cache: "no-store", signal: abort.signal })
+      .then((response) => { if (!abort.signal.aborted) setLocalAccess({ key: accessKey, allowed: response.ok }); })
+      .catch(() => { if (!abort.signal.aborted) setLocalAccess({ key: accessKey, allowed: false }); })
+      .finally(() => window.clearTimeout(timeout));
+    return () => { window.clearTimeout(timeout); abort.abort(); };
+  }, [fast, online, Boolean(saved), controlled, lesson.id, accessKey, streamFor]);
+  const localFirst = playLocalFirst({
+    fast,
+    saved: Boolean(saved),
+    swControlled: controlled,
+    authorized: localAccess?.key === accessKey && localAccess.allowed,
+    failed: localFailedFor === lesson.id || streamFor === accessKey,
+  });
+  const checkingLocal = fast && online && Boolean(saved) && controlled && streamFor !== accessKey && localAccess?.key !== accessKey;
+  const useOffline = Boolean(saved) && (!online || localFirst);
 
-  // Без сети играем из телефона; с сетью — обычным путём, чтобы качество
-  // подстраивалось под скорость (в сохранённой копии только 480p).
+  // A saved copy keeps its original quality; streaming retains adaptive quality.
   const src = useOffline ? offlineUrls.manifest(lesson.id) : manifestUrl(lesson.id);
   const photos = useOffline
     ? Array.from({ length: saved?.photos ?? 0 }, (_, i) => offlineUrls.photo(lesson.id, i))
@@ -59,7 +92,7 @@ export function Lesson({
       : saved
         ? t.savedLesson
         : online
-          ? t.willSave
+          ? mayPrefetch() ? t.willSave : t.savingPaused
           : t.noInternet;
 
   const onProgress = (pos: number, pct: number, via: ProgressVia) => reportProgress(lesson, pos, pct, via);
@@ -78,7 +111,7 @@ export function Lesson({
       </header>
 
       <div className="player-sticky">
-        {heroDismissed ? (
+        {heroDismissed ? (checkingLocal ? <p role="status">{t.buffering}</p> :
           <Player
             t={t}
             src={src}
@@ -87,6 +120,10 @@ export function Lesson({
             startAt={startAt}
             nonce={nonce}
             showQuality={!useOffline}
+            fast={fast}
+            onFatalError={() => {
+              if (useOffline && online) setLocalFailedFor(lesson.id);
+            }}
             onProgress={onProgress}
           />
         ) : (
@@ -94,6 +131,7 @@ export function Lesson({
         )}
       </div>
 
+      {localFirst && online && <button type="button" className="btn" onClick={() => setStreamFor(accessKey)}>{t.onlineQuality}</button>}
       <p className="lesson-state" role="status">
         {stateLine}
       </p>

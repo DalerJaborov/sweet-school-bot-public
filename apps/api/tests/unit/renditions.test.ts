@@ -49,3 +49,13 @@ describe("scaleFilterFor — рамка дорожки поворачивает�
     expect(f).toContain("force_divisible_by=2");
   });
 });
+
+describe("renditionsFor — лёгкая дорожка 360p за рубильником", () => {
+  it("без рубильника набор прежний", () => {
+    expect(renditionsFor(720).map((r) => r.name)).toEqual(["720p", "480p"]);
+  });
+  it("с рубильником добавляется 360p в конец, 480p остаётся для офлайна", () => {
+    expect(renditionsFor(720, { low: true }).map((r) => r.name)).toEqual(["720p", "480p", "360p"]);
+    expect(renditionsFor(360, { low: true }).map((r) => r.name)).toEqual(["480p", "360p"]);
+  });
+});
