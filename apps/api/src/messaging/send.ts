@@ -5,7 +5,12 @@ import { prisma, WEB_MID_PREFIX, recordOutgoingMessage, logError } from "../db.j
 import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
 import { stripRepeatGreeting } from "../greeting.js";
 import { toOwnerVoice } from "../voice.js";
-import { assertMessagingAllowed, withMessagingPermission, withContactMessaging, type MessagePurpose } from "./automation.js";
+import {
+  assertMessagingAllowed,
+  withMessagingPermission,
+  withContactMessaging,
+  type MessagePurpose,
+} from "./automation.js";
 import { sendWhatsAppText, sendWhatsAppAttachment } from "../whatsapp/transport.js";
 
 /**
@@ -46,16 +51,24 @@ export async function sendToContact(
   contact: Recipient,
   text: string,
   buttons: QuickButton[] = [],
-  opts: SendOptions = {}
+  opts: SendOptions = {},
 ): Promise<string | null> {
   if (!opts.byHuman) text = await humanizeForContact(contact.id, cleanKeepingWarmTail(text));
+  // ОДНО ПРИВЕТСТВИЕ — И В ИСТОРИИ ТОЖЕ (11.11.2026). Срез повторного «Ассалому
+  // алейкум» раньше жил только внутри sendText, а в историю ложился текст ДО среза:
+  // разбор переписок видел «второе приветствие», которого клиент не получал, а
+  // модель читала историю с лишними приветствиями и копировала их. Режем здесь,
+  // до записи; sendText режет ещё раз — правка идемпотентна.
+  if (!opts.byHuman) text = toOwnerVoice(await stripRepeatGreeting(contact.id, text).catch(() => text));
   // После фильтра ничего не осталось (ответ был одним обращением) — не шлём и не пишем.
   if (!text.trim()) return null;
   const purpose: MessagePurpose = opts.purpose ?? (opts.byHuman ? "human" : "reply");
   const shown = text;
-  const mid = await withContactMessaging(contact.id, purpose, () => opts.byHuman && !opts.purpose
-    ? withMessagingPermission("human", () => sendContact(contact, shown, buttons, opts))
-    : sendContact(contact, shown, buttons, opts));
+  const mid = await withContactMessaging(contact.id, purpose, () =>
+    opts.byHuman && !opts.purpose
+      ? withMessagingPermission("human", () => sendContact(contact, shown, buttons, opts))
+      : sendContact(contact, shown, buttons, opts),
+  );
   // ИСТОРИЯ = ТО, ЧТО УШЛО (08.11.2026). Вызывающий код по старому договору пишет
   // recordOutgoingMessage(исходный текст, mid) — до фильтра. Пишем здесь первыми уже
   // отправленный текст: вторая запись с тем же mid ничего не меняет (P2002), а сравнения
@@ -68,10 +81,16 @@ export async function sendToContact(
   return mid;
 }
 
-async function sendContact(contact: Recipient, text: string, buttons: QuickButton[], opts: SendOptions): Promise<string | null> {
+async function sendContact(
+  contact: Recipient,
+  text: string,
+  buttons: QuickButton[],
+  opts: SendOptions,
+): Promise<string | null> {
   await assertMessagingAllowed();
   const channel = channelOf(contact);
-  if (channel === "WHATSAPP") return sendWhatsAppText(contact, text, buttons, opts.purpose ?? (opts.byHuman ? "human" : "reply"));
+  if (channel === "WHATSAPP")
+    return sendWhatsAppText(contact, text, buttons, opts.purpose ?? (opts.byHuman ? "human" : "reply"));
   if (channel !== "WEB") return sendText(contact.igUserId, text, buttons, channel);
 
   // Правило «здороваемся один раз» и голос владелицы — те же, что у sendText:
@@ -88,26 +107,73 @@ async function sendContact(contact: Recipient, text: string, buttons: QuickButto
 export async function sendAttachmentToContact(
   contact: Recipient,
   url: string,
-  type: "video" | "image" | "audio" | "file" = "image"
+  type: "video" | "image" | "audio" | "file" = "image",
 ): Promise<string | null> {
   return withContactMessaging(contact.id, "reply", async () => {
-  await assertMessagingAllowed();
-  const channel = channelOf(contact);
-  if (channel === "WHATSAPP") return sendWhatsAppAttachment(contact, url, type);
-  if (channel !== "WEB") {
-    const mid = await sendAttachment(contact.igUserId, url, type, channel);
-    // КРИТИЧНО: без записи mid эхо нашей же картинки (меню, фото воронки) вебхук
-    // принимает за ответ хозяйки из приложения и ставит «передано человеку» —
-    // бот замолкает для клиента навсегда (инцидент 08.11.2026, шаг воронки с
-    // картинкой). recordOutgoingMessage ещё и чинит ложную пометку, если эхо
-    // успело прийти раньше.
-    if (mid) await recordOutgoingMessage(contact.id, "", mid).catch((err) => logError("send:recordAttachment", err));
-    return mid;
-  }
-  return type === "image"
-    ? persistWebOutgoing(contact.id, { imageUrl: url })
-    : persistWebOutgoing(contact.id, { text: url });
+    await assertMessagingAllowed();
+    const channel = channelOf(contact);
+    if (channel !== "WEB") {
+      // WhatsApp — так же, как Instagram (ревью 11.11.2026): раньше вложение уходило
+      // без строки в истории и без метки, mediaAlreadySent его не видел, и фото меню
+      // уходило человеку в WhatsApp на каждый вопрос про курс.
+      const mid =
+        channel === "WHATSAPP"
+          ? await sendWhatsAppAttachment(contact, url, type)
+          : await sendAttachment(contact.igUserId, url, type, channel);
+      // КРИТИЧНО: без записи mid эхо нашей же картинки (меню, фото воронки) вебхук
+      // принимает за ответ хозяйки из приложения и ставит «передано человеку» —
+      // бот замолкает для клиента навсегда (инцидент 08.11.2026, шаг воронки с
+      // картинкой). recordOutgoingMessage ещё и чинит ложную пометку, если эхо
+      // успело прийти раньше.
+      if (mid) await recordOutgoingMessage(contact.id, "", mid).catch((err) => logError("send:recordAttachment", err));
+      if (mid) await markSentMedia(mid, url);
+      return mid;
+    }
+    const webMid =
+      type === "image"
+        ? await persistWebOutgoing(contact.id, { imageUrl: url })
+        : await persistWebOutgoing(contact.id, { text: url });
+    await markSentMedia(webMid, url);
+    return webMid;
   });
+}
+
+/**
+ * КАКОЕ ВЛОЖЕНИЕ УШЛО (11.11.2026, «не повторять уже отправленное»). Ссылка на
+ * файл пишется меткой в payload нашей же строки истории — по ней меню, отзывы и
+ * видео не уходят человеку второй раз, кто бы их ни послал (воронка, ИИ, отзывы).
+ * Payload исходящих строк больше никто не читает (у входящих там кнопки).
+ */
+export const SENT_MEDIA_PREFIX = "media:";
+
+async function markSentMedia(mid: string | null, url: string): Promise<void> {
+  if (!mid) return;
+  try {
+    await prisma.message.updateMany({
+      where: { mid, direction: "OUT" },
+      data: { payload: (SENT_MEDIA_PREFIX + url).slice(0, 1000) },
+    });
+  } catch (err) {
+    // Метка — только память «что уже уходило»; её сбой не ломает отправку.
+    logError("send:markMedia", err);
+  }
+}
+
+/** Уходил ли этот файл человеку раньше. Сбой базы — считаем «уходил»: лучше не повторить. */
+export async function mediaAlreadySent(contactId: string, url: string): Promise<boolean> {
+  try {
+    const row = await prisma.message.findFirst({
+      where: {
+        contactId,
+        direction: "OUT",
+        OR: [{ payload: (SENT_MEDIA_PREFIX + url).slice(0, 1000) }, { imageUrl: url }],
+      },
+      select: { id: true },
+    });
+    return Boolean(row);
+  } catch {
+    return true;
+  }
 }
 
 /** Видео с подписью ОДНИМ сообщением: WhatsApp-мост принимает caption вместе с файлом (одна отправка вместо двух
@@ -121,7 +187,11 @@ export async function sendVideoWithCaption(contact: Recipient, url: string, capt
       await assertMessagingAllowed();
       return sendWhatsAppAttachment(contact, url, "video", "reply", shown.trim() ? shown : undefined);
     });
-    if (mid && shown.trim()) await recordOutgoingMessage(contact.id, shown, mid).catch((err) => logError("send:recordCaption", err));
+    if (mid)
+      await recordOutgoingMessage(contact.id, shown.trim() ? shown : "", mid).catch((err) =>
+        logError("send:recordCaption", err),
+      );
+    await markSentMedia(mid, url);
     return mid;
   }
   // Подпись уходит отдельным текстом и сама пишется в историю (sendToContact); возвращаем
@@ -137,7 +207,7 @@ export function sendImageToContact(contact: Recipient, url: string): Promise<str
 
 async function persistWebOutgoing(
   contactId: string,
-  data: { text?: string; imageUrl?: string; byHuman?: boolean }
+  data: { text?: string; imageUrl?: string; byHuman?: boolean },
 ): Promise<string> {
   const mid = `${WEB_MID_PREFIX}${crypto.randomUUID()}`;
   await prisma.message.create({

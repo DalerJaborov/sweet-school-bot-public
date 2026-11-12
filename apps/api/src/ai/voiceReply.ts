@@ -1,7 +1,8 @@
-import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
+import { prisma, logError, recordOutgoingMessage } from "../db.js";
 import { MetaDeliveryError } from "../messaging/metaErrors.js";
 import { sendAttachmentToContact } from "../messaging/send.js";
 import { decorateForV3, splitForVoice, synthesizeToFile, voiceEnabled } from "./voiceClone.js";
+import { voiceRepliesAllowed } from "./voiceSwitch.js";
 
 /**
  * ГДЕ БОТ ОТВЕЧАЕТ ГОЛОСОМ, А ГДЕ ТЕКСТОМ (владелец 08.11.2026, «бот сам решает»).
@@ -132,7 +133,7 @@ export async function trySendVoiceReply(
   let plan: { voice: string; rest: string };
   try {
     if (isShortAcknowledgement(clientText)) return null;
-    if ((await getSetting("voiceReplyEnabled")) !== "true" || !(await voiceEnabled())) return null;
+    if (!(await voiceRepliesAllowed()) || !(await voiceEnabled())) return null;
     const planned = planVoice(text, {
       channel: contact.channel,
       clientSentVoice,

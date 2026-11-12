@@ -1,6 +1,7 @@
 import { approveTransferByOwner } from "./course/phoneChange.js";
 import { prisma, getSetting, setSetting, logError } from "./db.js";
-import { answerCallback, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds } from "./telegram.js";
+import { answerCallback, chatRole, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds, type ChatRole } from "./telegram.js";
+import { buildTodayText, handleOwnerWords, sendControlMenu, sendNotifyMenu } from "./telegramControl.js";
 import { buildReport, offsetMs, truncate } from "./dailyReport.js";
 import { env } from "./env.js";
 import {
@@ -29,6 +30,11 @@ export const BTN_PAYMENTS = "💳 Последние оплаты";
 export const BTN_FIND = "🔎 Найти ученицу";
 export const BTN_GRANT = "🔑 Выдать доступ";
 export const BTN_LINK = "🔗 Ссылка на сайт";
+// Новое главное меню (11.11.2026): мало кнопок, остальное — под «Ещё» в управлении.
+export const BTN_TODAY = "📊 Сегодня";
+export const BTN_CONTROL = "⚙️ Управление";
+export const BTN_NOTIFY = "🔔 Уведомления";
+export const BTN_GRANT_LINK = "🔑 Выдать ссылку";
 const PROMPT_LABEL = "Как назвать (имя блогера или рекламы)? Ответьте на это сообщение. #";
 // Вопрос бота с «ответом» (force_reply): по началу текста узнаём, чей это ответ.
 const PROMPT_FIND = "Кого найти? Ответьте на это сообщение ником";
@@ -52,18 +58,54 @@ export type MenuQuery = {
 
 /** Постоянная клавиатура. «Открыть панель» — кнопка мини-приложения, только
  *  если известен https-адрес сайта (иначе Telegram отвергнет всю клавиатуру). */
-export function menuKeyboard(): Record<string, unknown> {
-  const rows: Record<string, unknown>[][] = [
-    [{ text: BTN_REPORT }, { text: BTN_WAITING }],
-    [{ text: BTN_INVITE }, { text: BTN_PAYMENTS }],
-    [{ text: BTN_FIND }, { text: BTN_GRANT }],
-    [{ text: BTN_LINK }],
-    [],
-  ];
+export function menuKeyboard(role: ChatRole = "owner"): Record<string, unknown> {
+  // Владельцу — четыре кнопки; Ширин — без «Управления» (ботом управляет владелец).
+  const rows: Record<string, unknown>[][] =
+    role === "owner"
+      ? [[{ text: BTN_TODAY }, { text: BTN_GRANT_LINK }], [{ text: BTN_CONTROL }, { text: BTN_NOTIFY }], []]
+      : [[{ text: BTN_TODAY }, { text: BTN_GRANT_LINK }], [{ text: BTN_NOTIFY }], []];
   if (env.publicBaseUrl.startsWith("https://")) {
-    rows[4].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
+    rows[2].push({ text: "🖥 Открыть панель", web_app: { url: `${env.publicBaseUrl}/panel/` } });
   }
   return { keyboard: rows.filter((r) => r.length > 0), resize_keyboard: true, is_persistent: true };
+}
+
+/**
+ * КНОПКИ БЕЗ «/menu» (владелец 12.11.2026: «почему кнопок нет, я должен писать меню?»).
+ * Постоянная клавиатура Telegram появляется в чате только с сообщением бота, а раньше
+ * её присылал лишь ответ на /start или /menu. Теперь при запуске сервера бот сам
+ * присылает клавиатуру владельцу и Ширин — один раз на версию меню (MENU_VERSION),
+ * чтобы выкатки не плодили сообщения. Только личные чаты (id > 0): в группе
+ * клавиатуру увидели бы все. Плюс команда /menu в кнопке «Меню» Telegram.
+ */
+export const MENU_VERSION = "2026-11-11";
+export const MENU_PUSHED_SETTING = "telegramMenuPushedVersion";
+
+export async function pushMenuOnce(botToken: string, ids: { owner: string[]; shirin: string[] }): Promise<number> {
+  if ((await getSetting(MENU_PUSHED_SETTING)) === MENU_VERSION) return 0;
+  const targets: [string, ChatRole][] = [
+    ...ids.owner.map((id): [string, ChatRole] => [id, "owner"]),
+    ...ids.shirin.map((id): [string, ChatRole] => [id, "shirin"]),
+  ].filter(([id]) => /^\d+$/u.test(id));
+  let sent = 0;
+  for (const [id, role] of [...new Map(targets)]) {
+    const ok = await sendWithMarkup(
+      botToken,
+      id,
+      "Кнопки бота — внизу чата: «Сегодня», «Выдать ссылку» и другие. Пропали — нажмите значок с квадратиками рядом с полем ввода.",
+      menuKeyboard(role),
+    );
+    if (ok) sent += 1;
+  }
+  // Отметку ставим, только если дошло хоть до одного: сбой сети — повторим при следующем запуске.
+  if (sent > 0) await setSetting(MENU_PUSHED_SETTING, MENU_VERSION);
+  await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ commands: [{ command: "menu", description: "Кнопки бота" }], scope: { type: "all_private_chats" } }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch((err) => logError("telegramMenu:setMyCommands", err));
+  return sent;
 }
 
 /** Какие группы можно пригласить: только те, у которых в настройках есть ID. */
@@ -214,7 +256,7 @@ const personLabel = (p: Person) => `${p.handle}${p.name ? ` · ${p.name}` : ""}`
 
 /** Что человеку приходит вместе с кнопкой «Переслать»: коротко, по-русски и по-таджикски. */
 function shareButton(url: string): Record<string, unknown> {
-  const text = "Ваша личная ссылка на уроки Ширин. Линки шахсии шумо ба дарсҳои Ширин.";
+  const text = "Ваша личная ссылка на уроки Ширин. Ссылкаи шахсии шумо ба дарсҳои Ширин.";
   return {
     inline_keyboard: [
       [{ text: "📤 Переслать человеку", url: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}` }],
@@ -227,11 +269,11 @@ async function sendChoice(botToken: string, chatId: string, p: Person): Promise<
   await sendWithMarkup(botToken, chatId, `${personLabel(p)}
 Курсы: ${coursesText(p)}
 
-Куда выдать личную ссылку?`, {
+Какую ссылку выдать? Она придёт сюда, вам: скопируйте и перешлите человеку куда удобно (WhatsApp, Instagram).`, {
     inline_keyboard: [
       [
-        { text: "✈️ В Telegram", callback_data: `mn:ik:${n}:t` },
-        { text: "🌐 На сайт", callback_data: `mn:ik:${n}:w` },
+        { text: "✈️ Ссылка в Telegram-группу", callback_data: `mn:ik:${n}:t` },
+        { text: "🌐 Ссылка на сайт (без Telegram)", callback_data: `mn:ik:${n}:w` },
       ],
     ],
   });
@@ -337,9 +379,15 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
     !answeringLabel &&
     !answeringFind &&
     !answeringGrant &&
-    ![BTN_REPORT, BTN_WAITING, BTN_INVITE, BTN_PAYMENTS, BTN_FIND, BTN_GRANT, BTN_LINK].includes(text)
-  )
-    return false;
+    ![BTN_REPORT, BTN_WAITING, BTN_INVITE, BTN_PAYMENTS, BTN_FIND, BTN_GRANT, BTN_LINK, BTN_TODAY, BTN_CONTROL, BTN_NOTIFY, BTN_GRANT_LINK].includes(text)
+  ) {
+    // Не кнопка: возможно, простые слова владельца («не присылай мне оплаты», «выключи бота»).
+    if (message.chat?.type && message.chat.type !== "private") return false;
+    const wordsChat = message.chat?.id != null ? String(message.chat.id) : "";
+    const wordsToken = (await getSetting("telegramBotToken"))?.trim();
+    if (!wordsToken || !wordsChat || !(await trustedChatIds()).includes(wordsChat)) return false;
+    return handleOwnerWords(message, wordsToken, wordsChat);
+  }
 
   // Только личная переписка: в группе учениц эти слова — обычные сообщения.
   if (message.chat?.type && message.chat.type !== "private") return false;
@@ -378,15 +426,33 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
     await send(await buildPaymentsText());
     return true;
   }
-  if (text === BTN_FIND || text === BTN_GRANT) {
+  if (text === BTN_FIND || text === BTN_GRANT || text === BTN_GRANT_LINK) {
     await sendWithMarkup(botToken, chatId, text === BTN_FIND ? PROMPT_FIND : `${PROMPT_GRANT} или именем`, {
       force_reply: true,
       input_field_placeholder: text === BTN_FIND ? "@ник" : "ник или имя",
     });
     return true;
   }
+  if (text === BTN_TODAY) {
+    await send(await buildTodayText());
+    return true;
+  }
+  if (text === BTN_CONTROL) {
+    if ((await chatRole(chatId)) !== "owner") await send("Ботом управляет владелец. Вам доступны «Сегодня», «Выдать ссылку» и «Уведомления».");
+    else await sendControlMenu(botToken, chatId);
+    return true;
+  }
+  if (text === BTN_NOTIFY) {
+    await sendNotifyMenu(botToken, chatId);
+    return true;
+  }
   if (isMenu) {
-    await sendWithMarkup(botToken, chatId, "Кнопки внизу — быстрые действия. Чеки приходят сюда же, с кнопками.", menuKeyboard());
+    await sendWithMarkup(
+      botToken,
+      chatId,
+      "Кнопки внизу — быстрые действия. Ботом можно управлять и словами: «не присылай мне оплаты», «выключи бота», «что у меня выключено».",
+      menuKeyboard((await chatRole(chatId)) ?? "shirin"),
+    );
     return true;
   }
   if (text === BTN_REPORT) {
@@ -409,9 +475,35 @@ export async function handleMenuCommand(message: TgMessage): Promise<boolean> {
   return true;
 }
 
+/** Кнопки «Ещё» под управлением: прежние быстрые действия по коду. */
+const MORE_COMMANDS: Record<string, { label: string; text: string }> = {
+  find: { label: "🔎 Найти ученицу", text: BTN_FIND },
+  pay: { label: "💳 Последние оплаты", text: BTN_PAYMENTS },
+  inv: { label: "👥 Приглашение в группу", text: BTN_INVITE },
+  link: { label: "🔗 Ссылка на сайт", text: BTN_LINK },
+  rep: { label: "📊 Сводка дня", text: BTN_REPORT },
+  wait: { label: "🧾 Чеки без решения", text: BTN_WAITING },
+};
+
 /** Нажатие кнопки меню (callback_data `mn:...`). Доверие уже проверено выше. */
 export async function handleMenuCallback(botToken: string, query: MenuQuery): Promise<void> {
   const chatId = query.message?.chat?.id != null ? String(query.message.chat.id) : String(query.from?.id ?? "");
+  if (query.id && chatId && /^mn:(today|grant|more|cmd:[a-z]+)$/.test(query.data ?? "")) {
+    await answerCallback(botToken, query.id, "");
+    const data = query.data ?? "";
+    if (data === "mn:today") await sendTelegramMessage(botToken, chatId, await buildTodayText());
+    else if (data === "mn:grant") {
+      await sendWithMarkup(botToken, chatId, `${PROMPT_GRANT} или именем`, { force_reply: true, input_field_placeholder: "ник или имя" });
+    } else if (data === "mn:more") {
+      await sendWithMarkup(botToken, chatId, "Ещё быстрые действия:", {
+        inline_keyboard: Object.entries(MORE_COMMANDS).map(([k, v]) => [{ text: v.label, callback_data: `mn:cmd:${k}` }]),
+      });
+    } else {
+      const cmd = MORE_COMMANDS[data.slice("mn:cmd:".length)];
+      if (cmd) await handleMenuCommand({ text: cmd.text, chat: { id: chatId, type: "private" } }).catch((err) => logError("telegramMenu:more", err));
+    }
+    return;
+  }
   if (query.id && chatId && /^mn:l[tls]:/.test(query.data ?? "")) {
     await answerCallback(botToken, query.id, "");
     await handleLinkStep(botToken, chatId, query.data ?? "").catch((err) => logError("telegramMenu:siteLink", err));

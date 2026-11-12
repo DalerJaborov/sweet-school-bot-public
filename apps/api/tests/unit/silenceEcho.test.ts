@@ -6,6 +6,8 @@ vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(),
   handleComment: vi.fn(),
+  cancelPendingFunnelSteps: vi.fn(async () => 0),
+  clientMessageStopsFunnel: vi.fn(async () => true),
 }));
 vi.mock("../../src/ai.js", () => ({ aiReply: vi.fn(), rescueIncomingImages: vi.fn() }));
 vi.mock("../../src/debounce.js", () => ({ debounceMessage: vi.fn() }));

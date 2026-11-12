@@ -38,6 +38,23 @@ export const SETTING_KEYS = [
   // онлайн. По умолчанию ВКЛЮЧЕНО; "false" — прежний порядок (консультант
   // продолжает отвечать и просит имя и номер).
   "offlineHandoffEnabled",
+  // Фото меню курсов (владелец 11.11.2026, ai/menuImages.ts): menuPhotosEnabled — фото
+  // меню вдогонку к ответу про курс (по умолчанию ВКЛЮЧЕНО, "false" выключает);
+  // menuMediaUrls — ссылки на картинки меню, JSON {"online70":[…],"online50":[…],"offline":[…]}.
+  "menuPhotosEnabled",
+  "menuMediaUrls",
+  // Отзывы учениц пачкой (ai/testimonials.ts): testimonialsEnabled (по умолчанию ВКЛЮЧЕНО),
+  // testimonialBatchSize (3, не больше 5), testimonialsLinkUrl — ссылка на актуальные
+  // Instagram с отзывами (пусто — ссылку не шлём).
+  "testimonialsEnabled",
+  "testimonialBatchSize",
+  "testimonialsLinkUrl",
+  // Видео «не открывается видео» (владелец 12.11.2026, ai/deliveryContext.ts): ссылка на
+  // ролик-инструкцию; не задано — ролик владельца, "" или "false" — бот видео не даёт.
+  "videoHelpUrl",
+  // Особые таджикские буквы в текстах бота (messaging/humanize.ts): "plain" (по умолчанию,
+  // владелец 11.11.2026 — без книжных ҷ қ ӯ ғ ҳ ӣ) или "mirror" — как пишет сам клиент.
+  "tajikLettersMode",
   // Публичный ответ «написали вам в директ» под комментарием, когда воронка
   // отправила первый шаг (владелец 08.11.2026, funnel.ts). По умолчанию
   // ВКЛЮЧЁН; "false" выключает только публичный ответ, директ идёт как раньше.

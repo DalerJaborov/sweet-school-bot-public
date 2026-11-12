@@ -4,6 +4,7 @@ import { Icons } from "../components/Brand";
 import { EmptyState, OfflineState } from "../components/EmptyState";
 import { Skeleton } from "../components/Skeleton";
 import { AccessLinkSheet } from "../components/AccessLinkSheet";
+import { MainSummaryBlock } from "../components/MainSummaryBlock";
 import { money, timeAgo } from "../format";
 import { useShowEscalations } from "../panel/prefs";
 import { activeCards, type Attention, type TodayCardId, type WaitingClient } from "../panel/useAttention";
@@ -34,7 +35,9 @@ export function TodayPage(props: {
   return (
     <section className="card today" aria-labelledby="today-title">
       <h2 id="today-title">{Icons.home} Сегодня</h2>
-      <p className="hint">{greeting()}. Здесь только то, что нужно сделать сейчас.</p>
+      <p className="hint">{greeting()}. Сверху — деньги и ссылка, ниже — только то, что нужно сделать сейчас.</p>
+
+      {data?.main && <MainSummaryBlock main={data.main} onGetLink={() => setLinkOpen(true)} />}
 
       {!data && !error && (
         <div className="today-grid" aria-busy="true" aria-label="Загружаю дела" data-testid="today-skeleton">
@@ -58,11 +61,13 @@ export function TodayPage(props: {
         </>
       )}
 
-      <div className="today-tools">
-        <button type="button" className="btn ghost wide today-action" onClick={() => setLinkOpen(true)}>
-          Выдать ссылку на уроки
-        </button>
-      </div>
+      {!data?.main && (
+        <div className="today-tools">
+          <button type="button" className="btn ghost wide today-action" onClick={() => setLinkOpen(true)}>
+            Получить ссылку
+          </button>
+        </div>
+      )}
       <AccessLinkSheet open={linkOpen} onClose={() => setLinkOpen(false)} />
     </section>
   );

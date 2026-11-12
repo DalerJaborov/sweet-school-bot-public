@@ -148,7 +148,7 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
               {person.name ? ` · ${person.name}` : ""}
             </b>
             <br />
-            Куда выдать личную ссылку?
+            Какую ссылку выдать? Она покажется здесь — скопируйте и перешлите куда удобно (WhatsApp, Instagram).
           </p>
           <button
             type="button"
@@ -156,7 +156,7 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
             disabled={busy}
             onClick={() => void issue("telegram")}
           >
-            В Telegram
+            Ссылка в Telegram-группу
           </button>
           <button
             type="button"
@@ -164,9 +164,9 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
             disabled={busy}
             onClick={() => void issue("web")}
           >
-            На сайт
+            Ссылка на сайт (без Telegram)
           </button>
-          <p className="hint">«На сайт» — прошлая ссылка на сайт перестанет работать, новая откроется на первом телефоне, где её нажмут. «В Telegram» сайтовую ссылку не трогает.</p>
+          <p className="hint">«Ссылка на сайт» — прошлая ссылка на сайт перестанет работать, новая откроется на первом телефоне, где её нажмут. «Ссылка в Telegram-группу» сайтовую ссылку не трогает.</p>
           <button type="button" className="btn ghost small" onClick={() => setPerson(null)}>
             Выбрать другого человека
           </button>

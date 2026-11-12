@@ -1,12 +1,13 @@
 import { prisma, getSetting, setSetting, logError } from "./db.js";
-import { sendTelegramMessage, summaryChatIds } from "./telegram.js";
+import { sendKind } from "./notify.js";
 import { unansweredCount } from "./course/chat.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { completedCoursesSince, purchaseChannel, CHANNEL_TITLE, type PurchaseChannel } from "./metrics.js";
 
 /**
- * Вечерняя сводка — в 23:00 по Душанбе, за ТЕКУЩИЙ день. Уходит двоим сразу:
- * владельцу и сестре (она ведёт офлайн-курс и обзванивает записавшихся).
+ * Вечерняя сводка — в 23:00 по Душанбе, за ТЕКУЩИЙ день. Уходит владельцу и
+ * Ширин (она ведёт офлайн-курс и обзванивает записавшихся) — вид «Итог дня»,
+ * выключается кнопкой под сообщением (notify.ts).
  *
  * Часовой пояс Душанбе — UTC+5, контейнер живёт в UTC (та же грабля, что в
  * основной CRM). И «когда слать», и границы суток считаются со сдвигом, а не
@@ -284,21 +285,12 @@ export async function maybeSendDailyReport(): Promise<void> {
   if (local.getUTCHours() < (await reportHour())) return;
   if ((await getSetting(SENT_KEY))?.trim() === today) return;
 
-  // Двое получателей: сестра и владелец. Дубли (если указан один и тот же
-  // chat_id) отсекаем — иначе одному человеку придут два одинаковых письма.
-  // Список — настройка telegramSummaryChatIds (вечерняя сводка и карточки
-  // чеков: владелец и сестра); см. telegram.ts::summaryChatIds.
-  const unique = await summaryChatIds();
-  if (unique.length === 0) return;
-
   // Отметка ставится ДО отправки: если Telegram не ответит, лучше пропустить
   // сводку за день, чем зациклить попытки каждые 10 секунд до конца суток.
   await setSetting(SENT_KEY, today);
   try {
-    const text = await buildReport(offset);
-    for (const chatId of unique) {
-      await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("dailyReport:send", err));
-    }
+    // «Главное»: владельцу и Ширин (вид day, notify.ts) — деньги и записи.
+    await sendKind("day", await buildReport(offset));
   } catch (err) {
     logError("dailyReport", err);
   }

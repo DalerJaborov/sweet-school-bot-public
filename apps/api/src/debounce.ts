@@ -18,12 +18,23 @@
  * между инстансами, которые решает Postgres-версия в основной CRM.
  */
 import { logError } from "./db.js";
+import { releaseInboxSlot } from "./webhookInbox.js";
 
-const WINDOW_MS = 2_500;
+/**
+ * 11.11.2026 (владелец): «быстро, но дождаться пачки». Разбор 48 часов: люди
+ * пишут 2–4 пузыря подряд с паузами 3–5 секунд, а бот при 2,5 с отвечал на
+ * первый пузырь, потом на второй — два ответа там, где нужен один. Теперь ждём
+ * 6 секунд тишины после ПОСЛЕДНЕГО сообщения, но не дольше 15 секунд от
+ * первого: человек, который пишет без остановки, всё равно получит ответ быстро.
+ */
+export const WINDOW_MS = 6_000;
+export const MAX_WAIT_MS = 15_000;
 
 type Pending<TRescued> = {
   completions: { resolve: () => void; reject: (err: unknown) => void }[];
   texts: string[];
+  /** Когда пришло первое сообщение пачки — от него считается потолок ожидания. */
+  firstAt: number;
   attachments: { url: string; kind: "image" | "video" | "audio" | "file" }[];
   rescued: TRescued[];
   timer: NodeJS.Timeout;
@@ -139,14 +150,20 @@ export function debounceMessage<TRescued>(
   const done = new Promise<void>((resolve, reject) => completions.push({ resolve, reject }));
   // Legacy callers may ignore completion; the inbox awaits the original promise.
   void done.catch(() => undefined);
+  const firstAt = existing?.firstAt ?? Date.now();
+  const wait = Math.max(0, Math.min(WINDOW_MS, firstAt + MAX_WAIT_MS - Date.now()));
   const timer = setTimeout(() => {
     const entry = pending.get(contactId);
     pending.delete(contactId);
     if (entry) runAfterPrevious(contactId, () => flushEntry(entry));
-  }, WINDOW_MS);
+  }, wait);
   // Таймер не должен держать процесс живым сам по себе (на случай остановки).
   timer.unref?.();
 
-  pending.set(contactId, { completions, texts, attachments: merged, rescued: mergedRescued, timer, onFlush } as Pending<unknown>);
+  pending.set(contactId, { completions, texts, firstAt, attachments: merged, rescued: mergedRescued, timer, onFlush } as Pending<unknown>);
+  // Сообщение уже в окне — дальше только ожидание. Место в потолке очереди вебхуков
+  // отдаём сразу, иначе следующий пузырь этого же человека ждал бы места и не попал
+  // бы в это окно (webhookInbox.ts, повторное ревью 11.11.2026).
+  releaseInboxSlot();
   return done;
 }

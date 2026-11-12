@@ -1,6 +1,7 @@
-import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
+import { prisma, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { chatsForKind } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { shouldSendAlert } from "../alertGate.js";
 import { canTransferNow, describeDevice, issueMagicLink, transferToNewPhone } from "./access.js";
 import { parseRecoveryCode, recoveryCodeFor } from "./linkCode.js";
@@ -58,13 +59,13 @@ export const PHONE_CHANGE_TEXT: Record<Lang, { changed: string; noProof: string;
       "Прежняя ссылка и старый телефон больше не открывают уроки:\n",
     noProof:
       "Чтобы я перенесла доступ на новый телефон сама, пришлите чек об оплате картинкой или код из вашей ссылки (вид 7F3A-91C2). " +
-      "Пока передала Ширин: она посмотрит и ответит вам.",
+      "Пока проверю сама и напишу вам.",
     limit:
-      "Передала Ширин: она посмотрит и ответит вам.",
+      "Сейчас проверю и напишу вам.",
     approved:
       "Ширин разрешила перенос на новый телефон. Вот новая ссылка, откройте её на нём. " +
       "Прежняя ссылка и старый телефон больше не открывают уроки:\n",
-    failed: "Передала Ширин: она посмотрит и ответит вам.",
+    failed: "Сейчас проверю и напишу вам.",
   },
   tg: {
     changed:
@@ -72,23 +73,23 @@ export const PHONE_CHANGE_TEXT: Record<Lang, { changed: string; noProof: string;
       "Ссылкаи пешина ва телефони куханатон дигар дарсхоя намекушояд:\n",
     noProof:
       "Барои ки худам ба телефони нав гузаронам, сурати чеки пардохт ё коди ссылкаатона (мисли 7F3A-91C2) фиристен. " +
-      "Хозир ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
+      "Хозир худам тафтиш карда ба шумо менависам.",
     limit:
-      "Ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
+      "Тафтиш карда ба шумо менависам.",
     approved:
       "Ширин ичозат дод, ба телефони нав гузарондам. Ана ссылкаи нав, дар телефони нав кушоен. " +
       "Ссылкаи пешина ва телефони куханатон дигар дарсхоя намекушояд:\n",
-    failed: "Ба Ширин гуфтам, тафтиш карда худаш чавоб медихад.",
+    failed: "Тафтиш карда ба шумо менависам.",
   },
   en: {
     changed:
       "I moved your access to the new phone. Here is the new link, open it there. The old link and the old phone no longer open the lessons:\n",
     noProof:
-      "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I passed this to Shirin.",
-    limit: "I passed this to Shirin, she will look and reply.",
+      "To move access myself, send the payment receipt as a picture or the code from your link (like 7F3A-91C2). For now I will check it myself and write to you.",
+    limit: "I will check and write to you.",
     approved:
       "Shirin approved the move. Here is the new link, open it on the new phone. The old link and phone no longer work:\n",
-    failed: "I passed this to Shirin, she will look and reply.",
+    failed: "I will check and write to you.",
   },
 };
 
@@ -295,12 +296,6 @@ const PROOF_NAME: Record<ProofKind, string> = {
   own_chat: "сообщение из её чата покупки",
 };
 
-async function ownerChat(): Promise<{ botToken: string; chatId: string } | null> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  return botToken && chatId ? { botToken, chatId } : null;
-}
-
 function who(contact: Contact): string {
   return [contact.name, contact.username ? `@${contact.username}` : null, `${contact.channel} ${contact.igUserId}`]
     .filter(Boolean)
@@ -321,27 +316,21 @@ async function devicesNow(contactId: string): Promise<string> {
 
 /** Карточка владельцу с кнопкой «Разрешить перенос». */
 async function askOwner(contact: Contact, what: string, key = "ask"): Promise<void> {
-  const chat = await ownerChat();
-  if (!chat) return;
+  // Вид «decision» — невыключаемый: карточка с кнопкой не пропадёт, даже если владелец выключил «безопасность».
+  if ((await chatsForKind("decision")).length === 0) return;
   if (!(await shouldSendAlert(`phone-change:${key}:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
   approvals.set(contact.id, Date.now() + APPROVAL_TTL_MS);
   const last = contact.deviceSwapAt ? contact.deviceSwapAt.toISOString().slice(0, 10) : "переносов не было";
-  await sendTelegramMessage(
-    chat.botToken,
-    chat.chatId,
+  await sendKind(
+    "decision",
     `${who(contact)}: ${what}. Прошлый перенос: ${last}. Сейчас занято: ${await devicesNow(contact.id)}. ` +
       "Если это она, нажмите «Разрешить перенос»: старый телефон и старая ссылка перестанут работать, новая уйдёт ей в чат.",
-    undefined,
-    { inline_keyboard: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] },
+    { buttons: [[{ text: "Разрешить перенос", callback_data: `mn:tr:${contact.id}` }]] },
   ).catch((err) => logError("phoneChange:askOwner", err));
 }
 
 async function notifyOwner(contact: Contact, what: string): Promise<void> {
-  const chat = await ownerChat();
-  if (!chat) return;
-  await sendTelegramMessage(chat.botToken, chat.chatId, `${who(contact)}: ${what}`).catch((err) =>
-    logError("phoneChange:notifyOwner", err),
-  );
+  await sendKind("security", `🔓 ${who(contact)}: ${what}`);
 }
 
 /**

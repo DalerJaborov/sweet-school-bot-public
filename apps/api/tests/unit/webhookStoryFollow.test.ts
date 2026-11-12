@@ -15,11 +15,15 @@ vi.mock("../../src/funnel.js", () => ({
   upsertContact: vi.fn(async () => fakeContact()),
   handleIncomingDm: vi.fn(async () => false),
   handleComment: vi.fn(),
+  cancelPendingFunnelSteps: vi.fn(async () => 0),
+  clientMessageStopsFunnel: vi.fn(async () => true),
+  settleDeferredFunnel: vi.fn(async () => undefined),
 }));
 vi.mock("../../src/ai.js", () => ({
   aiReply: vi.fn(async () => undefined),
   registerOfflineIfAsked: vi.fn(async () => false),
   rescueIncomingImages: vi.fn(async () => []),
+  verifyReceiptsNow: vi.fn(async () => undefined),
 }));
 const debounceMessage = vi.fn();
 vi.mock("../../src/debounce.js", () => ({ debounceMessage: (...a: unknown[]) => debounceMessage(...a) }));
