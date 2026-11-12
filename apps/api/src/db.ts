@@ -94,8 +94,14 @@ export async function recordOutgoingMessage(contactId: string, text: string, mid
       const contact = await prisma.contact.findUnique({ where: { id: contactId } });
       // Never clear a real takeover because a different outgoing echo raced us.
       if (contact?.humanTakeoverMid === mid && contact.humanTakenOverAt) {
+        // Instagram/Messenger: отметка паузы обновляется на КАЖДОМ эхе (пауза
+        // временная, webhook.ts::handleEcho), поэтому настоящий ответ Ширин мог
+        // быть РАНЬШЕ отметки, которую поставило наше же эхо. Возвращаем отметку
+        // на её последний настоящий ответ — пауза всё равно кончится по времени.
+        // WhatsApp — как было.
+        const meta = contact.channel === "INSTAGRAM" || contact.channel === "MESSENGER";
         const laterHuman = await prisma.message.findFirst({
-          where: { contactId, direction: "OUT", byHuman: true, mid: { not: mid }, createdAt: { gte: contact.humanTakenOverAt } },
+          where: { contactId, direction: "OUT", byHuman: true, mid: { not: mid }, ...(meta ? {} : { createdAt: { gte: contact.humanTakenOverAt } }) },
           orderBy: { createdAt: "desc" },
         });
         await prisma.contact.updateMany({

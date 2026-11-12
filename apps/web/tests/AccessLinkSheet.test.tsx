@@ -32,7 +32,7 @@ describe("AccessLinkSheet: выдать ссылку на уроки", () => {
     );
     render(<AccessLinkSheet open onClose={() => {}} />);
     await pickAnna();
-    fireEvent.click(screen.getByRole("button", { name: "На сайт" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ссылка на сайт (без Telegram)" }));
     const input = (await screen.findByLabelText("Ссылка на сайт")) as HTMLInputElement;
     expect(input.value).toBe("https://school.test/l/AAA");
     const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("/issue"))!;
@@ -48,7 +48,7 @@ describe("AccessLinkSheet: выдать ссылку на уроки", () => {
     );
     render(<AccessLinkSheet open onClose={() => {}} />);
     await pickAnna();
-    fireEvent.click(screen.getByRole("button", { name: "В Telegram" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ссылка в Telegram-группу" }));
     const input = (await screen.findByLabelText(/Приглашение в группу «Арт-десерты»/)) as HTMLInputElement;
     expect(input.value).toBe("https://t.me/+AAA");
   });
@@ -62,7 +62,7 @@ describe("AccessLinkSheet: выдать ссылку на уроки", () => {
     );
     render(<AccessLinkSheet open onClose={() => {}} />);
     await pickAnna();
-    fireEvent.click(screen.getByRole("button", { name: "В Telegram" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ссылка в Telegram-группу" }));
     expect((await screen.findByRole("alert")).textContent).toContain("уже в группе");
     expect(screen.queryByLabelText(/Приглашение в группу/)).toBeNull();
   });

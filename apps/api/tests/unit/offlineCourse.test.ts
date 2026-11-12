@@ -1,3 +1,4 @@
+import { toOwnerVoice } from "../../src/voice.js";
 import { cleanAutomatedReply } from "../../src/ai/replyPolicy.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../helpers.js";
@@ -19,7 +20,7 @@ function settings(values: Record<string, string>) {
 const OCT_3 = { year: 2026, month: 10, day: 3 };
 
 describe("текст карточки", () => {
-  it("в заготовке факты из «Цены и даты»: 700, 13:40–16:30, 21 десерт, адрес словами владельца (08.11.2026)", () => {
+  it("в заготовке факты из «Цены и даты»: 700, 13:40–16:30, 22 десерта, адрес словами владельца (08.11.2026)", () => {
     for (const lang of ["ru", "tg"] as const) {
       const text = offlineCardDefault(lang, OCT_3);
       expect(text).toContain("700");
@@ -27,7 +28,7 @@ describe("текст карточки", () => {
       expect(text).toContain("16:30");
       expect(text).toMatch(/Рудаки 177, (ориентир|назди) Воданасос/);
       expect(text).not.toMatch(/Додо|Dodo|Рудаки 156/);
-      expect(text).toMatch(/21 (вид десертов|намуд)/);
+      expect(text).toMatch(/22 (вида десертов|намуд)/);
       expect(text).not.toMatch(/14:00|17:00|156а|Водонасос|Рудаки 156|Додо|20 (видов|намуд)/);
     }
     expect(offlineCardDefault("ru", OCT_3)).toContain("каждый день с 13:40 до 16:30");
@@ -164,7 +165,8 @@ describe("maybeSendOfflineCard", () => {
 
     expect(sent).toBe(true);
     // Текст заготовки без пересказа моделью, тремя короткими сообщениями.
-    const expected = offlineCardMessages(offlineCardDefault("tg", null)).map((m) => cleanAutomatedReply(m));
+    const expected = offlineCardMessages(offlineCardDefault("tg", null)).map((m) => toOwnerVoice(cleanAutomatedReply(m)));
+    // Точку в конце снимает дверь отправки (voice.ts) — и в истории то же, что ушло.
     expect(sendText.mock.calls.map((c) => c[1])).toEqual(expected);
     // Каждая часть — в истории (дверь sendToContact пишет отправленное, вызывающий — тот же mid).
     const recorded = db.model("message").create.mock.calls.map((c) => (c[0] as { data: { text: string } }).data.text);

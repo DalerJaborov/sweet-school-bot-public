@@ -16,6 +16,7 @@ export const SETTING_KEYS = [
   "freeLessonId",
   "igToken",
   "appSecret",
+  "fbAppSecret",
   "verifyToken",
   "geminiKey",
   "geminiKeysExtra",
@@ -23,8 +24,8 @@ export const SETTING_KEYS = [
   // Ответ ИИ на комментарий под роликом (aiReplyToComment) — раньше делил
   // флаг с обычным aiEnabled, из-за чего его нельзя было выключить/включить
   // отдельно от переписки в директ (владелец 13.09.2026: нужно было заглушить
-  // директ, но оставить живыми ответы под комментариями). Свой ключ, по
-  // умолчанию как было — включён, только если владелец явно поставил "true".
+  // директ, но оставить живыми ответы под комментариями). С 09.11.2026 по
+  // умолчанию ВКЛЮЧЁН («никто без ответа в комментах»); "false" выключает.
   "aiCommentRepliesEnabled",
   // Экстренная пауза «всё, кроме воронки» (владелец 13.09.2026): глушит выдачу
   // ссылок на курс, отзывы-скриншоты и напоминания об офлайн-курсе/приглашении
@@ -37,10 +38,37 @@ export const SETTING_KEYS = [
   // онлайн. По умолчанию ВКЛЮЧЕНО; "false" — прежний порядок (консультант
   // продолжает отвечать и просит имя и номер).
   "offlineHandoffEnabled",
+  // Фото меню курсов (владелец 11.11.2026, ai/menuImages.ts): menuPhotosEnabled — фото
+  // меню вдогонку к ответу про курс (по умолчанию ВКЛЮЧЕНО, "false" выключает);
+  // menuMediaUrls — ссылки на картинки меню, JSON {"online70":[…],"online50":[…],"offline":[…]}.
+  "menuPhotosEnabled",
+  "menuMediaUrls",
+  // Отзывы учениц пачкой (ai/testimonials.ts): testimonialsEnabled (по умолчанию ВКЛЮЧЕНО),
+  // testimonialBatchSize (3, не больше 5), testimonialsLinkUrl — ссылка на актуальные
+  // Instagram с отзывами (пусто — ссылку не шлём).
+  "testimonialsEnabled",
+  "testimonialBatchSize",
+  "testimonialsLinkUrl",
+  // Видео «не открывается видео» (владелец 12.11.2026, ai/deliveryContext.ts): ссылка на
+  // ролик-инструкцию; не задано — ролик владельца, "" или "false" — бот видео не даёт.
+  "videoHelpUrl",
+  // Особые таджикские буквы в текстах бота (messaging/humanize.ts): "plain" (по умолчанию,
+  // владелец 11.11.2026 — без книжных ҷ қ ӯ ғ ҳ ӣ) или "mirror" — как пишет сам клиент.
+  "tajikLettersMode",
   // Публичный ответ «написали вам в директ» под комментарием, когда воронка
   // отправила первый шаг (владелец 08.11.2026, funnel.ts). По умолчанию
   // ВКЛЮЧЁН; "false" выключает только публичный ответ, директ идёт как раньше.
   "commentPublicReplyEnabled",
+  // Сторож «без ответа» (владелец 09.11.2026, unansweredWatch.ts): клиент в
+  // Instagram ждёт дольше unansweredAfterMinutes (15) или комментарий без
+  // ответа дольше unansweredCommentMinutes (30) — бот отвечает сам после паузы
+  // или напоминает владельцу в Telegram. По умолчанию ВКЛЮЧЁН; "false" выключает.
+  "unansweredWatchdogEnabled",
+  "unansweredAfterMinutes",
+  "unansweredCommentMinutes",
+  // Сколько часов бот молчит после живого ответа Ширин из приложения Instagram
+  // (messaging/automation.ts). По умолчанию 3; раньше — навсегда.
+  "humanSilenceHours",
   "aiPrompt",
   "aiModel",
   // Голосовая модель читалась кодом (ai.ts), но в этом списке её не было — то есть
@@ -216,6 +244,7 @@ export type SettingKey = (typeof SETTING_KEYS)[number];
 const SECRET_KEYS: ReadonlySet<SettingKey> = new Set<SettingKey>([
   "igToken",
   "appSecret",
+  "fbAppSecret",
   "geminiKey",
   "geminiKeysExtra",
   "telegramBotToken",

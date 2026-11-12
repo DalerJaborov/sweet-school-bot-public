@@ -520,9 +520,8 @@ describe("настоящая база: ссылка Ширин тратится 
     expect(p70?.accessIssuedAt).not.toBeNull();
     expect(p50?.deliveryAwaitingChoice).toBe(true);
     expect(p50?.inviteLink).toBeNull();
-    // владелице про ручную ссылку сообщили один раз и сказали, что 50 ещё ждёт
-    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(String(sendTelegramMessage.mock.calls[0][2])).toMatch(/Ещё ждёт оплата за: Арт-десерты/);
+    // владельцу про ручную ссылку не пишем (решение 11.11.2026: шум)
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
     // вопрос про Telegram сброшен: следующее сообщение клиентки задаст его заново
     const contactAfter = await db.contact.findUnique({ where: { id: c.id } });
     expect(contactAfter?.deliveryChoicePromptState).toBeNull();
@@ -543,14 +542,14 @@ describe("настоящая база: ссылка Ширин тратится 
     expect(rows.every((r) => r.inviteLink === null && r.accessIssuedAt !== null)).toBe(true);
   });
 
-  it("тот же номер операции, пока ждём ответа про Telegram и Ширин перехватила чат: клиентке всё равно уходит напоминание", async () => {
+  it("тот же номер операции, пока ждём ответа про Telegram и Ширин ведёт разговор: клиентке служебных фраз не шлём (решение 11.11.2026)", async () => {
     const c = await db.contact.create({ data: { id: "h3", igUserId: "ig-h3", username: "h3", deliveryChoicePromptState: "WAITING", humanTakenOverAt: new Date() } });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
     await db.receiptCheck.create({
       data: { contactId: c.id, kind: "valid", confidence: 95, reason: "ok", imageHash: "h3-first", amount: 70, awaitingDeliveryChoice: true, transactionId: "TXN-H3-111111", createdAt: new Date(Date.now() - 40 * 60_000) },
     });
     await handleReceiptVerdict(c, verdict("h3-second", { amount: 70, transactionId: "TXN-H3-111111" }));
-    expect(sendToContact).toHaveBeenCalled();
+    expect(sendToContact).not.toHaveBeenCalled();
   });
 
   it("31 сообщение Ширин без ссылки, потом ссылка: покупка всё равно закрывается (берём последние сообщения)", async () => {

@@ -1,11 +1,12 @@
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { notifyOwnerDirect } from "./systemAlerts.js";
+import { sendKind } from "./notify.js";
 import { sendToContact } from "./messaging/send.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { aiReply } from "./ai.js";
-import { isBotFrozen } from "./messaging/automation.js";
+import { isBotFrozen, humanTakeoverEndsAt, loadHumanSilenceMs } from "./messaging/automation.js";
 
 /**
  * Очередь ответов, которые ИИ НИ РАЗУ не дал — все ключи/модели Gemini отказали.
@@ -82,6 +83,7 @@ export async function retryPendingAiReplies(): Promise<void> {
 
 async function runQueue(): Promise<void> {
   if (await isBotFrozen()) return;
+  await loadHumanSilenceMs();
   const due = await prisma.pendingAiReply.findMany({
     where: { nextAttemptAt: { lte: new Date() } },
     include: { contact: true },
@@ -92,8 +94,17 @@ async function runQueue(): Promise<void> {
   for (const row of due) {
     if (await isBotFrozen()) return;
     // WhatsApp retries belong to its durable inbox and require the original incoming turn.
-    if (row.contact.channel === "WHATSAPP" || (row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || row.contact.humanTakenOverAt)) {
+    // Пауза после живого ответа Ширин временная (messaging/automation.ts): пока
+    // она идёт — откладываем попытку на её конец, а не выбрасываем ход.
+    const takeoverEnds = humanTakeoverEndsAt(row.contact);
+    if (row.contact.channel === "WHATSAPP" || row.contact.personal || row.contact.spamBlockedAt || row.contact.whatsappSavedContact || takeoverEnds === Infinity) {
       await prisma.pendingAiReply.delete({ where: { id: row.id } });
+      continue;
+    }
+    if (takeoverEnds !== null && takeoverEnds > Date.now()) {
+      await prisma.pendingAiReply
+        .update({ where: { id: row.id }, data: { nextAttemptAt: new Date(takeoverEnds) } })
+        .catch(() => null);
       continue;
     }
     // Пришло более свежее входящее с момента постановки — эта попытка устарела:
@@ -175,13 +186,6 @@ async function runQueue(): Promise<void> {
 
 /** Попытки кончились (~13 часов) — сообщаем владельцу, а не молчим, как раньше. */
 async function giveUp(contactId: string, text: string, early = false): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  if (!botToken) return;
-  // Техническое: только владельцу (telegramTechChatId), не сестре.
-  const { techChatIds } = await import("./telegram.js");
-  const recipients = await techChatIds();
-  if (recipients.length === 0) return;
-
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   const who = contact?.username ? `@${contact.username}` : contact?.igUserId;
   const message =
@@ -190,8 +194,6 @@ async function giveUp(contactId: string, text: string, early = false): Promise<v
     `Последнее: «${text.slice(0, 200)}»\n` +
     `Ответьте, пожалуйста, вручную.`;
 
-  const { sendTelegramMessage } = await import("./telegram.js");
-  for (const chatId of recipients) {
-    await sendTelegramMessage(botToken, chatId, message).catch((err) => logError("aiReplyRetry:notify", err));
-  }
+  // Сбой: только владельцу (notify.ts), Ширин служебного не получает.
+  await sendKind("failure", message);
 }

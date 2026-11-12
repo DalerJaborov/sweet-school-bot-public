@@ -1,6 +1,23 @@
-import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
-import { replyPolicyIssues, cleanAutomatedReply, REPLY_POLICY_INSTRUCTION, ReplyPolicyError, CONTEXT_ONLY_AMOUNT, COURSE_DATE_FACT } from "./ai/replyPolicy.js";
-import { replyDeliveryMode, deliveryPrompt } from "./ai/deliveryContext.js";
+import { handleDeliveryChoiceReply, rememberDeliveryPreference } from "./course/deliveryChoice.js";
+import {
+  replyPolicyIssues,
+  cleanAutomatedReply,
+  cleanGeneratedReply,
+  REPLY_POLICY_INSTRUCTION,
+  ReplyPolicyError,
+  CONTEXT_ONLY_AMOUNT,
+  COURSE_DATE_FACT,
+  isAskShirin,
+} from "./ai/replyPolicy.js";
+import { detectInstagramFaq, instagramFaqAnswer } from "./ai/instagramFaq.js";
+import {
+  hasDeliveredAccess,
+  loadRepeatContext,
+  withoutRepeats,
+  mentionsPaymentPhone,
+  regenerateAfterFilters,
+} from "./ai/repeatGuard.js";
+import { replyDeliveryMode, deliveryPrompt, videoHelpPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendPrivateReply, metaChannelOf } from "./instagram.js";
@@ -23,7 +40,7 @@ import {
   ABOUT_COURSE,
   detectMenuQuestion,
 } from "./ai/offTopicGuard.js";
-import { sendMenuImages } from "./ai/menuImages.js";
+import { sendMenuImages, maybeSendCourseMenuPhoto, sendOfflineMenuPhoto } from "./ai/menuImages.js";
 import { maybeSendVideos } from "./ai/videoLibrary.js";
 import { trySendVoiceReply } from "./ai/voiceReply.js";
 import { freeLessonBlock } from "./ai/freeLessonHook.js";
@@ -39,14 +56,20 @@ import { checkReceipt, pickReceiptVerdict, type ReceiptVerdict } from "./ai/rece
 import { queueUncheckedReceipt } from "./receiptRetry.js";
 import { queuePendingAiReply } from "./aiReplyRetry.js";
 import { logAiCall } from "./ai/aiLog.js";
-import { registerOfflineSignup } from "./ai/offlineSignup.js";
+import { registerOfflineSignup, extractPhone } from "./ai/offlineSignup.js";
 import { maybeSendOfflineCard, offlineFactsForModel } from "./ai/offlineCourse.js";
-import { offlineHandoffGate, offlineHandoffEnabled, asksOnlineNotOffline, enterOfflineHandoff } from "./ai/offlineHandoff.js";
+import {
+  offlineHandoffGate,
+  offlineHandoffEnabled,
+  asksOnlineNotOffline,
+  enterOfflineHandoff,
+  explicitOfflineInterest,
+} from "./ai/offlineHandoff.js";
 import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { buildStyleBlock } from "./ai/styleLearning.js";
-import { techChatIds, sendMessageWithButtons } from "./telegram.js";
+import { sendKind } from "./notify.js";
 import { getQuickReplies } from "./quickReplies.js";
 import { saveReceiptImage } from "./upload.js";
 import { generateWithFallback, thinkingConfigFor } from "./gemini.js";
@@ -180,6 +203,80 @@ export async function rescueImage(contact: Contact, buffer: Buffer, mimeType: st
   return { buffer, mimeType, hash, url, queuedId };
 }
 
+/**
+ * ПРОВЕРИТЬ ЧЕК СЕЙЧАС, БЕЗ ТЕКСТОВОГО ОТВЕТА (владелец 11.11.2026, «чек при Ширин»).
+ *
+ * Ширин переписывается с клиентом (пауза бота), а тот прислал чек. Раньше
+ * картинка только вставала в очередь, и фоновая перепроверка разбирала её через
+ * 3+ минуты; Ширин за это время отправляла ссылку руками, и владельцу уходила
+ * карточка «похоже, Ширин уже отправила ссылку вне системы». Теперь чек
+ * разбирается сразу тем же путём, что в aiReply: настоящий чек на наш номер и
+ * верную сумму — ссылка уходит сама (дверь verified_receipt_access), сомнительный
+ * — карточка владельцу. Не получилось разобрать (нет ключей, сбой модели) —
+ * картинка остаётся в очереди, фоновый разбор попробует снова.
+ */
+export async function verifyReceiptsNow(contact: Contact, images: RescuedImage[]): Promise<void> {
+  if (images.length === 0 || (await isBotFrozen())) return;
+  const apiKeys = await resolveGeminiKeys();
+  // Нет ключей или кончился дневной бюджет — чек остаётся в очереди фонового разбора.
+  if (apiKeys.length === 0 || (await isBudgetExceeded(contact.id))) return;
+  const model = (await getSetting("aiModel")) || "gemini-3.6-flash";
+  const parts: { image: RescuedImage; part: MediaPart }[] = [];
+  for (const image of images.slice(0, MAX_RECEIPT_IMAGES)) {
+    const part = await buildMediaPart(image.buffer, image.mimeType, apiKeys[0]).catch((err: unknown) => {
+      logError("ai:verifyReceiptsNow:part", err);
+      return null;
+    });
+    if (part) parts.push({ image, part });
+  }
+  if (parts.length === 0) return;
+  const picked = pickReceiptVerdict(
+    await Promise.all(
+      parts.map(async ({ image, part }) => {
+        const verdict = await checkReceipt(part, model, "file_data" in part ? [apiKeys[0]] : apiKeys);
+        return verdict ? { verdict, image } : null;
+      }),
+    ),
+  );
+  if (!picked || (await isBotFrozen())) return;
+  await recordAiCall(contact.id);
+  const { verdict, image } = picked;
+  const siblings = parts
+    .map((p) => p.image.queuedId)
+    .filter((id): id is string => Boolean(id) && id !== image.queuedId);
+  if (siblings.length > 0) {
+    await prisma.receiptCheck
+      .deleteMany({ where: { id: { in: siblings } } })
+      .catch((err) => logError("ai:verifyReceiptsNow:siblings", err));
+  }
+  if (verdict.kind === "not_receipt" || verdict.kind === "pre_transfer") {
+    // Фото десерта или экран ДО перевода: Ширин в разговоре, ответит сама.
+    if (image.queuedId) {
+      await prisma.receiptCheck.delete({ where: { id: image.queuedId } }).catch((err) => {
+        if ((err as { code?: string })?.code !== "P2025") logError("ai:verifyReceiptsNow:drop", err);
+      });
+    }
+    return;
+  }
+  await handleReceiptVerdict(
+    contact,
+    {
+      kind: verdict.kind,
+      confidence: verdict.confidence,
+      amount: verdict.amount,
+      currency: verdict.currency,
+      receiptAt: verdict.receiptAt,
+      tamperingSuspected: verdict.tamperingSuspected,
+      recipientMatches: verdict.recipientMatches,
+      transactionId: verdict.transactionId,
+      reason: verdict.reason,
+      imageHash: image.hash,
+      imageUrl: image.url,
+    },
+    image.queuedId ?? undefined,
+  );
+}
+
 async function recentOutgoingTexts(contactId: string, take: number): Promise<string[]> {
   const rows = await prisma.message.findMany({
     where: { contactId, direction: "OUT", text: { not: null } },
@@ -243,7 +340,11 @@ export async function aiReply(
   // Выдача идёт по данным (покупка + чек в базе), а не по словам — см.
   // course/recovery.ts.
   if (text || images.length > 0) {
-    const recovery = await maybeRestoreAccess(contact, text ?? "", images.map((i) => i.hash)).catch((err) => {
+    const recovery = await maybeRestoreAccess(
+      contact,
+      text ?? "",
+      images.map((i) => i.hash),
+    ).catch((err) => {
       logError("ai:recovery", err);
       return { handled: false as const };
     });
@@ -269,6 +370,22 @@ export async function aiReply(
   const ownLanguage = languageSignal(text ?? "");
   const language = ownLanguage ?? (await contactLanguage(contact.id));
 
+  // Готовый вопрос Instagram («Как долго доступен курс?» и ещё три) — точный ответ
+  // из фактов, без хода модели (ai/instagramFaq.ts, владелец 11.11.2026).
+  const faq = detectInstagramFaq(text);
+  if (faq && attachments.length === 0) {
+    const reply = instagramFaqAnswer(faq, language, await getPrices());
+    for (const part of reply.split("\n").filter(Boolean)) {
+      const mid = await sendToContact(contact, part);
+      if (mid) await recordOutgoingMessage(contact.id, part, mid);
+    }
+    return;
+  }
+
+  // «Телеграм надорам», «ватсап мешавад?» — запомнить «уроки на сайте» до оплаты
+  // (course/deliveryChoice.ts); ответ модели ниже это учтёт (deliveryPrompt).
+  if (text) await rememberDeliveryPreference(contact, text).catch((err) => logError("ai:deliveryPreference", err));
+
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
   if (!(await passesRelevanceGate(contact, text, attachments, images.length > 0, language))) return;
@@ -280,7 +397,17 @@ export async function aiReply(
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
   // «принято, открываю» (живой прогон 05.09.2026). Ответ детерминированный,
   // см. ai/receiptClaim.ts.
-  if (text && claimsReceiptSent(text) && !attachments.some((a) => a.kind === "image") && images.length === 0) {
+  // Уже оплатил ЭТОТ курс — чек у него больше не просим никогда (пункт 5; по курсу, а не по человеку:
+  // купивший «21 рецепт» и платящий за арт-десерты получает обычный ответ про чек).
+  // Такое «я оплатила» отвечает модель с блоком «доступ уже выдан».
+  const deliveredAccess = await hasDeliveredAccess(contact.id, text);
+  if (
+    text &&
+    claimsReceiptSent(text) &&
+    !deliveredAccess &&
+    !attachments.some((a) => a.kind === "image") &&
+    images.length === 0
+  ) {
     const reply = receiptNotSeenReply(language, contact.channel === "WEB");
     const mid = await sendToContact(contact, reply);
     await recordOutgoingMessage(contact.id, reply, mid);
@@ -325,8 +452,8 @@ export async function aiReply(
     // Просят список десертов курса — код отвечает готовой картинкой-меню, а не
     // модель полотном текста (см. detectMenuQuestion). Настоящий ход модели
     // сюда не доходит вовсе — то же рассуждение, что у guardOffTopic выше.
-    if (detectMenuQuestion(text)) {
-      await sendMenuImages(contact, text);
+    // Все фото уже уходили этому человеку — тогда коротко отвечает модель.
+    if (detectMenuQuestion(text) && (await sendMenuImages(contact, text))) {
       notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       return;
     }
@@ -344,9 +471,13 @@ export async function aiReply(
     // Ничего не подошло — самый частый случай, отвечает модель как обычно.
     const reusableMedia = await findReusableMedia(text);
     if (reusableMedia) {
-      await sendReusedMedia(contact, reusableMedia);
-      notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
-      return;
+      // false = отправлять нечего: пример голосовой, а голосовые ответы
+      // выключены. Молчать нельзя — вопрос уходит модели, клиент получает текст.
+      const sent = await sendReusedMedia(contact, reusableMedia);
+      if (sent) {
+        notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
+        return;
+      }
     }
   }
 
@@ -380,7 +511,10 @@ export async function aiReply(
     (await coldLeadNudge(contact, text)) +
     (await offlineSignupBlock(contact, text)) +
     (await freeLessonBlock()) +
-    webChannelBlock(contact) + (await deliveryPrompt(contact)) + REPLY_POLICY_INSTRUCTION;
+    webChannelBlock(contact) +
+    (await deliveryPrompt(contact)) +
+    (await videoHelpPrompt()) +
+    REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).
   let model = (await getSetting("aiModel")) || "gemini-3.6-flash";
@@ -501,6 +635,11 @@ export async function aiReply(
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
       replyText = null;
     }
+    // Модель честно сказала «фактов нет» — «Ширин сама ответит» и зовём её (пункт 7).
+    if (replyText && isAskShirin(replyText)) {
+      await handOffUnknownToShirin(contact, text, language);
+      replyText = null;
+    }
     if (replyText) {
       const facts = await trustedSalesFacts();
       const issues = replyPolicyIssues(replyText, facts);
@@ -511,7 +650,18 @@ export async function aiReply(
 Исправьте ответ: ${issues.join(", ")}. Проверенные факты: ${facts}`,
         );
         replyText = "error" in fixed ? null : fixed.text;
-        if (!replyText || replyPolicyIssues(replyText, facts).length || replyText.trim() === "[NO_REPLY]") {
+        const stillIssues = replyText ? replyPolicyIssues(replyText, facts) : [];
+        // Выдумка осталась и после исправления (или модель сама сказала «нет факта») —
+        // не держим ответ молча, а честно: «Ширин сама ответит» и зовём её.
+        if (
+          !("error" in fixed) &&
+          replyText &&
+          (isAskShirin(replyText) || (stillIssues.length > 0 && stillIssues.every((i) => FACT_ISSUES.has(i))))
+        ) {
+          logWarn("ai:replyPolicy", `${contact.id}: handed to Shirin ${issues.join(",")}`);
+          await handOffUnknownToShirin(contact, text, language);
+          replyText = null;
+        } else if (!replyText || stillIssues.length || replyText.trim() === "[NO_REPLY]") {
           logWarn("ai:replyPolicy", `${contact.id}: held ${issues.join(",")}`);
           if ("error" in fixed) {
             if (contact.channel === "WHATSAPP")
@@ -524,10 +674,47 @@ export async function aiReply(
       // Обращение «апачон» и дежурный хвост — до голоса и до текста: озвучке они
       // так же чужие. Особые буквы и тире правит уже дверь отправки (humanizeForContact):
       // голосу нужны буквы, тексту — по стилю собеседника.
-      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanAutomatedReply(replyText)));
-      // Редкое сердечко или цветок, как у самой Ширин (voice.ts), — только на коротких тёплых репликах.
+      const beforeClean = replyText;
+      if (replyText) replyText = withoutStockTails(withoutAddressWords(cleanGeneratedReply(replyText)));
+      // Реквизиты и «пришлите чек» — не чаще раза за 15 минут; оплатившему этот курс
+      // чек не просим никогда; «чек приняли» без принятого чека не говорим (ai/repeatGuard.ts).
+      let emptiedBy: string[] = beforeClean && !replyText ? ["cleanup"] : [];
+      const repeatCtx = replyText ? await loadRepeatContext(contact.id, text) : null;
+      if (replyText && repeatCtx) {
+        const repeat = withoutRepeats(replyText, repeatCtx, language);
+        if (repeat.removed.length > 0) logWarn("ai:repeatGuard", `${contact.id}: removed ${repeat.removed.join(",")}`);
+        if (!repeat.text) emptiedBy = repeat.removed;
+        replyText = repeat.text || null;
+      }
+      // ПОСЛЕ ФИЛЬТРОВ ПУСТО — НЕ МОЛЧИМ (ревью 11.11.2026). Модель ответила, но всё
+      // сказанное было повтором реквизитов / просьбой чека / служебной меткой:
+      // клиент остался бы без ответа. Один повторный ход с прямой подсказкой, что
+      // нельзя; снова пусто (или ошибка) — «сейчас уточню и напишу» и зовём человека.
+      // Явное [NO_REPLY] на повторе — законное молчание.
+      if (!replyText && emptiedBy.length > 0) {
+        replyText = await regenerateAfterFilters(
+          emptiedBy,
+          async (extra) => {
+            const again = await generate(prompt + extra);
+            if ("error" in again || !again.text) return null;
+            if (again.text.trim() === "[NO_REPLY]") return again.text;
+            if (isAskShirin(again.text) || replyPolicyIssues(again.text, await trustedSalesFacts()).length > 0)
+              return null;
+            return withoutStockTails(withoutAddressWords(cleanGeneratedReply(again.text)));
+          },
+          repeatCtx ?? (await loadRepeatContext(contact.id, text)),
+          language,
+        );
+        if (replyText === "") replyText = null;
+        else if (replyText === null) {
+          logWarn("ai:emptyAfterFilters", `${contact.id}: handed to Shirin after ${emptiedBy.join(",")}`);
+          await handOffUnknownToShirin(contact, text, language);
+        }
+      }
+      // Редкий смайлик, как у самой Ширин (voice.ts): не чаще раза на три ответа,
+      // только на коротких тёплых репликах без цифр (значит, никогда в реквизитах).
       if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
-        replyText = maybeWarmEmoji(replyText);
+        if (!(await recentBotUsedEmoji(contact.id))) replyText = maybeWarmEmoji(replyText, WARM_EMOJI_EVERY);
       }
     }
     if (replyText) {
@@ -559,6 +746,8 @@ export async function aiReply(
           const mid = await sendToContact(contact, part);
           if (mid) await recordOutgoingMessage(contact.id, part, mid);
         }
+        // Спросили про онлайн-курс — вдогонку фото его меню, если ещё не показывали.
+        await maybeSendCourseMenuPhoto(contact, text);
         // Реалтайм-версия «где бот застрял» — см. stuckAlert.ts. Fire-and-forget,
         // как markStartedLearningIfReplied выше: сбой здесь не должен трогать
         // уже отправленный ответ.
@@ -637,35 +826,81 @@ export async function aiReply(
  * (единственный способ написать первым тому, кто ещё не писал в директ), и без
  * кнопок: человек просто спросил что-то под роликом, продавать ему нечего.
  */
-export async function aiReplyToComment(contact: Contact, commentId: string, text: string): Promise<void> {
-  if ((await isBotFrozen()) || contactAutomationBlocked(contact)) return;
+/**
+ * Чем кончился ответ на комментарий (funnel.ts пишет это в SeenComment.outcome,
+ * сторож unansweredWatch.ts напоминает владельцу о тех, что остались без ответа).
+ *  ai — ответ ушёл в директ; no_reply — модель решила, что отвечать нечего;
+ *  guard — шаблон защиты; silent_guard — нарочно молчим («пустите бесплатно»);
+ *  остальное — без ответа НЕ по нашему решению.
+ */
+export type CommentReplyOutcome =
+  | "ai"
+  | "no_reply"
+  | "guard"
+  | "silent_guard"
+  | "frozen"
+  | "waiting_human"
+  | "ai_off"
+  | "no_keys"
+  | "budget"
+  | "ai_error";
+
+/** Ответы ИИ под комментариями. По умолчанию ВКЛЮЧЕНЫ (владелец 09.11.2026:
+ *  «никто не должен оставаться без ответа и в комментах»); "false" выключает. */
+export const AI_COMMENT_REPLIES_SETTING = "aiCommentRepliesEnabled";
+
+export async function aiReplyToComment(
+  contact: Contact,
+  commentId: string,
+  text: string,
+): Promise<CommentReplyOutcome> {
+  if (await isBotFrozen()) return "frozen";
+  if (contactAutomationBlocked(contact)) return "waiting_human";
   // Свой флаг, не aiEnabled — владелец 13.09.2026 попросил заглушить обычный
   // ИИ-ответ в директе, но оставить живыми ответы под комментариями; общий
-  // флаг гасил бы оба сразу.
-  const enabled = (await getSetting("aiCommentRepliesEnabled")) === "true";
-  if (!enabled) return;
+  // флаг гасил бы оба сразу. Раньше по умолчанию был ВЫКЛЮЧЕН («true» только
+  // явно), а в панели его не было вовсе — комментарий не к рекламному ролику
+  // молча оставался без ответа. Теперь включён, пока не выставлен "false".
+  const enabled = (await getSetting(AI_COMMENT_REPLIES_SETTING)) !== "false";
+  if (!enabled) return "ai_off";
   const apiKeys = await resolveGeminiKeys();
   if (apiKeys.length === 0) {
     logError("ai:aiReplyToComment:noGeminiKeys", new Error("Gemini API keys not configured — comment reply skipped"));
-    return;
+    return "no_keys";
   }
 
   const language = await contactLanguage(contact.id, text);
   const verdict = guardOffTopic(text);
   if (verdict) {
     // «Пустите бесплатно» и назойливое дёрганье под роликом — молчим совсем.
-    if (isSilentKind(verdict.kind)) return;
+    if (isSilentKind(verdict.kind)) return "silent_guard";
     // Под роликом отвечаем шаблоном ровно один раз и не спорим дальше: в
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
     const guardedText = await humanizeForContact(contact.id, guardReply(verdict.kind, language), [text]);
-    await withContactMessaging(contact.id, "reply", () =>
-      sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
-    ).catch((err) => {
+    try {
+      await withContactMessaging(contact.id, "reply", () =>
+        sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
+      );
+    } catch (err) {
       logError("ai:commentGuard:sendPrivateReply", err);
-    });
-    return;
+      return "ai_error";
+    }
+    return "guard";
   }
-  if (await isBudgetExceeded(contact.id)) return;
+  // Бюджет кончился — раньше тишина. Теперь честное «напишите чуть позже» в
+  // директ (тот же текст, что в переписке), а сторож напомнит владельцу.
+  if (await isBudgetExceeded(contact.id)) {
+    const fallback = BUDGET_FALLBACK[language];
+    try {
+      const mid = await withContactMessaging(contact.id, "reply", () =>
+        sendPrivateReply(commentId, fallback, [], metaChannelOf(contact)),
+      );
+      await recordOutgoingMessage(contact.id, fallback, mid);
+    } catch (err) {
+      logError("ai:commentBudget:sendPrivateReply", err);
+    }
+    return "budget";
+  }
 
   // Комментарий — это всегда текст, голосовых под роликами не бывает: модель
   // обычная, время обычное.
@@ -704,7 +939,7 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
   if ("error" in result) {
     logError("ai:commentReply", result.error);
     void logAiCall({ endpoint: "comment-reply", ms: Date.now() - startedAt, ok: false });
-    return;
+    return "ai_error";
   }
   void logAiCall({
     endpoint: "comment-reply",
@@ -714,20 +949,33 @@ export async function aiReplyToComment(contact: Contact, commentId: string, text
     ok: true,
   });
   await recordAiCall(contact.id);
-  if (!result.text) return;
+  if (!result.text) return "ai_error";
 
-  if (result.text.trim() === "[NO_REPLY]") return;
+  if (result.text.trim() === "[NO_REPLY]") return "no_reply";
+  // Нет факта — как в директе (ревью 11.11.2026): раньше «[ASK_SHIRIN]» уходил
+  // человеку под комментарием буквально. Теперь «сейчас уточню и напишу вам»
+  // приватным ответом, пауза и вопрос в списке ждущих, Далеру — уведомление.
+  if (isAskShirin(result.text)) {
+    await handOffUnknownToShirin(contact, text, language, async (reply) => {
+      const shown = await humanizeForContact(contact.id, cleanAutomatedReply(reply), [text]);
+      return withContactMessaging(contact.id, "reply", () =>
+        sendPrivateReply(commentId, shown, [], metaChannelOf(contact)),
+      );
+    });
+    return "waiting_human";
+  }
   const issues = replyPolicyIssues(result.text, await trustedSalesFacts());
   if (issues.length) {
     logWarn("ai:commentReplyPolicy", `${contact.id}: held ${issues.join(",")}`);
     throw new ReplyPolicyError(issues);
   }
-  const clean = await humanizeForContact(contact.id, cleanAutomatedReply(result.text), [text]);
-  if (!clean) return;
+  const clean = await humanizeForContact(contact.id, cleanGeneratedReply(result.text), [text]);
+  if (!clean) return "no_reply";
   const mid = await withContactMessaging(contact.id, "reply", () =>
     sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
   );
   await recordOutgoingMessage(contact.id, clean, mid);
+  return "ai";
 }
 
 /**
@@ -777,25 +1025,21 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
       logError("ai:callOwnerToChat:silence", err);
     });
 
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
-  if (!botToken || !chatId) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   // Кнопки быстрых ответов под уведомлением — чтобы не набирать с телефона,
   // достаточно нажать (см. quickReplies.ts, telegramWebhook.ts ветка `qr:`).
   // callback_data короткий (индекс, не текст) — лимит Telegram 64 байта.
   const quickReplies = await getQuickReplies();
   const buttons = quickReplies.map((qr, i) => [{ text: qr.label, callback_data: `qr:${contact.id}:${i}` }]);
-  await sendMessageWithButtons(
-    botToken,
-    chatId,
+  await sendKind(
+    "human",
     `🙋 ${who} просит поговорить с вами лично.
 
 Последнее сообщение: «${lastText.slice(0, 200)}»
 
 Бот замолчал, ждёт вас. Можно ответить одной из кнопок ниже — уйдёт клиенту сразу:`,
-    buttons,
-  );
+    { buttons },
+  ).catch((err) => logError("ai:callOwnerToChat:notify", err));
 }
 
 /** Сколько бот молчит, если клиент попросил живого человека. Дольше обычной паузы:
@@ -891,29 +1135,43 @@ export function webChannelBlock(contact: Pick<Contact, "channel">): string {
  * запись жила только внутри offlineSignupBlock, а до него не доходили ходы,
  * перехваченные воронкой, guard-ом, паузой хозяйки или бюджетом — в сводке
  * «записались на офлайн» стояло 0 при живых желающих (владелец 05.09.2026).
- * Условие то же: в тексте номер телефона, а желание офлайна — в этом или
- * недавних сообщениях.
+ *
+ * С 11.11.2026 условие строже: номер телефона в тексте (и это не НАШ номер для
+ * оплаты, который клиент переписал себе) плюс явный офлайн — в этом сообщении,
+ * словом «запишите / сабт», недавним разговором про офлайн или уже ушедшей
+ * карточкой. Раньше хватало «нависед» в НАШЕМ сообщении, и номер онлайн-клиента
+ * мог уйти сестре как запись на офлайн.
  */
 export async function registerOfflineIfAsked(contact: Contact, text: string | null): Promise<boolean> {
   if (await isBotFrozen()) return false;
   if (!text || contact.paid) return false;
-  if (!WANTS_OFFLINE_RE.test(text) && !(await recentIncomingWantsOffline(contact.id))) return false;
+  const phone = extractPhone(text);
+  if (!phone) return false;
+  if (mentionsPaymentPhone(phone, (await getSalesTexts()).paymentPhone)) return false;
+  const context =
+    explicitOfflineInterest(text) ||
+    SIGNUP_RE.test(text) ||
+    Boolean(contact.offlineInfoSentAt) ||
+    (await recentIncomingWantsOffline(contact.id));
+  if (!context || asksOnlineNotOffline(text)) return false;
   return registerOfflineSignup(contact, text);
 }
 
 /**
- * Ход «карточка — и всё» (владелец 08.11.2026). Условие то же, что у карточки в
- * offlineSignupBlock: офлайн в этом сообщении или в недавней переписке. Если
- * карточка реально ушла — ставим отметку «передано Ширин» и возвращаем true:
- * модель в этот ход не зовём. Уже слали в этом наборе (или рубильник выключен,
- * или человек купил онлайн) — false, и дальше прежний порядок. Слово «онлайн» в
- * сообщении — не офлайн-интерес, даже если рядом «запишите».
+ * Ход «карточка — и всё» (владелец 08.11.2026, сужено 11.11.2026). Карточка
+ * уходит ТОЛЬКО на явный офлайн в этом сообщении (ai/offlineHandoff.ts::
+ * explicitOfflineInterest): «офлайн», «очно», «дар назди ман», «адрес», «700»,
+ * «прийти в Душанбе». «Курс», «кай сар мешавад», «онлаен», «арзон», «ҳарду курс»
+ * — это онлайн, карточку не шлём и разговор не передаём. Карточка реально ушла —
+ * отметка «передано Ширин» (дальше ведёт Ширин, владелец 11.11.2026: «даёт
+ * информацию и замолкает»), модель в этот ход не зовём.
  */
 async function sendOfflineCardAndHandOff(contact: Contact, text: string): Promise<boolean> {
   if (contact.paid || !(await offlineHandoffEnabled())) return false;
-  if (asksOnlineNotOffline(text)) return false;
-  if (!WANTS_OFFLINE_RE.test(text) && !(await recentIncomingWantsOffline(contact.id))) return false;
+  if (!explicitOfflineInterest(text)) return false;
   if (!(await maybeSendOfflineCard(contact, text))) return false;
+  // Следом — фото «МЕНЮ КУРСА» офлайна (владелец 11.11.2026), если ещё не уходило.
+  await sendOfflineMenuPhoto(contact, text);
   await enterOfflineHandoff(contact.id);
   return true;
 }
@@ -923,10 +1181,17 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   // «Запишите на онлайн курс» совпадает с «запиш…», но это не очный курс:
   // карточку офлайна такому человеку не шлём (см. ai/offlineHandoff.ts).
   if (asksOnlineNotOffline(text)) return "";
-  if (!WANTS_OFFLINE_RE.test(text)) {
-    // Человек мог написать номер отдельным сообщением, уже после просьбы записать.
-    const asked = await recentIncomingWantsOffline(contact.id);
-    if (!asked) return "";
+  const explicit = explicitOfflineInterest(text);
+  // Разговор про офлайн был недавно (человек мог написать номер отдельно или
+  // спросить «кай сар мешавад?» после карточки) — фактам место в промпте, но без
+  // нажима «запишитесь»: вопрос может быть и про онлайн.
+  const recent = !explicit && (await recentIncomingWantsOffline(contact.id));
+  // Строка «Офлайн-курс: …» из «Цены и даты» стоит в промпте ВСЕГДА (ревью 11.11.2026):
+  // промпт владельца называет дату набора словами («20 ноября») и говорит «если в
+  // строке «Офлайн-курс: …» другая дата — верна она». Без строки сравнивать не с чем,
+  // и после смены даты в панели модель называла бы старую.
+  if (!explicit && !recent) {
+    return `\n\nСПРАВКА ОБ ОФЛАЙН-КУРСЕ (говори о нём, только если человек сам спросил про офлайн):\n${await offlineFactsForModel()}`;
   }
 
   const date = await courseDateLabel();
@@ -935,9 +1200,12 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   // отвечала по памяти промта.
   const facts = await offlineFactsForModel();
 
-  const registered = await registerOfflineSignup(contact, text);
+  const registered = await registerOfflineIfAsked(contact, text);
   if (registered) {
     return `\n\nВАЖНО СЕЙЧАС: человека уже ЗАПИСАЛИ на офлайн-курс (${date}). Коротко подтверди это, скажи, что предоплаты не нужно и что за день до курса ему позвонят. Больше ничего не спрашивай.`;
+  }
+  if (!explicit) {
+    return `\n\nЕСЛИ ВОПРОС ПРО ОФЛАЙН-КУРС, вот факты (если про онлайн — отвечай про онлайн, офлайн не предлагай):\n${facts}`;
   }
 
   // Условия набора уходят ОТДЕЛЬНЫМ сообщением и дословно так, как их написал
@@ -947,30 +1215,20 @@ async function offlineSignupBlock(contact: Contact, text: string): Promise<strin
   const cardSent = await maybeSendOfflineCard(contact, text);
   return cardSent
     ? `\n\nВАЖНО СЕЙЧАС: человеку УЖЕ отправлено отдельное сообщение со всеми условиями офлайн-курса — цена, даты, адрес. Не повторяй их. Одной короткой фразой попроси имя и номер телефона для записи.\n${facts}`
-    : `\n\nВАЖНО СЕЙЧАС: человек хочет на ОФЛАЙН-курс (${date}). Попроси у него имя и номер телефона одним коротким сообщением. Предоплаты нет — про оплату не заговаривай.\n${facts}`;
+    : `\n\nВАЖНО СЕЙЧАС: человек спрашивает про ОФЛАЙН-курс (${date}). Ответь на вопрос по фактам ниже; записаться можно, оставив имя и номер. Предоплаты нет — про оплату не заговаривай.\n${facts}`;
 }
 
-/**
- * ОФЛАЙН-КУРС В ДУШАНБЕ — значения по умолчанию.
- *
- * Живут в коде только как запасной вариант: набор меняется каждый месяц, и
- * править его должен владелец в панели (Настройки → «Офлайн-курс»), а не
- * программист деплоем. Здесь то, что действует на 03.09.2026 — чтобы после
- * обновления бот сразу говорил правду, даже пока владелец не заглянул в панель.
- */
-
-/** Просьба записать на курс — по-таджикски и по-русски. */
-const WANTS_OFFLINE_RE =
-  /(запиш|записат|записыва|навис(ед|ет|ен)|сабт|ба курс мехохам|хочу на курс|офлайн|оффлайн|дар назди ман|назди худат)/i;
+/** Просьба записать — только с номером телефона это запись на офлайн (registerOfflineIfAsked). */
+const SIGNUP_RE = /(запиш|записат|записыва|сабт)/iu;
 
 /**
- * Шёл ли недавно разговор про офлайн-курс — по сообщениям В ОБЕ СТОРОНЫ.
- * Раньше смотрели только на входящие: если офлайн упомянул БОТ («офлайн курс
- * хеле хуб аст...»), а человек дальше просто спрашивал «кай мешава» (когда)
- * без слова «офлайн», дату в промт не подставляли — модель осталась без
- * фактов и один раз придумала число (владелец 06.09.2026, живой чек Ширин
- * поймала и поправила клиента вручную). Окно шире (10, не 4): направления
- * чередуются, и той же глубины в парах реплик уже не хватает.
+ * Шёл ли недавно разговор про офлайн-курс — по сообщениям В ОБЕ СТОРОНЫ
+ * (владелец 06.09.2026: если офлайн упомянул бот, а человек спросил «кай
+ * мешава», факты нужны в промпте). С 11.11.2026 признак — тот же явный
+ * explicitOfflineInterest, а не «нависед/запишите»: наше же «Саволатонро
+ * нависед» больше не превращает онлайн-разговор в офлайн. Нажатие кнопки
+ * «ДАР НАЗДИ МАН» — явный офлайн. Это только для фактов и записи, карточку
+ * по истории не шлём.
  */
 export async function recentIncomingWantsOffline(contactId: string): Promise<boolean> {
   const recent = await prisma.message.findMany({
@@ -979,7 +1237,7 @@ export async function recentIncomingWantsOffline(contactId: string): Promise<boo
     take: 10,
     select: { text: true },
   });
-  return recent.some((m) => m.text && WANTS_OFFLINE_RE.test(m.text));
+  return (recent ?? []).some((m) => m.text && explicitOfflineInterest(m.text));
 }
 
 /**
@@ -997,7 +1255,7 @@ export async function recentIncomingWantsOffline(contactId: string): Promise<boo
  * что и в offTopicGuard, чтобы не дёргать базу на каждом «спасибо» и «ок».
  */
 async function alreadyOwnedBlock(contact: Contact, text: string): Promise<string> {
-  if (!text || !ABOUT_COURSE.test(text)) return "";
+  if (!text || (!ABOUT_COURSE.test(text) && !claimsReceiptSent(text))) return "";
   const owned = await ownedCourses(contact.id);
   if (owned.length === 0) return "";
 
@@ -1067,6 +1325,72 @@ async function buildSocialProofBlock(): Promise<string> {
 import { confirmRequisitesToCustomer, handleReceiptVerdict } from "./ai/receiptVerdict.js";
 export { handleReceiptVerdict };
 
+/** Проблемы ответа, которые означают «нет факта»: на них честное «Ширин ответит». */
+const FACT_ISSUES = new Set(["unverified_claim"]);
+
+/** Один смайлик примерно на три ответа (владелец 11.11.2026: «иногда, а не совсем без»). */
+const WARM_EMOJI_EVERY = 3;
+
+/** В двух последних наших сообщениях уже был смайлик — сейчас без него. */
+async function recentBotUsedEmoji(contactId: string): Promise<boolean> {
+  const rows = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", text: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 2,
+    select: { text: true },
+  });
+  return (rows ?? []).some((r) => /\p{Extended_Pictographic}/u.test(r.text ?? ""));
+}
+
+const ASK_SHIRIN_REPLY: Record<ClientLanguage, string> = {
+  // От первого лица и без имени (ревью 11.11.2026): бот пишет от имени Ширин, и
+  // «Ширин сама ответит» выдавало автомат. Таджикский — по образцу разговорника
+  // (tajik-phrasebook: «тафтиш карда», «менависам»), без особых букв; носителем не вычитан.
+  ru: "Сейчас уточню и напишу вам",
+  tg: "Хозир аник карда ба шумо менависам",
+  en: "Let me check, I'll write to you shortly",
+};
+
+/**
+ * НЕТ ФАКТА — НЕ ВЫДУМЫВАЕМ (владелец 11.11.2026). Клиенту — короткое «Ширин
+ * ответит», Далеру (технический чат) — что спросили; бот молчит час, чтобы
+ * обещание было правдой (как при просьбе позвать человека). Сообщение владельцу
+ * одно на такой случай, а не на каждое сообщение: повторный вопрос в тот же час
+ * сюда не дойдёт (пауза).
+ */
+/**
+ * Ответ на комментарий идёт приватным ответом (sendPrivateReply), а не в директ:
+ * тому, кто ещё не писал, директ не дойдёт. Поэтому способ отправки — параметр.
+ * humanRequestedAt (ревью 11.11.2026): без него вопрос не попадал в список
+ * «ждут ответа» — обещание «напишу вам» держалось только на тревоге Далеру.
+ */
+async function handOffUnknownToShirin(
+  contact: Contact,
+  question: string,
+  language: ClientLanguage,
+  send: (reply: string) => Promise<string | null> = (reply) => sendToContact(contact, reply),
+): Promise<void> {
+  const reply = ASK_SHIRIN_REPLY[language];
+  const mid = await send(reply);
+  if (mid) await recordOutgoingMessage(contact.id, reply, mid);
+  const now = Date.now();
+  await prisma.contact
+    .update({
+      where: { id: contact.id },
+      data: { humanSilencedUntil: new Date(now + HUMAN_REQUESTED_SILENCE_MS), humanRequestedAt: new Date(now) },
+    })
+    .catch((err) => logError("ai:askShirin:silence", err));
+  const who = contact.username ? `@${contact.username}` : contact.igUserId;
+  const quickReplies = await getQuickReplies();
+  const buttons = quickReplies.map((qr, i) => [{ text: qr.label, callback_data: `qr:${contact.id}:${i}` }]);
+  await sendKind(
+    "human",
+    `❓ ${who} спросил то, чего бот не знает: «${question.slice(0, 200)}»
+
+Бот ответил «сейчас уточню и напишу вам» и молчит час. Ответьте сами или кнопкой ниже.`,
+    { buttons },
+  ).catch((err) => logError("ai:askShirin:notify", err));
+}
 
 /** Факты, по которым replyPolicy проверяет ответ перед отправкой: суммы,
  *  телефон и дата набора. Сумма двух курсов по отдельности разрешена ТОЛЬКО
@@ -1074,7 +1398,12 @@ export { handleReceiptVerdict };
  *  — нет, решение владельца 05.09.2026). Дата набора — та, что в «Цены и
  *  даты», или никакая: другая дата в ответе про курс задерживает его. */
 export async function trustedSalesFacts(): Promise<string> {
-  const [texts, offline, prices, date] = await Promise.all([getSalesTexts(), getOfflineFacts(), getPrices(), courseDateLabel("ru")]);
+  const [texts, offline, prices, date] = await Promise.all([
+    getSalesTexts(),
+    getOfflineFacts(),
+    getPrices(),
+    courseDateLabel("ru"),
+  ]);
   return (
     `${texts.priceLineRu}. ${CONTEXT_ONLY_AMOUNT} ${prices.bundleFull} сомони. ${texts.paymentPhone}. Офлайн: ${offline.price} сомони. ` +
     `${COURSE_DATE_FACT} ${date}.`

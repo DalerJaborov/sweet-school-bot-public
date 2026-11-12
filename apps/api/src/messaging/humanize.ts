@@ -1,4 +1,4 @@
-import { prisma, logError } from "../db.js";
+import { prisma, logError, getSetting } from "../db.js";
 import { clientUsesTajikLetters, humanizeBotText } from "../ai/humanText.js";
 
 /** Сколько последних сообщений клиента смотреть, чтобы понять, пишет ли он особыми буквами. */
@@ -12,7 +12,22 @@ const STYLE_SAMPLE = 10;
  * или где в историю нужно записать ровно то, что ушло (ai.ts). Идемпотентна.
  * Голосовой путь (ai/voiceReply.ts) сюда не заходит: озвучке нужны особые буквы.
  */
+/**
+ * ОСОБЫЕ БУКВЫ — ПО РЕШЕНИЮ ВЛАДЕЛЬЦА (11.11.2026): «разговорный душанбинский, без
+ * книжных ҷ қ ӯ ғ ҳ ӣ». Раньше буквы оставались, если клиент сам ими пишет, — и
+ * разбор переписок показал «книжный» бот. Теперь по умолчанию (`tajikLettersMode`
+ * пусто или "plain") текст всегда без них; "mirror" — прежнее «как пишет клиент».
+ */
+export const TAJIK_LETTERS_SETTING = "tajikLettersMode";
+
 export async function humanizeForContact(contactId: string, text: string, extraClientTexts: string[] = []): Promise<string> {
+  let mirror = false;
+  try {
+    mirror = (await getSetting(TAJIK_LETTERS_SETTING))?.trim() === "mirror";
+  } catch {
+    mirror = false;
+  }
+  if (!mirror) return humanizeBotText(text, { keepTajikLetters: false });
   let recent: string[] = [];
   try {
     const rows = await prisma.message.findMany({

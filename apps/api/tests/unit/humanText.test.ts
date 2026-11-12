@@ -102,7 +102,18 @@ describe("дверь отправки: всё, что пишет бот, про�
     expect(sendText.mock.calls[0][1]).toBe("Ха, курс 50 сомони");
   });
 
-  it("клиент пишет особыми буквами — буквы остаются, тире всё равно нет", async () => {
+  it("по умолчанию (владелец 11.11.2026) без книжных букв, даже если клиент пишет ими", async () => {
+    db.model("message").findMany.mockResolvedValue([{ text: "Курс чанд пул? Ҳаст?" }]);
+    await sendToContact(fakeContact() as never, "Ҳа — курс ҳаст");
+    expect(sendText.mock.calls[0][1]).toBe("Ха, курс хаст");
+  });
+
+  it("tajikLettersMode=mirror — буквы как у клиента остаются, тире всё равно нет", async () => {
+    db.model("setting").findUnique.mockImplementation(async (args: unknown) =>
+      (args as { where: { key: string } }).where.key === "tajikLettersMode"
+        ? { key: "tajikLettersMode", value: "mirror" }
+        : null,
+    );
     db.model("message").findMany.mockResolvedValue([{ text: "Курс чанд пул? Ҳаст?" }]);
     await sendToContact(fakeContact() as never, "Ҳа — курс ҳаст");
     expect(sendText.mock.calls[0][1]).toBe("Ҳа, курс ҳаст");
@@ -238,13 +249,17 @@ describe("архитектура: текст бота уходит наружу 
     expect(callers(/\bsendText\(/, ["instagram.ts"])).toEqual(["admin.ts", "messaging/send.ts"]);
     expect(callers(/\bsendWhatsApp(?:Text|Attachment)\(/, ["whatsapp/transport.ts"])).toEqual(["messaging/send.ts"]);
     // Ручная отправка в admin.ts — это Ширин (разрешение "human"), фильтр к ней не применяется.
-    expect(fs.readFileSync(path.join(root, "admin.ts"), "utf8")).toContain('withMessagingPermission("human", () => sendText(');
+    expect(fs.readFileSync(path.join(root, "admin.ts"), "utf8")).toContain(
+      'withMessagingPermission("human", () => sendText(',
+    );
   });
 
   it("подпись к видео в WhatsApp идёт через тот же фильтр, что и текст", () => {
     const send = fs.readFileSync(path.join(root, "messaging/send.ts"), "utf8");
     const fn = send.slice(send.indexOf("export async function sendVideoWithCaption"));
-    expect(fn.slice(0, fn.search(/\r?\n\}\r?\n/))).toContain("humanizeForContact(contact.id, cleanKeepingWarmTail(caption))");
+    expect(fn.slice(0, fn.search(/\r?\n\}\r?\n/))).toContain(
+      "humanizeForContact(contact.id, cleanKeepingWarmTail(caption))",
+    );
   });
 
   it("sendToContact правит всё, что написала не Ширин", () => {
@@ -276,19 +291,37 @@ describe("ревью 08.11.2026: правки фильтра", () => {
   });
 
   it("сравнение с историей: старая строка (тире, особые буквы, точка) = новая", () => {
-    expect(comparableBotText("Хорошо — сейчас Ширин сама вам ответит.")).toBe(comparableBotText("Хорошо, сейчас Ширин сама вам ответит"));
+    expect(comparableBotText("Хорошо — сейчас Ширин сама вам ответит.")).toBe(
+      comparableBotText("Хорошо, сейчас Ширин сама вам ответит"),
+    );
     expect(comparableBotText("Ин порчаи видеодарс: Ҳамин ❤️")).toBe(comparableBotText("Ин порчаи видеодарс: хамин"));
   });
 
   it("старые шаблоны в истории засчитываются: ответ про рецепты второй раз не уйдёт", () => {
     // Тексты до 08.11.2026, как они лежат в истории.
-    expect(isGuardReply("По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы", "recipe_question")).toBe(true);
-    expect(isGuardReply("Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед", "recipe_question")).toBe(true);
-    expect(isGuardReply("Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь", "recipe_question")).toBe(true);
+    expect(
+      isGuardReply(
+        "По рецептам у нас чат в телеграм-группе — напишите туда, там отвечаем на все вопросы",
+        "recipe_question",
+      ),
+    ).toBe(true);
+    expect(isGuardReply("Саволҳои рецепт дар чати гурӯҳи телеграми мо — ҳамон ҷо нависед", "recipe_question")).toBe(
+      true,
+    );
+    expect(
+      isGuardReply(
+        "Откройте ваш урок в личном кабинете и нажмите «Вопрос» — Ширин увидит, о каком рецепте речь",
+        "recipe_question",
+      ),
+    ).toBe(true);
     expect(isGuardReply("К сожалению нет — у нас только кондитерские курсы")).toBe(true);
     // Новый шаблон после фильтра отправки (тире на сайте становится запятой).
-    expect(isGuardReply(humanizeBotText(guardReply("recipe_question", "en", true), PLAIN), "recipe_question")).toBe(true);
-    expect(isGuardReply(humanizeBotText(guardReply("recipe_question", "ru", true, "web"), PLAIN), "recipe_question")).toBe(true);
+    expect(isGuardReply(humanizeBotText(guardReply("recipe_question", "en", true), PLAIN), "recipe_question")).toBe(
+      true,
+    );
+    expect(
+      isGuardReply(humanizeBotText(guardReply("recipe_question", "ru", true, "web"), PLAIN), "recipe_question"),
+    ).toBe(true);
     // Чужой текст — не шаблон.
     expect(isGuardReply("Курс стоит 70 сомони")).toBe(false);
     expect(isGuardReply("")).toBe(false);

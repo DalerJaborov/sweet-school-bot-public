@@ -2,7 +2,7 @@ import { Router } from "express";
 import { handleManualLinkCommand } from "./course/manualLink.js";
 import { handleWhatsappSignupCommand } from "./course/manualOfflineSignup.js";
 import { z } from "zod";
-import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
+import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
 import { sendToContact } from "./messaging/send.js";
 import { answerCallback, editCaption, editKeyboard, editMessageText, trustedChatIds } from "./telegram.js";
 import { handleChatMember } from "./groupAccess.js";
@@ -11,6 +11,7 @@ import { handleQaGroupMessage, type TgGroupMessage } from "./qaGroup.js";
 import { answerFromOwner } from "./course/chat.js";
 import { decideReceipt } from "./receiptDecision.js";
 import { handleMenuCommand, handleMenuCallback } from "./telegramMenu.js";
+import { handleControlCallback } from "./telegramControl.js";
 
 export const telegramRouter = Router();
 
@@ -105,6 +106,13 @@ export async function handleTelegramUpdate(rawBody: unknown, secretHeader: strin
   if (member) {
     if (await secretOk(secretHeader)) {
       await handleChatMember(member).catch((err) => logError("telegram:chatMember", err));
+    } else {
+      // Настоящие события о входе приходят от Telegram с верным секретом. Если секрет
+      // не сошёлся — либо чужой POST, либо вебхук настроен криво и ученицы не получают
+      // доступ к группе: пишем в журнал (ревью 11.11.2026). Тревога владельцу — только
+      // если так идёт дольше 30 минут и не чаще раза в 6 часов (alertGate.ts), поэтому
+      // одиночный чужой POST никого не будит.
+      logError("telegram:webhook", new Error("chat_member отклонён: неверный секрет заголовка. Нажмите «Подключить вебхук» в Настройках"));
     }
     return;
   }
@@ -166,11 +174,20 @@ export async function handleTelegramUpdate(rawBody: unknown, secretHeader: strin
 
   try {
     if (!(await secretOk(secretHeader))) {
-      logError("telegram:webhook", new Error("отклонён: неверный секрет заголовка"));
+      // Адрес вебхука открыт всему интернету, и сканеры шлют сюда выдуманные
+      // нажатия — это не поломка (11.11.2026: раньше каждое такое попадало в
+      // журнал ошибок и в «Новая проблема» владельцу). Настоящий сигнал один:
+      // нажатие от СВОЕГО чата с неверным секретом — значит, секрет разошёлся с
+      // тем, что знает Telegram (нужно нажать «Подключить вебхук» в Настройках).
+      if (await isTrustedSender(query)) {
+        logError("telegram:webhook", new Error("нажатие от своего чата отклонено: неверный секрет заголовка. Нажмите «Подключить вебхук» в Настройках"));
+      } else {
+        logWarn("telegram:webhook", "чужое нажатие отклонено: неверный секрет заголовка");
+      }
       return;
     }
     if (!(await isTrustedSender(query))) {
-      logError("telegram:webhook", new Error("отклонён: кнопку нажал посторонний"));
+      logWarn("telegram:webhook", "нажатие постороннего отклонено");
       return;
     }
     await handleDecision(query);
@@ -188,6 +205,12 @@ async function handleDecision(query: CallbackQuery): Promise<void> {
   // раскладку курсов/оплату ниже.
   if (query.data?.startsWith("mn:")) {
     await handleMenuCallback(botToken, query);
+    return;
+  }
+  // Управление ботом и уведомления: кнопки меню «⚙️ Управление», «🔔 Уведомления»
+  // и «🔕 Не присылать такое» под сообщениями (telegramControl.ts).
+  if (query.data?.startsWith("ct:") || query.data?.startsWith("nf:")) {
+    await handleControlCallback(botToken, query);
     return;
   }
   if (query.data?.startsWith("qr:")) {

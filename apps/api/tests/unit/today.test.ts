@@ -56,6 +56,9 @@ describe("GET /admin/today", () => {
     db.model("lesson").count.mockResolvedValue(0);
     db.model("certificate").findMany.mockResolvedValue([]);
     db.model("progress").findMany.mockResolvedValue([]);
+    db.model("offlineSignup").findMany.mockResolvedValue([]);
+    db.model("receiptCheck").count.mockResolvedValue(0);
+    db.model("funnel").count.mockResolvedValue(0);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -74,10 +77,10 @@ describe("GET /admin/today", () => {
       const a = args as { select?: { amount?: boolean; firstOpenedAt?: boolean } };
       if (a.select?.firstOpenedAt) return [];
       return [
-        { amount: 70, createdAt: new Date(now - 1 * DAY) }, // вчера
-        { amount: 50, createdAt: new Date(now - 1 * DAY - 3600_000) }, // вчера
-        { amount: 100, createdAt: new Date(now - 2 * DAY) }, // позавчера
-        { amount: 70, createdAt: new Date(now - 10 * DAY) }, // прошлая неделя
+        { amount: 70, course: "COURSE70", contactId: "c1", contact, createdAt: new Date(now - 1 * DAY) }, // вчера
+        { amount: 50, course: "COURSE50", contactId: "c1", contact, createdAt: new Date(now - 1 * DAY - 3600_000) }, // вчера
+        { amount: 100, course: "COURSE70", contactId: "c2", contact, createdAt: new Date(now - 2 * DAY) }, // позавчера
+        { amount: 70, course: "COURSE70", contactId: "c3", contact, createdAt: new Date(now - 10 * DAY) }, // прошлая неделя
       ];
     });
     db.model("receiptCheck").findMany.mockResolvedValue([

@@ -6,13 +6,13 @@ import { countNotOpened } from "./notOpened.js";
 import { deliveryMode } from "./course/delivery.js";
 import { unansweredCount } from "./course/chat.js";
 import { healthReport } from "./health.js";
-import { whatsappProblem } from "./whatsapp/watch.js";
 import { storageConfig } from "./storage/s3.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { getPrices } from "./services/priceService.js";
 import { COURSE_TITLE, type PriceTable } from "./prices.js";
 import { coursesForAmount } from "./courses.js";
 import { completedCoursesSince } from "./metrics.js";
+import { buildMainSummary, type MainSummary } from "./todaySummary.js";
 
 /**
  * ГЛАВНЫЙ ЭКРАН «СЕГОДНЯ» — утренняя записка от помощницы (предложение
@@ -92,6 +92,8 @@ export type TodayResponse = {
     salesYesterday: number;
     salesWeek: number;
   };
+  /** Самое главное сверху экрана: деньги сегодня и за неделю, оплаты, записи на офлайн, бот (todaySummary.ts). */
+  main: MainSummary;
   pendingReceipts: number;
   unansweredQuestions: number;
   notOpened: number;
@@ -340,6 +342,7 @@ async function buildToday(): Promise<TodayResponse> {
       salesYesterday: yesterday.sales,
       salesWeek: week.sales,
     },
+    main: await buildMainSummary(now),
     pendingReceipts: pendingReceipts.length,
     unansweredQuestions: unanswered,
     notOpened: notOpenedCount,
@@ -352,7 +355,8 @@ async function buildToday(): Promise<TodayResponse> {
       storage: Boolean(storage),
       diskFreePct: health?.diskFreePct ?? null,
       gemini,
-      problems: [...(health?.problems ?? []), ...(whatsappProblem() ? [whatsappProblem() as string] : [])],
+      // WhatsApp-мост владелец выключил сам (11.11.2026) — его состояние на «Сегодня» не показываем.
+      problems: [...(health?.problems ?? [])],
     },
   };
 }

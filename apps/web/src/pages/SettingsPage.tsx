@@ -65,6 +65,7 @@ const FIELDS = defineFields([
   { key: "igToken", label: "Маркер доступа Instagram", secret: true, hint: "Получим при подключении аккаунта Ширин" },
   { key: "verifyToken", label: "Проверочное слово вебхука", hint: "Любая строка — её же вбиваем в настройках приложения Meta" },
   { key: "appSecret", label: "Секрет приложения Meta", secret: true, hint: "Нужен для проверки подлинности вебхуков. Возьмите App Secret из настроек подключённого приложения Meta" },
+  { key: "fbAppSecret", label: "Секрет приложения Meta №2 (Messenger / страница)", secret: true, hint: "Второй секрет: события со страницы Facebook подписывает приложение Messenger, у него свой App Secret (Meta → Приложение → Настройки → Основное). Без него такие сообщения отклоняются." },
   { key: "geminiKey", label: "Ключ Gemini", secret: true, hint: "Для ИИ-консультанта" },
   {
     key: "geminiKeysExtra",

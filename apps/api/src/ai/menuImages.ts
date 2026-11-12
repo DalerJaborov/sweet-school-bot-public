@@ -1,23 +1,75 @@
-import { prisma, recordOutgoingMessage } from "../db.js";
+import { prisma, recordOutgoingMessage, getSetting, logError } from "../db.js";
 import { env } from "../env.js";
-import { sendToContact, sendImageToContact } from "../messaging/send.js";
+import { sendToContact, sendImageToContact, mediaAlreadySent } from "../messaging/send.js";
 import { getPrices } from "../services/priceService.js";
 import type { PriceTable } from "../prices.js";
 import { contactLanguage } from "./contactLanguage.js";
 import type { Contact } from "@prisma/client";
 
 /**
- * КАРТИНКИ МЕНЮ ВМЕСТО ТЕКСТА МОДЕЛИ.
+ * ФОТО МЕНЮ ВМЕСТО ТЕКСТОВОГО СПИСКА (владелец 24.08.2026, расширено 11.11.2026:
+ * «вместо тупого списка меню — красиво оформленные фото меню; спрашивают про
+ * онлайн, офлайн или меню — фото»).
  *
- * Три меню — онлайн «21 рецепт», онлайн «арт-десерты» и офлайн-курс в Душанбе — на двух
- * языках. Картинки рисует `apps/web/scripts/render-menu-cards.mjs` из тех же файлов, что
- * собирают сайт, и лежат на сайте (`/img/menus/…`), откуда их забирает Meta. Цен и дат на
- * них нет нарочно: они меняются в «Текстах и ценах», картинка устарела бы молча.
+ * Три меню: онлайн «21 рецепт», онлайн «арт-десерты» и офлайн-курс в Душанбе.
  *
- * Названия десертов на таджикском остаются русскими — правило владельца 08.11.2026.
+ * ОДНО МЕСТО ДЛЯ ССЫЛОК — настройка `menuMediaUrls` (JSON: {"online70": [...],
+ * "online50": [...], "offline": [...]}), её правит владелец; скрипт выкатки
+ * ops/2026-11-11-bot-texts.mjs кладёт туда картинки, которые прислал владелец.
+ * Пока настройки нет — значения ниже (те же картинки). Курс без картинок —
+ * фото не шлём, отвечает текст.
+ *
+ * НЕ СПАМИМ: не больше MAX_MEDIA_PER_REPLY картинок за ответ, и файл, который
+ * этому человеку уже уходил (воронкой, ботом, отзывом), второй раз не шлём —
+ * messaging/send.ts::mediaAlreadySent.
+ *
+ * РУБИЛЬНИК `menuPhotosEnabled` — по умолчанию ВКЛЮЧЁН; "false" — фото меню
+ * только по прямой просьбе «покажите меню» (как было), без фото после ответа.
  */
 export type CourseKey = "online70" | "online50" | "offline";
 
+export const MENU_MEDIA_SETTING = "menuMediaUrls";
+export const MENU_PHOTOS_SETTING = "menuPhotosEnabled";
+export const MAX_MEDIA_PER_REPLY = 2;
+
+/**
+ * Картинки, которые назвал владелец 11.11.2026: «МЕНЮ ОНЛАЙН-КУРСА» (21) и «МЕНЮ
+ * КУРСА» офлайна — с сайта; арт-десерты — картинка шага 11 директ-воронки (так
+ * велел владелец). Это запас на случай пустой настройки, а не второй источник.
+ */
+export const DEFAULT_MENU_MEDIA: Record<CourseKey, string[]> = {
+  online70: ["https://shirinsweets.online/media/2a63855d-368c-40fc-b642-037a431e4def.jpg"],
+  online50: [
+    "https://shirinsweets.online/media/mb-f7e90459f2bd2579.png",
+  ],
+  offline: ["https://shirinsweets.online/media/11711421-2fc6-462b-9127-ec74e194ab97.jpg"],
+};
+
+const COURSE_KEYS: CourseKey[] = ["online70", "online50", "offline"];
+
+/** Разбор настройки: мусор и не-https ссылки отбрасываются; пустая — запас выше. */
+export function parseMenuMedia(raw: string | null | undefined): Record<CourseKey, string[]> {
+  if (!raw?.trim()) return DEFAULT_MENU_MEDIA;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<CourseKey, unknown>>;
+    const out = {} as Record<CourseKey, string[]>;
+    for (const key of COURSE_KEYS) {
+      const list = Array.isArray(parsed[key]) ? (parsed[key] as unknown[]) : DEFAULT_MENU_MEDIA[key];
+      out[key] = list
+        .filter((u): u is string => typeof u === "string" && /^https:\/\/\S+$/u.test(u.trim()))
+        .map((u) => u.trim());
+    }
+    return out;
+  } catch {
+    return DEFAULT_MENU_MEDIA;
+  }
+}
+
+export async function menuMedia(course: CourseKey): Promise<string[]> {
+  return parseMenuMedia(await getSetting(MENU_MEDIA_SETTING))[course];
+}
+
+/** Картинки сайта (рисует apps/web/scripts/render-menu-cards.mjs) — для сайта и тестов. */
 const FILE: Record<CourseKey, string> = {
   online70: "menu-online-70",
   online50: "menu-online-50",
@@ -30,9 +82,9 @@ export function menuImageUrl(course: CourseKey, lang: "ru" | "tg"): string {
 }
 
 const CAPTION: Record<CourseKey, Record<"ru" | "tg", string>> = {
-  online70: { ru: "Вот что входит в онлайн-курс «21 рецепт»", tg: "Курси онлайн «21 рецепт», ана менюяш" },
-  online50: { ru: "Вот программа курса «Арт-десерты»", tg: "Курси «Арт-десерты», ана менюяш" },
-  offline: { ru: "Вот как проходит офлайн-курс в Душанбе", tg: "Курси офлайн дар Душанбе, ана менюяш" },
+  online70: { ru: "Вот меню онлайн-курса «21 рецепт»", tg: "Ана менюи курси онлайн «21 рецепт»" },
+  online50: { ru: "Вот что внутри курса «Арт-десерты»", tg: "Ана курси «Арт-десерты»" },
+  offline: { ru: "Вот меню офлайн-курса в Душанбе", tg: "Ана менюи курси офлайн дар Душанбе" },
 };
 
 /** Признаки, по которым понятно, про какой курс речь. Цена курса («70 сомони») берётся
@@ -74,21 +126,75 @@ export function inferCourses(currentText: string, recentTexts: string[], prices?
   return ["online70", "online50"];
 }
 
+/**
+ * Отправить фото меню курсов (подпись + картинка), не больше MAX_MEDIA_PER_REPLY
+ * картинок и без повторов. Возвращает, сколько картинок ушло.
+ */
+export async function sendCourseMenus(
+  contact: Contact,
+  courses: CourseKey[],
+  text: string,
+  opts: { caption?: boolean } = {},
+): Promise<number> {
+  const lang = (await contactLanguage(contact.id, text)) === "tg" ? "tg" : "ru";
+  let sent = 0;
+  for (const course of courses) {
+    if (sent >= MAX_MEDIA_PER_REPLY) break;
+    const fresh: string[] = [];
+    for (const url of await menuMedia(course)) if (!(await mediaAlreadySent(contact.id, url))) fresh.push(url);
+    if (fresh.length === 0) continue;
+    if (opts.caption !== false) {
+      const caption = CAPTION[course][lang];
+      const mid = await sendToContact(contact, caption);
+      if (mid) await recordOutgoingMessage(contact.id, caption, mid);
+    }
+    for (const url of fresh) {
+      if (sent >= MAX_MEDIA_PER_REPLY) break;
+      await sendImageToContact(contact, url);
+      sent++;
+    }
+  }
+  return sent;
+}
+
 /** Вызывается из ai.ts вместо хода модели, когда detectMenuQuestion() узнал
- *  вопрос про список десертов курса (см. offTopicGuard.ts). */
-export async function sendMenuImages(contact: Contact, text: string): Promise<void> {
+ *  вопрос про список десертов курса (см. offTopicGuard.ts). Всё уже отправляли —
+ *  возвращает false, и тогда отвечает модель (коротко, без списка). */
+export async function sendMenuImages(contact: Contact, text: string): Promise<boolean> {
   const recent = await prisma.message.findMany({
     where: { contactId: contact.id, text: { not: null } },
     orderBy: { createdAt: "desc" },
     take: 8,
     select: { text: true },
   });
-  const courses = inferCourses(text, recent.map((m) => m.text ?? ""), await getPrices());
-  const lang = (await contactLanguage(contact.id, text)) === "tg" ? "tg" : "ru";
-  for (const course of courses) {
-    const caption = CAPTION[course][lang];
-    const mid = await sendToContact(contact, caption);
-    await recordOutgoingMessage(contact.id, caption, mid);
-    await sendImageToContact(contact, menuImageUrl(course, lang));
-  }
+  const courses = inferCourses(
+    text,
+    (recent ?? []).map((m) => m.text ?? ""),
+    await getPrices(),
+  );
+  return (await sendCourseMenus(contact, courses, text)) > 0;
+}
+
+/** Курс назван явно — словом «онлайн» без конкретики или его названием/ценой. */
+const ONLINE_WORD = /(?<![.\p{L}])(онлайн\p{L}*|online|onlayn|onlain)(?!\p{L})/iu;
+
+/**
+ * После ответа модели: человек спросил про конкретный онлайн-курс («онлайн?»,
+ * «21 рецепт чи дорад?», «арт десерт чанд?») — вдогонку одно фото меню этого
+ * курса, если его ещё не показывали. Офлайн сюда не входит: его фото уходит
+ * вместе с карточкой офлайна (ai.ts::sendOfflineCardAndHandOff).
+ */
+export async function maybeSendCourseMenuPhoto(contact: Contact, text: string): Promise<void> {
+  if (!text || (await getSetting(MENU_PHOTOS_SETTING)) === "false") return;
+  const prices = await getPrices();
+  let courses = mentioned(text, prices).filter((c) => c !== "offline");
+  if (courses.length === 0 && ONLINE_WORD.test(text)) courses = ["online70", "online50"];
+  if (courses.length === 0) return;
+  await sendCourseMenus(contact, courses.slice(0, 1), text).catch((err) => logError("menu:afterReply", err));
+}
+
+/** Фото меню офлайна — следом за карточкой офлайн-курса, без подписи (карточка уже всё сказала). */
+export async function sendOfflineMenuPhoto(contact: Contact, text: string): Promise<void> {
+  if ((await getSetting(MENU_PHOTOS_SETTING)) === "false") return;
+  await sendCourseMenus(contact, ["offline"], text, { caption: false }).catch((err) => logError("menu:offline", err));
 }

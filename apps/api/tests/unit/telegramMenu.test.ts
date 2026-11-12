@@ -5,7 +5,8 @@ const sendTelegramMessage = vi.fn(async () => 1);
 const sendWithMarkup = vi.fn(async () => true);
 const answerCallback = vi.fn(async () => undefined);
 const createOneTimeInviteLink = vi.fn(async () => "https://t.me/+abc");
-vi.mock("../../src/telegram.js", () => ({
+vi.mock("../../src/telegram.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/telegram.js")>()),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
   sendWithMarkup: (...a: unknown[]) => sendWithMarkup(...a),
   answerCallback: (...a: unknown[]) => answerCallback(...a),
@@ -191,5 +192,29 @@ describe("Меню быстрых действий", () => {
   it("мусорный шаг ссылки ничего не создаёт", async () => {
     await handleMenuCallback("tok", { id: "c", data: "mn:ls:evil:tg:ads", message: { chat: { id: 111 } } });
     expect(createSiteLink).not.toHaveBeenCalled();
+  });
+});
+
+// Владелец 12.11.2026: кнопки должны появиться без «/menu».
+describe("pushMenuOnce — кнопки приходят сами", () => {
+  it("шлёт клавиатуру в личные чаты владельца и Ширин один раз на версию", async () => {
+    const { pushMenuOnce, MENU_PUSHED_SETTING, MENU_VERSION } = await import("../../src/telegramMenu.js");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    const n = await pushMenuOnce("tok", { owner: ["111", "-100500"], shirin: ["222"] });
+    expect(n).toBe(2);
+    const chats = sendWithMarkup.mock.calls.map((c) => (c as unknown[])[1]);
+    expect(chats).toEqual(["111", "222"]); // группа (-100500) пропущена
+    const kb = (sendWithMarkup.mock.calls[0] as unknown[])[3] as { keyboard: { text: string }[][] };
+    expect(JSON.stringify(kb.keyboard)).toContain("Управление");
+    expect(JSON.stringify((sendWithMarkup.mock.calls[1] as unknown[])[3])).not.toContain("Управление");
+    expect(db.model("setting").upsert).toHaveBeenCalled();
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes("setMyCommands"))).toBe(true);
+
+    SETTINGS[MENU_PUSHED_SETTING] = MENU_VERSION;
+    sendWithMarkup.mockClear();
+    expect(await pushMenuOnce("tok", { owner: ["111"], shirin: [] })).toBe(0);
+    expect(sendWithMarkup).not.toHaveBeenCalled();
+    delete SETTINGS[MENU_PUSHED_SETTING];
+    fetchSpy.mockRestore();
   });
 });

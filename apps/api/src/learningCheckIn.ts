@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
+import { everTalkedWithShirin } from "./messaging/automation.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
 
 /**
@@ -70,6 +71,8 @@ async function sweep(): Promise<void> {
     const windowOpen =
       lastIn != null && (Date.now() - lastIn.createdAt.getTime()) / 3_600_000 < META_WINDOW_HOURS;
     if (!windowOpen) continue; // окно Meta закрыто — писать первым нельзя
+    // Ширин хоть раз говорила с ней сама — не напоминаем никогда (владелец 09.11.2026).
+    if (await everTalkedWithShirin(contact)) continue;
 
     // Язык берём по последнему сообщению человека, как и в joinReminder.ts.
     const tajik = (await contactLanguage(contact.id, lastIn?.text ?? "")) === "tg";

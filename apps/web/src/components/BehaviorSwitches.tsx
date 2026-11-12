@@ -17,6 +17,11 @@ const SWITCHES: SettingSwitch[] = [
     hint: "Курьерам, знакомым, магазинам помощник молчит. Выключите, если он молчит зря: тогда ответит всем.",
   },
   {
+    key: "unansweredWatchdogEnabled",
+    label: "Отвечать самому, когда пауза после Ширин кончилась",
+    hint: "После вашего ответа помощник молчит 3 часа, потом сам отвечает тем, кто написал за это время. В Telegram об этом больше не пишем.",
+  },
+  {
     key: "reactionsEnabled",
     label: "Сердечко вместо ответа на «спасибо»",
     hint: "Помощник ставит реакцию, а не пишет ещё одно сообщение.",
@@ -51,6 +56,11 @@ const SWITCHES: SettingSwitch[] = [
 /** Рубильники экрана «Автосообщения» — то же устройство, что выше. */
 const FUNNEL_SWITCHES: SettingSwitch[] = [
   {
+    key: "aiCommentRepliesEnabled",
+    label: "Отвечать на комментарии без автосообщения",
+    hint: "Комментарий под публикацией, к которой не привязано автосообщение, получает короткий ответ помощника в директ.",
+  },
+  {
     key: "commentPublicReplyEnabled",
     label: "Отвечать под комментарием «написали вам в директ»",
     hint: "Когда автосообщение ушло в директ, под комментарием появляется короткий ответ по-таджикски. Выключите — директ всё равно придёт, просто без ответа под постом.",
@@ -62,7 +72,7 @@ export function BehaviorSwitches() {
 }
 
 export function FunnelSwitches() {
-  return <SettingSwitches title="Ответ под комментарием" switches={FUNNEL_SWITCHES} testId="funnel-switches" />;
+  return <SettingSwitches title="Комментарии" switches={FUNNEL_SWITCHES} testId="funnel-switches" />;
 }
 
 function SettingSwitches({ title, switches, testId }: { title: string; switches: SettingSwitch[]; testId: string }) {

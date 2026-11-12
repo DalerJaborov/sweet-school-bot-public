@@ -3,6 +3,7 @@ import { downloadTelegramFile, sendTelegramMessage, sendTelegramVoice } from "./
 import { saveOwnerMedia } from "./upload.js";
 import { findQaAnswer } from "./ai/qaGroupReply.js";
 import { voiceToText } from "./ai/voiceToText.js";
+import { voiceRepliesAllowed } from "./ai/voiceSwitch.js";
 
 /**
  * ЗАХВАТ УЧЕБНОЙ TELEGRAM-ГРУППЫ (владелец 24.08.2026) + АВТООТВЕТ (владелец
@@ -192,7 +193,9 @@ async function attemptAutoReply(botToken: string, msg: TgGroupMessage, studentTe
   const match = await findQaAnswer(studentText);
   if (!match) return;
   const ownerText = match.ownerText.trim();
-  const hasVoice = match.mediaType === "audio" && Boolean(match.mediaUrl);
+  // Голос выключен в панели — голосовое Ширин в группу тоже не уходит
+  // (ai/voiceSwitch.ts). Без текста ответа тогда нечего слать — выходим ниже.
+  const hasVoice = match.mediaType === "audio" && Boolean(match.mediaUrl) && (await voiceRepliesAllowed());
   if (!ownerText && !hasVoice) return;
 
   const chatId = String(msg.chat?.id);

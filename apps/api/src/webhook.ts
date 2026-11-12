@@ -1,14 +1,22 @@
-import { silenceIfFollowedByBusiness } from "./profiles.js";
+import { silenceIfFollowedByBusiness, releaseFollowSilenceIfClient } from "./profiles.js";
+import { showsCourseInterest } from "./ai/relevance.js";
 import { Router, type Request } from "express";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
-import { upsertContact, handleIncomingDm, handleComment } from "./funnel.js";
-import { aiReply, registerOfflineIfAsked, rescueIncomingImages, type RescuedImage } from "./ai.js";
+import {
+  upsertContact,
+  handleIncomingDm,
+  handleComment,
+  cancelPendingFunnelSteps,
+  clientMessageStopsFunnel,
+  settleDeferredFunnel,
+} from "./funnel.js";
+import { aiReply, registerOfflineIfAsked, rescueIncomingImages, verifyReceiptsNow, type RescuedImage } from "./ai.js";
 import { handleDeliveryChoiceReply } from "./course/deliveryChoice.js";
 import { sendToContact } from "./messaging/send.js";
 import { recordAdReferral, referralFromMeta } from "./metaConversions.js";
-import { acceptWebhookEvents, processWebhookInbox, inboxKey, type InboxEvent } from "./webhookInbox.js";
+import { acceptWebhookEvents, processWebhookInbox, inboxKey, releaseInboxSlot, type InboxEvent } from "./webhookInbox.js";
 import { debounceMessage } from "./debounce.js";
 import { looksPersonal } from "./ai/personalContact.js";
 import { detectAbuse } from "./ai/abuseFilter.js";
@@ -21,6 +29,7 @@ import { fetchAttachment, type Attachment } from "./ai/media.js";
 import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
+import { humanSilenceActive, loadHumanSilenceMs } from "./messaging/automation.js";
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
  *  Instagram, а не наш код: написала текстом, ответила голосом или просто
@@ -47,7 +56,8 @@ export type MessagingEvent = {
     text?: string;
     is_echo?: boolean;
     quick_reply?: { payload?: string };
-    attachments?: { type?: string; payload?: { url?: string } }[];
+    /** У пересланного рилса (ig_reel) Meta кладёт ещё reel_video_id — это id нашей публикации. */
+    attachments?: { type?: string; payload?: { url?: string; reel_video_id?: string | number | null } }[];
     /** Ответ на нашу историю: Meta кладёт сюда её адрес и id. */
     reply_to?: { story?: { url?: string; id?: string }; mid?: string };
     /** Первое сообщение из рекламы «клик в переписку»: id объявления (metaConversions.ts). */
@@ -105,10 +115,14 @@ type WebhookBody = {
  * теперь виден и в ErrorLog, и в Telegram при первом появлении.
  */
 async function verifySignature(req: Request): Promise<boolean> {
-  const secret = await getSetting("appSecret");
-  if (!secret) {
-    // Pausing the bot does not disable history, echoes or funnel processing.
-    // Without an App Secret no incoming identity can be authenticated.
+  // Два приложения Meta подписывают вебхуки по-разному: Instagram-приложение
+  // (appSecret) и приложение Messenger/страницы (fbAppSecret). Принимаем любой
+  // из заданных секретов. Разбор 09.11.2026: весь /webhooks/messenger получал 403,
+  // и вместе с ним терялись сообщения людей (пересланные посты, «Курс»).
+  const secrets = (await Promise.all([getSetting("appSecret"), getSetting("fbAppSecret")])).filter(
+    (v): v is string => !!v,
+  );
+  if (secrets.length === 0) {
     logError(
       "webhook:signature",
       new Error(
@@ -124,23 +138,25 @@ async function verifySignature(req: Request): Promise<boolean> {
     logError("webhook:signature", new Error("Вебхук пришёл без заголовка подписи или без тела запроса — отклонён"));
     return false;
   }
-  const expected = "sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex");
-  try {
-    const ok = crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-    if (!ok) {
-      logError(
-        "webhook:signature",
-        new Error(
-          "Подпись вебхука не совпала с App Secret — Meta отклонён кодом 403 ещё до разбора тела. " +
-            "Проверьте App Secret в Настройках либо не привязана ли реклама к другому приложению Meta."
-        )
-      );
-    }
-    return ok;
-  } catch {
-    logError("webhook:signature", new Error("Подпись вебхука не сравнилась (неверная длина заголовка)"));
-    return false;
+  const got = Buffer.from(header);
+  for (const secret of secrets) {
+    const expected = Buffer.from("sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex"));
+    if (expected.length === got.length && crypto.timingSafeEqual(got, expected)) return true;
   }
+  let object = "?";
+  try {
+    object = String(JSON.parse(raw.toString("utf8"))?.object ?? "?");
+  } catch {
+    /* тело не JSON — оставляем «?» */
+  }
+  logError(
+    "webhook:signature",
+    new Error(
+      `Подпись вебхука не совпала ни с одним секретом (путь ${req.path}, object=${object}, секретов задано: ${secrets.length}) — 403. ` +
+        "Проверьте оба секрета в Настройках: Instagram-приложения и приложения Messenger."
+    )
+  );
+  return false;
 }
 
 // Проверочный запрос Meta при подключении вебхука — общий для обоих каналов
@@ -240,8 +256,9 @@ function toAttachments(raw: MessagingEvent["message"]): Attachment[] {
  *  1) наш же вызов sendText — mid уже есть в базе (мы сами его туда положили
  *     сразу после отправки), это просто подтверждение, ничего не делаем;
  *  2) ЖИВАЯ хозяйка ответила из приложения Instagram — такого mid в базе ещё
- *     нет. Записываем в историю и выключаем обычные автоответы до явного
- *     включения владельцем — человек взял разговор на себя.
+ *     нет. Записываем в историю и ставим паузу автоответов: humanSilenceHours
+ *     (по умолчанию 3 часа) от её ПОСЛЕДНЕГО ответа — человек взял разговор
+ *     на себя (владелец 09.11.2026: раньше пауза была навсегда).
  */
 /** Экспорт ради юнит-теста транзакции (tests/unit/webhookEcho.test.ts); из кода снаружи не вызывать. */
 export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "INSTAGRAM"): Promise<void> {
@@ -268,8 +285,11 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
         // список «бот ответил плохо — вот как надо» (см. раздел «Качество»).
         data: { contactId: contact.id, direction: "OUT", mid: msg.mid, text: msg.text?.trim() || null, byHuman: true },
       });
+      // Отметка обновляется на КАЖДОМ её сообщении, а не только на первом:
+      // пауза бота временная и считается от её последнего ответа
+      // (messaging/automation.ts::humanTakeoverActive, владелец 09.11.2026).
       await tx.contact.updateMany({
-        where: { id: contact.id, humanTakenOverAt: null },
+        where: { id: contact.id },
         data: { humanTakenOverAt: new Date(), humanTakeoverMid: msg.mid, humanSilencedUntil: null },
       });
       return true;
@@ -283,6 +303,10 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
       return false;
     });
   if (!recorded) return;
+
+  // Ширин написала сама — отложенные шаги воронки этому человеку больше не уходят
+  // (разбор 11.11.2026: видео и реквизиты прилетали через 3 часа поверх её разговора).
+  await cancelPendingFunnelSteps(contact.id, "остановлено: Ширин ответила сама");
 
   /**
    * ГОЛОСОВОЙ/ФОТО/ВИДЕО ОТВЕТ ХОЗЯЙКИ — СОХРАНЯЕМ И РАСШИФРОВЫВАЕМ (22.08,
@@ -302,7 +326,7 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
    * скачивается и сохраняется своей копией прямо здесь, даже если распознавание
    * речи не пригодится (фото/видео) или не получится.
    *
-   * Постоянная пауза уже записана выше. Медленные скачивание и расшифровка
+   * Пауза уже записана выше. Медленные скачивание и расшифровка
    * только дополняют историю и не оставляют окно для ответа бота.
    */
   const attachment = (msg.attachments ?? []).find(
@@ -336,6 +360,9 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
   if (echoText || ownerMedia) {
     // Graph may return its send result after the echo. Give recordOutgoingMessage
     // time to correct byHuman before admitting this sample into style learning.
+    // Ожидание — вне потолка очереди вебхуков (webhookInbox.ts): шесть эхо подряд
+    // иначе держали бы все места по 20 с.
+    releaseInboxSlot();
     await new Promise<void>((resolve) => setTimeout(resolve, 20_000));
     if (!(await prisma.message.findUnique({ where: { mid: msg.mid } }))?.byHuman) return;
     const lastIn = await prisma.message.findFirst({
@@ -362,8 +389,9 @@ const ABUSE_LABEL: Record<NonNullable<ReturnType<typeof detectAbuse>>, string> =
   spam: "рекламный спам",
 };
 
-function isHumanSilenced(contact: { humanSilencedUntil: Date | null; humanTakenOverAt?: Date | null }): boolean {
-  return Boolean(contact.humanTakenOverAt) || !!contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > Date.now();
+/** Одна дверь с отправкой: пауза после живого ответа Ширин временная (см. automation.ts). */
+function isHumanSilenced(contact: { channel?: string; humanSilencedUntil: Date | null; humanTakenOverAt?: Date | null }): boolean {
+  return humanSilenceActive(contact);
 }
 
 /**
@@ -436,32 +464,54 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
    *  — это ЧУЖАЯ публикация: посмотреть её мы не можем, Meta чужие файлы не
    *    отдаёт, а гадать — значит выдумывать. Решение владельца: молчание.
    */
-  const sharedUrl =
-    (msg.attachments ?? []).find((a) => a.type && SHARED_TYPES.has(a.type))?.payload?.url ??
-    msg.reply_to?.story?.url;
-  const sharedStoryId = msg.reply_to?.story?.id;
+  const sharedAttachment = (msg.attachments ?? []).find((a) => a.type && SHARED_TYPES.has(a.type));
+  const sharedUrl = sharedAttachment?.payload?.url ?? msg.reply_to?.story?.url;
+  const reelId = sharedAttachment?.payload?.reel_video_id;
+  const sharedMediaId = msg.reply_to?.story?.id ?? (reelId !== undefined && reelId !== null ? String(reelId) : undefined);
+  /** Ответ на ИСТОРИЮ (reply_to.story) — это всегда НАША история: ответить на
+   *  чужую историю в наш директ нельзя. */
+  const repliesToOurStory = Boolean(msg.reply_to?.story);
   let ownMediaHint: string | undefined;
 
-  if (sharedUrl || sharedStoryId) {
-    const own = await findOwnMedia({ url: sharedUrl, mediaId: sharedStoryId }).catch((err) => {
+  if (sharedUrl || sharedMediaId) {
+    const own = await findOwnMedia({ url: sharedUrl, mediaId: sharedMediaId }).catch((err) => {
       logError("webhook:handleIncomingDm:findOwnMedia", err);
       return null;
     });
-    if (!own) return; // чужой ролик — молчим, даже если к нему что-то написали
-    // Обложку отдаём модели глазами, подпись — текстом: вместе они объясняют,
-    // о чём спрашивает человек, лучше, чем сам ролик без подписи.
-    const preview = viewableUrl(own);
-    if (preview) attachments.push({ url: preview, kind: "image" });
-    ownMediaHint =
-      `[Человек прислал НАШУ публикацию и спрашивает про неё. Подпись публикации: ` +
-      `${own.caption?.slice(0, 600) || "(без подписи)"}]`;
+    if (own) {
+      // Обложку отдаём модели глазами, подпись — текстом: вместе они объясняют,
+      // о чём спрашивает человек, лучше, чем сам ролик без подписи.
+      const preview = viewableUrl(own);
+      if (preview) attachments.push({ url: preview, kind: "image" });
+      ownMediaHint =
+        `[Человек прислал НАШУ публикацию и спрашивает про неё. Подпись публикации: ` +
+        `${own.caption?.slice(0, 600) || "(без подписи)"}]`;
+    } else if (repliesToOurStory) {
+      // ОТВЕТ НА НАШУ ИСТОРИЮ, КОТОРУЮ НЕ НАШЛИ В ЛЕНТЕ (разбор 09.11.2026).
+      // Раньше это считалось «чужим роликом» и молчало, а с ним пропадал и сам
+      // вопрос: «сколько стоит курс?» под свежей историей терялся целиком, даже
+      // в базу не попадал. История не находится, когда её только что выложили
+      // (лента в памяти несколько минут), когда она уже исчезла или когда Meta
+      // не отдала /me/stories. Но чья она — известно точно: ответить на чужую
+      // историю в наш директ нельзя. Отвечаем на текст человека, не выдумывая
+      // её содержимое.
+      ownMediaHint = "[Человек ответил на НАШУ историю в Instagram. Что было в истории, нам не видно — отвечайте на его слова и не описывайте саму историю.]";
+    } else if (text && showsCourseInterest(text)) {
+      // ЧУЖАЯ публикация, но в том же сообщении вопрос про курс или цену —
+      // отвечаем на вопрос (владелец 09.11.2026: «если касаются курса — в
+      // личку»). Саму публикацию по-прежнему не обсуждаем: её не видно.
+      ownMediaHint = "[Человек переслал чужую публикацию — её содержимое нам не видно. Отвечайте только на его вопрос, саму публикацию не описывайте.]";
+    } else {
+      return; // чужой ролик без вопроса про курс — молчим (решение владельца)
+    }
   }
 
   // Раньше сообщение без текста (только фото/видео/голосовое) отбрасывалось здесь —
   // бот их физически не видел. Теперь вложение без подписи тоже доходит до ИИ.
   if (!text && !payload && attachments.length === 0) return;
 
-  const contact = await upsertContact(senderId, null, channel);
+  let contact = await upsertContact(senderId, null, channel);
+  await loadHumanSilenceMs();
   if (msg.mid) {
     try {
       await prisma.message.create({ data: { contactId: contact.id, direction: "IN", mid: msg.mid, text, payload } });
@@ -505,12 +555,18 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // в историю всё равно идёт: переписка сохраняется, просто без ответов бота.
   // То же для заблокированных за спам/флирт (владелец 05.09.2026) — снять
   // блок можно из панели «Ученицы».
-  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return;
+  // Исключение — АВТО-отметка «Ширин подписана»: если человек нажал кнопку
+  // воронки или пишет про курс/цену, это клиент, и отметка снимается
+  // (profiles.ts::releaseFollowSilenceIfClient, владелец 09.11.2026). Ручную
+  // отметку бот не снимает никогда.
+  contact = await releaseFollowSilenceIfClient(contact, { text: textOrVoice, payload });
   if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
+  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return;
 
-  // На кого подписана Ширин (знакомые, родня, поставщики) — бот молчит; платящих
-  // и тех, кто прислал картинку (возможный чек), не трогаем. См. profiles.ts.
-  if (await silenceIfFollowedByBusiness(contact, { hasImage: attachments.some((a) => a.kind === "image") })) return;
+  // На кого подписана Ширин (знакомые, родня, поставщики) — бот молчит; платящих,
+  // пишущих про курс и тех, кто прислал картинку (возможный чек), не трогаем.
+  // См. profiles.ts.
+  if (await silenceIfFollowedByBusiness(contact, { hasImage: attachments.some((a) => a.kind === "image"), text: textOrVoice, payload })) return;
 
 
   // ФЛИРТ / ОСКОРБЛЕНИЯ / РЕКЛАМНЫЙ СПАМ / ВИДЕО БЕЗ ТЕКСТА в директе от того,
@@ -537,11 +593,21 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     return;
   }
 
+  const hasAttachments = attachments.length > 0;
+
   // Frozen means funnel-only, including before receipt intake and signup.
   // Preserve the incoming history and human takeover rules, then stop here.
   if (frozen || (await getSetting("botFrozen")) === "true") {
-    if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload);
+    if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable: false });
     return;
+  }
+
+  // Клиент написал сам (не нажал кнопку) — отложенные шаги воронки отменяются:
+  // разговор пошёл живьём, шаблон поверх него звучит как автомат (пункт 6, 11.11.2026).
+  // Только если ответит ИИ (включён, не пауза, ключи есть) и сообщение не пустяк
+  // («рахмат», «ок»): иначе человек остался бы и без шага, и без ответа (ревью 11.11.2026).
+  if (!payload && (await clientMessageStopsFunnel(textOrVoice, attachments))) {
+    await cancelPendingFunnelSteps(contact.id, "остановлено: клиент написал сам");
   }
 
   // Only the confirmed pending course delivery may continue after human takeover.
@@ -588,21 +654,43 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   }
 
   // Хозяйка сама ведёт разговор — бот не встревает, даже если пришли кнопка или
-  // ключевое слово воронки. Постоянную паузу снимает только владелец.
-  if (isHumanSilenced(contact)) return;
+  // ключевое слово воронки. Пауза временная: humanSilenceHours от её последнего
+  // ответа (messaging/automation.ts); пропущенное за паузу подберёт сторож
+  // unansweredWatch.ts.
+  if (isHumanSilenced(contact)) {
+    // ЧЕК ПРИ ШИРИН (владелец 11.11.2026): Ширин переписывается, а клиент прислал
+    // настоящий чек — бот САМ проверяет его сразу и выдаёт ссылку (дверь
+    // verified_receipt_access пропускает это через паузу). Раньше чек ждал
+    // фоновой перепроверки 3+ минуты, Ширин за это время отправляла ссылку
+    // руками, и владельцу уходило «Чек требует проверки: похоже, Ширин уже
+    // отправила ссылку вне системы». Текстом бот по-прежнему не отвечает.
+    if (rescuedImages.length > 0) {
+      await verifyReceiptsNow(contact, rescuedImages).catch((err) => logError("webhook:receiptDuringHuman", err));
+    }
+    return;
+  }
 
-  const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload);
+  const aiAvailable = (await getSetting("aiEnabled")) === "true";
+  const handledByFunnel = await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable });
   if (handledByFunnel || (!textOrVoice && attachments.length === 0)) return;
 
   // Человеческий тайминг: ждём, вдруг человек допишет ещё пузырь — отвечаем на
-  // всё сразу, максимум через 9 секунд после последнего сообщения.
+  // всё сразу одним ответом (окно и потолок — debounce.ts).
   // Подсказка про нашу публикацию идёт вместе с текстом человека — модель должна
   // знать, о чём он спрашивает, ещё до того, как посмотрит обложку.
   const textForAi = ownMediaHint ? `${ownMediaHint}\n${textOrVoice ?? ""}`.trim() : textOrVoice ?? "";
 
+  // С этого момента считаем «ответили ли человеку» — для отложенной воронки ниже.
+  const answerWindowFrom = new Date();
   await debounceMessage(contact.id, textForAi, attachments, rescuedImages, async (mergedText, mergedAttachments, mergedRescued) => {
-    const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-    if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
-    await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
+    try {
+      const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
+      if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
+      await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
+    } finally {
+      // Первый вопрос без меню: ответ реально ушёл — воронка пропущена; ИИ
+      // промолчал или упал — человеку уходит обычное меню (funnel.ts::settleDeferredFunnel).
+      await settleDeferredFunnel(contact.id, answerWindowFrom).catch((err) => logError("webhook:deferredFunnel", err));
+    }
   });
 }

@@ -22,19 +22,77 @@ export const DELIVERY_QUESTION = {
 /** Only short explicit answers. An unrelated 'yes' is handled below only when
  * the latest outgoing message is this exact pending delivery question. */
 export function parseDeliveryAnswer(text: string): { choice: CourseDeliveryChoice; explicit: boolean } | null {
-  const value = text.toLowerCase().trim().replace(/[.!?]+$/u, "").trim();
+  const value = text
+    .toLowerCase()
+    .trim()
+    .replace(/[.!?]+$/u, "")
+    .trim();
   if (/^(да|ага|есть|ҳа|ха|бале|дорам|ҳаст|хаст|yes)$/u.test(value)) return { choice: "telegram", explicit: false };
   if (/^(нет|не|надорам|нест|no)$/u.test(value)) return { choice: "web", explicit: false };
-  if (/^(?:да[, ]+)?(?:у меня есть |есть )?(?:telegram|телеграм)(?: есть| дорам| ҳаст| хаст)?$/u.test(value)) return { choice: "telegram", explicit: true };
-  if (/^(?:(?:у меня нет |нет )(?:telegram|телеграм)|(?:telegram|телеграм)(?: нет| надорам| нест))$/u.test(value) || /^(?:на сайте|сайт|дар сайт|через сайт)$/u.test(value)) return { choice: "web", explicit: true };
+  if (/^(?:да[, ]+)?(?:у меня есть |есть )?(?:telegram|телеграм)(?: есть| дорам| ҳаст| хаст)?$/u.test(value))
+    return { choice: "telegram", explicit: true };
+  if (
+    /^(?:(?:у меня нет |нет )(?:telegram|телеграм)|(?:telegram|телеграм)(?: нет| надорам| нест))$/u.test(value) ||
+    /^(?:на сайте|сайт|дар сайт|через сайт)$/u.test(value)
+  )
+    return { choice: "web", explicit: true };
   return null;
+}
+
+/**
+ * TELEGRAM ИЛИ САЙТ — ДО ОПЛАТЫ (владелец 11.11.2026).
+ *
+ * Уроки есть в обоих местах: Telegram-группа и наш сайт (COURSE70 — 21 урок,
+ * COURSE50 — 10 уроков, все готовы). Раньше бот отвечал «бе телеграм намешад» —
+ * и человек без Telegram уходил. Теперь «телеграм надорам», «ватсап мешавад?»,
+ * «нет телеграма» до оплаты = запомнить способ «сайт» для этого человека; после
+ * чека grantCourses (через deliveryModeFor) сам выдаст ссылку на сайт.
+ * «Телеграм дорам» после выбранного сайта — вернуть Telegram.
+ *
+ * Пишем только если выбора ещё нет или он другой и ссылка ещё не выдана:
+ * после выдачи способ не меняем молча (это делает владелец кнопкой).
+ */
+const NO_TELEGRAM =
+  /(телеграм\p{L}*|telegram|телега)[^.!?\n]{0,20}(надор\p{L}*|нест|нету|нет|не\s+(?:имею|пользуюсь|работает|устан\p{L}*|скача\p{L}*)|ичозат\s+нест|кор\s+намекун\p{L}*|намеш\p{L}*)|(нет|нету|не\s+имею|не\s+пользуюсь)\s+(у\s+меня\s+)?(телеграм\p{L}*|telegram)|(ватсап\p{L}*|вацап\p{L}*|whatsapp|вотсап\p{L}*)[^.!?\n]{0,20}(мешав\p{L}*|мешад|мешава|можно|нельзя|рои\s+мекун\p{L}*)|бе\s+телеграм|без\s+телеграм\p{L}*/iu;
+const HAS_TELEGRAM = /(телеграм\p{L}*|telegram)\s+(дорам|хаст|ҳаст|есть)|(есть|имею)\s+(телеграм\p{L}*|telegram)/iu;
+
+export function saysNoTelegram(text: string | null | undefined): boolean {
+  return !!text && NO_TELEGRAM.test(text);
+}
+
+export function saysHasTelegram(text: string | null | undefined): boolean {
+  return !!text && !saysNoTelegram(text) && HAS_TELEGRAM.test(text);
+}
+
+/** Запомнить, куда человеку удобнее получить уроки. Возвращает выбор или null (не понял / не трогаем). */
+export async function rememberDeliveryPreference(
+  contact: Contact,
+  text: string | null | undefined,
+): Promise<CourseDeliveryChoice | null> {
+  if (["WEB", "MANUAL"].includes(contact.channel)) return null;
+  const wanted: CourseDeliveryChoice | null = saysNoTelegram(text) ? "web" : saysHasTelegram(text) ? "telegram" : null;
+  if (!wanted) return null;
+  if (contact.courseDeliveryChoice === wanted) return wanted;
+  // Ссылка уже выдана — способ не меняем молча.
+  const delivered = await prisma.purchase.count({
+    where: { contactId: contact.id, revokedAt: null, inviteLink: { not: null } },
+  });
+  if ((delivered ?? 0) > 0) return null;
+  // «Телеграм дорам» без прежнего выбора «сайт» ничего не меняет: Telegram и так по умолчанию.
+  if (wanted === "telegram" && contact.courseDeliveryChoice !== "web") return null;
+  await prisma.contact.updateMany({ where: { id: contact.id }, data: { courseDeliveryChoice: wanted } });
+  contact.courseDeliveryChoice = wanted;
+  return wanted;
 }
 
 /** Called only from the confirmed-payment grant path. Purchases are durable
  * before asking, so losing the question never loses the paid entitlement. */
 export async function deferGrantForChoice(
-  contact: Contact, plan: Allocation, amount: number,
-  verdict: { amount: number | null; currency?: string | null }, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" },
+  contact: Contact,
+  plan: Allocation,
+  amount: number,
+  verdict: { amount: number | null; currency?: string | null },
+  opts: { byHuman?: boolean; purpose?: "verified_receipt_access" },
 ): Promise<boolean> {
   if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel)) return false;
   // Вопрос «куда прислать уроки» нужен только когда владелец выбрал «обе ссылки» (both).
@@ -48,7 +106,7 @@ export async function deferGrantForChoice(
     return false;
   }
   if (fresh.accessRevokedAt || fresh.spamBlockedAt) return true;
-  if (!opts.byHuman && await isBotFrozen()) return true;
+  if (!opts.byHuman && (await isBotFrozen())) return true;
   const createdIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     // Сумма делится только между НОВЫМИ покупками (ревью PR 72): курс, выданный
@@ -154,24 +212,42 @@ export async function askOrRemindDeliveryChoice(contact: Contact, opts: { byHuma
 }
 
 export async function awaitingDeliveryChoice(contactId: string): Promise<boolean> {
-  const waiting = (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
+  const waiting =
+    (await prisma.purchase.count({ where: { contactId, revokedAt: null, deliveryAwaitingChoice: true } })) > 0;
   if (!waiting) return false;
   // Ширин уже выдала доступ руками - ожидание выбора снимается, бот молчит (08.11.2026).
   return !(await settleChoiceIfHandedOut(contactId));
 }
 
-export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {}): Promise<boolean> {
-  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice)) return false;
-  if (!opts.byHuman && await isBotFrozen()) return false;
+export async function askDeliveryChoice(
+  contact: Contact,
+  opts: { byHuman?: boolean; purpose?: "verified_receipt_access" } = {},
+): Promise<boolean> {
+  if (["WEB", "MANUAL", "WHATSAPP"].includes(contact.channel) || isDeliveryChoice(contact.courseDeliveryChoice))
+    return false;
+  if (!opts.byHuman && (await isBotFrozen())) return false;
   if (await settleChoiceIfHandedOut(contact.id)) return false;
   const claim = await prisma.contact.updateMany({
-    where: { id: contact.id, courseDeliveryChoice: null, deliveryChoicePromptState: null, accessRevokedAt: null, spamBlockedAt: null },
+    where: {
+      id: contact.id,
+      courseDeliveryChoice: null,
+      deliveryChoicePromptState: null,
+      accessRevokedAt: null,
+      spamBlockedAt: null,
+    },
     data: { deliveryChoicePromptState: "SENDING", deliveryChoiceAskedAt: new Date() },
   });
   if (claim.count !== 1) return false;
-  const lastIn = await prisma.message.findFirst({ where: { contactId: contact.id, direction: "IN" }, orderBy: { createdAt: "desc" } });
-  const lang = contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
-    ? contact.preferredLanguage : (await contactLanguage(contact.id, lastIn?.text ?? "")) === "ru" ? "ru" : "tg";
+  const lastIn = await prisma.message.findFirst({
+    where: { contactId: contact.id, direction: "IN" },
+    orderBy: { createdAt: "desc" },
+  });
+  const lang =
+    contact.preferredLanguage === "ru" || contact.preferredLanguage === "tg"
+      ? contact.preferredLanguage
+      : (await contactLanguage(contact.id, lastIn?.text ?? "")) === "ru"
+        ? "ru"
+        : "tg";
   const text = DELIVERY_QUESTION[lang];
   let sent = false;
   try {
@@ -179,14 +255,20 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
     if (!mid) throw new Error("Delivery-choice question acknowledgement missing");
     sent = true;
     await recordOutgoingMessage(contact.id, text, mid);
-    await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: mid } });
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: mid },
+    });
     return true;
   } catch (err) {
     const uncertain = sent || metaFailureKind(err) === "AMBIGUOUS";
-    await prisma.contact.update({ where: { id: contact.id }, data: {
-      deliveryChoicePromptState: uncertain ? "UNKNOWN" : "FAILED",
-      ...(!uncertain ? { deliveryChoiceAskedAt: null } : {}),
-    } });
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: {
+        deliveryChoicePromptState: uncertain ? "UNKNOWN" : "FAILED",
+        ...(!uncertain ? { deliveryChoiceAskedAt: null } : {}),
+      },
+    });
     logError("deliveryChoice:question", err);
     return false;
   }
@@ -195,10 +277,14 @@ export async function askDeliveryChoice(contact: Contact, opts: { byHuman?: bool
 /** Deterministic entry before the model and access recovery. No fresh payment,
  * no question state, or an unrelated answer => never chooses a delivery mode. */
 export async function handleDeliveryChoiceReply(contact: Contact, text: string): Promise<boolean> {
-  const receipt = await prisma.receiptCheck.findFirst({ where: {
-    contactId: contact.id, awaitingDeliveryChoice: true,
-    OR: [{ ownerDecision: "APPROVED" }, { ownerDecision: null, kind: "valid" }],
-  }, select: { imageHash: true } });
+  const receipt = await prisma.receiptCheck.findFirst({
+    where: {
+      contactId: contact.id,
+      awaitingDeliveryChoice: true,
+      OR: [{ ownerDecision: "APPROVED" }, { ownerDecision: null, kind: "valid" }],
+    },
+    select: { imageHash: true },
+  });
   return receipt?.imageHash
     ? withVerifiedReceiptDelivery(contact.id, receipt.imageHash, () => handleChoice(contact, text, true))
     : handleChoice(contact, text, false);
@@ -207,9 +293,22 @@ export async function handleDeliveryChoiceReply(contact: Contact, text: string):
 async function handleChoice(contact: Contact, text: string, verifiedReceipt: boolean): Promise<boolean> {
   if (await isBotFrozen()) return false;
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-  if (!fresh || fresh.accessRevokedAt || contactAutomationBlocked(fresh, verifiedReceipt ? "verified_receipt_access" : "reply") || !await awaitingDeliveryChoice(contact.id)) return false;
-  if ((!fresh.deliveryChoicePromptState || fresh.deliveryChoicePromptState === "FAILED") && !isDeliveryChoice(fresh.courseDeliveryChoice)) {
-    if (fresh.deliveryChoicePromptState === "FAILED") await prisma.contact.updateMany({ where: { id: contact.id, deliveryChoicePromptState: "FAILED" }, data: { deliveryChoicePromptState: null } });
+  if (
+    !fresh ||
+    fresh.accessRevokedAt ||
+    contactAutomationBlocked(fresh, verifiedReceipt ? "verified_receipt_access" : "reply") ||
+    !(await awaitingDeliveryChoice(contact.id))
+  )
+    return false;
+  if (
+    (!fresh.deliveryChoicePromptState || fresh.deliveryChoicePromptState === "FAILED") &&
+    !isDeliveryChoice(fresh.courseDeliveryChoice)
+  ) {
+    if (fresh.deliveryChoicePromptState === "FAILED")
+      await prisma.contact.updateMany({
+        where: { id: contact.id, deliveryChoicePromptState: "FAILED" },
+        data: { deliveryChoicePromptState: null },
+      });
     await askDeliveryChoice(fresh, verifiedReceipt ? { purpose: "verified_receipt_access" } : {});
     return true;
   }
@@ -223,25 +322,42 @@ async function handleChoice(contact: Contact, text: string, verifiedReceipt: boo
   }
   if (isDeliveryChoice(fresh.courseDeliveryChoice) && fresh.courseDeliveryChoice !== answer.choice) return false;
   const chosen = await prisma.contact.updateMany({
-    where: { id: contact.id, accessRevokedAt: null, spamBlockedAt: null,
-      OR: [{ courseDeliveryChoice: null }, { courseDeliveryChoice: answer.choice }], deliveryChoiceDispatchAt: null },
+    where: {
+      id: contact.id,
+      accessRevokedAt: null,
+      spamBlockedAt: null,
+      OR: [{ courseDeliveryChoice: null }, { courseDeliveryChoice: answer.choice }],
+      deliveryChoiceDispatchAt: null,
+    },
     data: { courseDeliveryChoice: answer.choice, deliveryChoiceDispatchAt: new Date() },
   });
   if (chosen.count !== 1) return true;
   let dispatchFailed = false;
   try {
-    const pending = await prisma.purchase.findMany({ where: {
-      contactId: contact.id, revokedAt: null, deliveryAwaitingChoice: true, accessDeliveryUncertainAt: null,
-    } });
+    const pending = await prisma.purchase.findMany({
+      where: {
+        contactId: contact.id,
+        revokedAt: null,
+        deliveryAwaitingChoice: true,
+        accessDeliveryUncertainAt: null,
+      },
+    });
     const grant = pending.map((p) => p.course).filter((c): c is Course => c === "COURSE50" || c === "COURSE70");
-    if (grant.length > 0 && !await isBotFrozen()) {
+    if (grant.length > 0 && !(await isBotFrozen())) {
       const { grantCourses } = await import("../ai/grantCourses.js");
-      await grantCourses({ ...fresh, courseDeliveryChoice: answer.choice }, { grant, note: "выбран способ обучения" },
-        pending.reduce((sum, p) => sum + p.amount, 0), { amount: null, currency: "TJS" }, { fromDeliveryChoice: true });
+      await grantCourses(
+        { ...fresh, courseDeliveryChoice: answer.choice },
+        { grant, note: "выбран способ обучения" },
+        pending.reduce((sum, p) => sum + p.amount, 0),
+        { amount: null, currency: "TJS" },
+        { fromDeliveryChoice: true },
+      );
     }
-    if (!await awaitingDeliveryChoice(contact.id)) {
-      await prisma.receiptCheck.updateMany({ where: { contactId: contact.id, awaitingDeliveryChoice: true },
-        data: { linkSent: true, awaitingDeliveryChoice: false } });
+    if (!(await awaitingDeliveryChoice(contact.id))) {
+      await prisma.receiptCheck.updateMany({
+        where: { contactId: contact.id, awaitingDeliveryChoice: true },
+        data: { linkSent: true, awaitingDeliveryChoice: false },
+      });
     }
   } catch (err) {
     dispatchFailed = true;
@@ -249,7 +365,8 @@ async function handleChoice(contact: Contact, text: string, verifiedReceipt: boo
     // A process/network uncertainty must be investigated, not blindly replayed.
     throw err;
   } finally {
-    if (!dispatchFailed) await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoiceDispatchAt: null } });
+    if (!dispatchFailed)
+      await prisma.contact.update({ where: { id: contact.id }, data: { deliveryChoiceDispatchAt: null } });
   }
   return true;
 }
