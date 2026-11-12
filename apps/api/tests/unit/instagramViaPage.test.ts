@@ -32,8 +32,14 @@ beforeEach(() => {
 const ok = () => new Response(JSON.stringify({ recipient_id: "1" }), { status: 200 });
 const dead = () =>
   new Response(
-    JSON.stringify({ error: { message: "The session has been invalidated because the user changed their password", type: "OAuthException", code: 190 } }),
-    { status: 401 }
+    JSON.stringify({
+      error: {
+        message: "The session has been invalidated because the user changed their password",
+        type: "OAuthException",
+        code: 190,
+      },
+    }),
+    { status: 401 },
   );
 
 describe("маршрут Instagram", () => {
@@ -76,7 +82,9 @@ describe("Meta отвергла ключ при отправке — трево�
   });
 
   it("обычная ошибка (не ключ) — владельца не будим", async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { code: 100, message: "bad param" } }), { status: 400 }));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 100, message: "bad param" } }), { status: 400 }),
+    );
     await expect(reactToInstagramMessage("igsid-1", "mid-1", "❤️")).rejects.toMatchObject({ kind: "PERMANENT" });
     await new Promise((r) => setTimeout(r, 10));
     expect(sendKind).not.toHaveBeenCalled();

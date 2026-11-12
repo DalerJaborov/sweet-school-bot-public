@@ -45,7 +45,12 @@ export function isPersonalPageToken(info: FbTokenInfo): boolean {
 }
 
 export function formatDate(ms: number): string {
-  return new Date(ms).toLocaleDateString("ru-RU", { timeZone: "Asia/Dushanbe", day: "numeric", month: "long", year: "numeric" });
+  return new Date(ms).toLocaleDateString("ru-RU", {
+    timeZone: "Asia/Dushanbe",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 /** Что с маркером: null — всё хорошо, иначе текст тревоги (уровень уже в тексте). */
@@ -119,6 +124,8 @@ export async function checkFbToken(now = Date.now()): Promise<void> {
   logInfo(
     "fbToken",
     `маркер страницы в порядке, доступ к данным до: ${until}` +
-      (isPersonalPageToken(info) ? " (ключ личный — после смены пароля Facebook умрёт; нужен ключ системного пользователя)" : "")
+      (isPersonalPageToken(info)
+        ? " (ключ личный — после смены пароля Facebook умрёт; нужен ключ системного пользователя)"
+        : ""),
   );
 }
