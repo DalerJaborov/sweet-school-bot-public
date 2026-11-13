@@ -6,10 +6,10 @@ const mocks = vi.hoisted(() => {
     message: { upsert: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
   };
-  return { prisma, aiReply: vi.fn(), rescueImage: vi.fn(), getSetting: vi.fn() };
+  return { prisma, aiReply: vi.fn(), rescueImage: vi.fn(), verifyReceiptsNow: vi.fn(), getSetting: vi.fn() };
 });
 vi.mock("../../src/db.js", () => ({ prisma: mocks.prisma, getSetting: mocks.getSetting, logError: vi.fn() }));
-vi.mock("../../src/ai.js", () => ({ aiReply: mocks.aiReply, rescueImage: mocks.rescueImage }));
+vi.mock("../../src/ai.js", () => ({ aiReply: mocks.aiReply, rescueImage: mocks.rescueImage, verifyReceiptsNow: mocks.verifyReceiptsNow }));
 vi.mock("../../src/upload.js", () => ({ saveOwnerMedia: vi.fn() }));
 vi.mock("../../src/whatsapp/client.js", async importOriginal => ({
   ...await importOriginal<typeof import("../../src/whatsapp/client.js")>(), bridgeRequest: vi.fn(), whatsappConfigured: () => true,
@@ -18,13 +18,14 @@ import { bridgeEventSchema, bridgeRequest, whatsappMessageId } from "../../src/w
 import { dispatchWhatsAppInbox, ingestWhatsAppEvents, isWhatsAppGenerationRetry, processInbox } from "../../src/whatsapp/worker.js";
 import { sendWhatsAppText } from "../../src/whatsapp/transport.js";
 import { withWhatsAppTurn } from "../../src/whatsapp/context.js";
-import { withVerifiedReceiptDelivery } from "../../src/messaging/automation.js";
+import { withVerifiedReceiptDelivery, withContactMessaging } from "../../src/messaging/automation.js";
 const contact = { id: "contact", igUserId: "account:chat", channel: "WHATSAPP" };
 const event = { id: "incoming", messageId: "incoming", accountId: "account", chatId: "chat", type: "incoming", timestamp: Date.now(), text: "Курс?" };
 const safe = { blocked: false, isMyContact: false, identityResolved: true, takenOver: false };
 const turn = { inboxId: "account:incoming", accountId: "account", chatId: "chat", contactId: "contact", messageId: "incoming" };
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.getSetting.mockReset();
   mocks.prisma.contact.findUnique.mockResolvedValue(contact);
   mocks.prisma.contact.upsert.mockResolvedValue(contact);
   mocks.prisma.whatsAppInbox.findUnique.mockResolvedValue({ id: turn.inboxId, accountId: "account", chatId: "chat", contactId: "contact", payload: JSON.stringify(event) });
@@ -36,6 +37,36 @@ beforeEach(() => {
     return {} as never;
   });
 });
+describe("WhatsApp «только чеки» (владелец 13.11.2026)", () => {
+  const receiptsOnly = () => mocks.getSetting.mockImplementation(async (key: string) => key === "whatsappReceiptsOnly" ? "true" : undefined);
+  it("text is recorded without AI reply and without an owner task", async () => {
+    receiptsOnly();
+    await processInbox(turn.inboxId);
+    expect(mocks.aiReply).not.toHaveBeenCalled();
+    expect(mocks.prisma.whatsAppInbox.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "done" }) }));
+  });
+  it("receipt image is checked at once, no AI reply", async () => {
+    receiptsOnly();
+    const image = { buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "https://x/r.jpg", queuedId: "q" };
+    mocks.rescueImage.mockResolvedValueOnce(image);
+    mocks.prisma.whatsAppInbox.findUnique.mockResolvedValueOnce({ ...turn, id: turn.inboxId, payload: JSON.stringify({ ...event, text: "", media: { data: Buffer.from("x").toString("base64"), mimeType: "image/jpeg" } }) });
+    await processInbox(turn.inboxId);
+    expect(mocks.verifyReceiptsNow).toHaveBeenCalledWith(contact, [image]);
+    expect(mocks.aiReply).not.toHaveBeenCalled();
+  });
+  it("send door blocks an ordinary reply but lets the verified-receipt link through", async () => {
+    receiptsOnly();
+    await expect(withWhatsAppTurn(turn, () => withContactMessaging(contact.id, "reply", () => sendWhatsAppText(contact, "Ответ")))).rejects.toThrow("receipts only");
+    mocks.prisma.whatsAppInbox.findMany.mockResolvedValue([{ id: turn.inboxId, accountId: "account", chatId: "chat", replyToId: "incoming", payload: JSON.stringify({ imageHash: "h" }) }]);
+    await expect(withWhatsAppTurn(turn, () => withVerifiedReceiptDelivery(contact.id, "h", () =>
+      withContactMessaging(contact.id, "verified_receipt_access", () => sendWhatsAppText(contact, "Ссылка", [], "verified_receipt_access"))))).resolves.toBe("wa:account:outgoing");
+  });
+  it("switch off: ordinary reply goes as before", async () => {
+    await processInbox(turn.inboxId);
+    expect(mocks.aiReply).toHaveBeenCalled();
+  });
+});
+
 describe("WhatsApp bridge contract", () => {
   it("preserves media failure and accepts bridge maximum text; rejects second timestamps", () => {
     const parsed = bridgeEventSchema.parse({ ...event, text: "x".repeat(12000), mediaUnavailable: "download_failed", takenOver: true });

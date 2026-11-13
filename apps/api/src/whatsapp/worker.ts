@@ -1,5 +1,6 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { aiReply, rescueImage, type RescuedImage } from "../ai.js";
+import { aiReply, rescueImage, verifyReceiptsNow, type RescuedImage } from "../ai.js";
+import { whatsappReceiptsOnly } from "../messaging/automation.js";
 import { bridgeRequest, bridgeEventSchema, whatsappConfigured, whatsappMessageId, type BridgeEvent, type ContactStatus } from "./client.js";
 import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
@@ -118,6 +119,13 @@ export async function processInbox(id: string): Promise<void> {
   if (check.takenOver && !contact.humanTakenOverAt) {
     await prisma.contact.update({ where: { id: contact.id }, data: { humanTakenOverAt: new Date() } });
   }
+  // «Только чеки»: всё, кроме картинки, просто записано в историю — без ответа и без
+  // задачи «нужен ответ» (Ширин видит переписку у себя в телефоне).
+  const receiptsOnly = await whatsappReceiptsOnly();
+  if (receiptsOnly && !event.media?.mimeType.startsWith("image/")) {
+    await prisma.whatsAppInbox.updateMany({ where: { id, status: "processing" }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+    return;
+  }
   if (event.mediaUnavailable) throw attentionError("media_unavailable", `Вложение WhatsApp недоступно: ${event.mediaUnavailable}; нужен ответ хозяйки`);
   if (!event.text.trim() && !event.media) throw attentionError("empty", "Пустое сообщение WhatsApp не передаётся ИИ");
   await withWhatsAppTurn({ inboxId: id, contactId: contact.id, accountId: row.accountId, chatId: row.chatId, messageId: event.messageId }, async () => {
@@ -138,7 +146,14 @@ export async function processInbox(id: string): Promise<void> {
     // Owner takeover suppresses ordinary conversation but image intake remains
     // durable: the existing verified receipt worker can deliver paid access.
     const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-    if (!fresh || fresh.humanTakenOverAt || check.takenOver) return;
+    if (!fresh) return;
+    // Бот молчит (рубильник «только чеки» или Ширин ведёт чат сама), но чек
+    // разбирается сразу: настоящий — ссылка уходит сама, сомнительный — карточка
+    // владельцу. Не вышло — картинка уже в очереди фоновой перепроверки.
+    if (receiptsOnly || fresh.humanTakenOverAt || check.takenOver) {
+      if (images.length) await verifyReceiptsNow(fresh, images);
+      return;
+    }
     if (event.media && !event.media.mimeType.startsWith("image/")) {
       if (!event.media.mimeType.startsWith("audio/")) throw attentionError("attachment", "Вложение требует ответа хозяйки");
       const buffer = Buffer.from(event.media.data, "base64");
