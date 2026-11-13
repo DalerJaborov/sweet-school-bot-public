@@ -45,7 +45,6 @@ export function LessonList({
 
   const ordered = lessonsOf(course);
   const numberById = new Map(ordered.map((lesson, i) => [lesson.id, i + 1]));
-  const nextId = ordered.find((lesson) => !lesson.completed)?.id;
 
   return (
     <>
@@ -70,7 +69,6 @@ export function LessonList({
                 t={t}
                 lesson={lesson}
                 number={numberById.get(lesson.id) ?? 1}
-                isNext={lesson.id === nextId}
                 saved={offline[lesson.id]}
                 savingPercent={saving[lesson.id]}
                 online={online}

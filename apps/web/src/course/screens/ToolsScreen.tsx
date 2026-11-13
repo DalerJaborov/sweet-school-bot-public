@@ -1,6 +1,6 @@
 import type { CourseInfo } from "../api";
-import type { Dict } from "../i18n";
-import { BackButton } from "./BackButton";
+import { TopBar } from "../components/TopBar";
+import type { CourseState } from "../hooks/useCourse";
 
 /**
  * ЭКРАН «НАБОР ИНСТРУМЕНТОВ» (визуальная система 04.09.2026, §5).
@@ -12,14 +12,12 @@ import { BackButton } from "./BackButton";
  * --c-accent-soft: инструмент без фото всё равно нужно узнать на полке
  * магазина, а не только по названию.
  */
-export function ToolsScreen({ t, course, onBack }: { t: Dict; course: CourseInfo; onBack: () => void }) {
+export function ToolsScreen({ state, course, onBack }: { state: CourseState; course: CourseInfo; onBack: () => void }) {
+  const { t } = state;
   const tools = course.toolsData ?? [];
   return (
     <div className="page">
-      <header className="topbar">
-        <BackButton t={t} onClick={onBack} />
-        <h1 className="topbar-title">{t.toolsTitle}</h1>
-      </header>
+      <TopBar state={state} title={t.toolsTitle} onBack={onBack} />
 
       {tools.length === 0 ? (
         <p className="empty-state">{t.noTools}</p>
