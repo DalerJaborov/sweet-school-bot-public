@@ -693,7 +693,7 @@ adminRouter.get("/admin/receipts", async (req, res) => {
   const { rows, hasMore } = paginate(receipts, take);
   // «Какой это курс, судя по сумме» — те же допуски, что у allocate(), чтобы
   // панель не держала свою копию цен (inbox чеков показывает это чипом).
-  res.json({ hasMore, rows: rows.map((r) => ({ ...r, courseGuess: guessCourse(r.amount, prices) })) });
+  res.json({ hasMore, rows: await Promise.all(rows.map(async (r) => ({ ...r, courseGuess: await guessCourse(r.amount, prices) }))) });
 });
 
 /**

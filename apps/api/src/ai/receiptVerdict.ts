@@ -1,4 +1,5 @@
-import { awaitingDeliveryChoice, askDeliveryChoice } from "../course/deliveryChoice.js";
+import { awaitingDeliveryChoice, askOrRemindDeliveryChoice } from "../course/deliveryChoice.js";
+import { withVerifiedReceiptDelivery as inReceiptScope } from "../messaging/automation.js";
 import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
@@ -46,10 +47,10 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
   // его запутало бы. Отвечаем, что перевод уже принят.
   const justPaid = await prisma.receiptCheck.findFirst({
     where: { contactId: contact.id, OR: ACCEPTED_WHERE, createdAt: { gte: new Date(Date.now() - 2 * SAME_TRANSFER_WINDOW_MS) } },
-    select: { id: true },
+    select: { id: true, imageHash: true },
   });
   if (justPaid) {
-    await tellAlreadyAccepted(contact, lastText);
+    await tellAlreadyAccepted(contact, lastText, justPaid.imageHash);
     return;
   }
   const texts = await getSalesTexts();
@@ -163,11 +164,15 @@ async function notifyHashTaken(contact: Contact, otherContactId: string, amount:
   }
 }
 
-async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null): Promise<boolean> {
+async function tellAlreadyAccepted(contact: Contact, lastText: string | null = null, evidenceHash: string | null = null): Promise<boolean> {
   // Ссылки ещё нет (ждём ответа про Telegram) - не обещаем "ссылка выше", а
   // спрашиваем снова.
   if (await awaitingDeliveryChoice(contact.id)) {
-    return askDeliveryChoice(contact);
+    // Вопрос ещё не задавали - задаём; уже задан - напоминаем, но не молчим.
+    // Возвращаем true, только если клиентке РЕАЛЬНО что-то ушло. Отправку "чек
+    // проверен" разрешаем лишь внутри области принятого чека.
+    const run = () => askOrRemindDeliveryChoice(contact, evidenceHash ? { purpose: "verified_receipt_access" } : {});
+    return evidenceHash ? inReceiptScope(contact.id, evidenceHash, run) : run();
   }
   const lastIn = lastText?.trim()
     ? { text: lastText }
@@ -213,7 +218,8 @@ async function askOwner(
   doubts: string[],
   modelReason: string,
   willOpen: string | null = null,
-  closeAsDuplicate = false
+  closeAsDuplicate = false,
+  noCourseForAmount = false
 ): Promise<void> {
   if (await isBotFrozen()) return;
   const botToken = (await getSetting("telegramBotToken"))?.trim();
@@ -232,7 +238,8 @@ async function askOwner(
     (willOpen != null ? `Подтвердить откроет: ${willOpen}\n` : "") +
     (modelReason ? `\nНа чеке: ${modelReason.slice(0, 200)}` : "");
 
-  const needsCourseChoice = verdict.amount == null;
+  // Нет суммы или сумма не подходит ни к одному курсу: вместо "Подтвердить" - выбор курса.
+  const needsCourseChoice = verdict.amount == null || noCourseForAmount;
   for (const chatId of recipients) {
     if (await isBotFrozen()) return;
     const sent = await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice, closeAsDuplicate });
@@ -367,7 +374,7 @@ export async function handleReceiptVerdict(
           },
         })) > 0;
       if (tjs && !explainedByOtherReceipt) {
-        const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(verdict.amount as number));
+        const state = await receiptServedState(contact.id, queued.createdAt, await coursesForAmount(Math.round(verdict.amount as number)));
         if (state === "served") {
           await prisma.receiptCheck.update({
             where: { id: existingId },
@@ -393,7 +400,8 @@ export async function handleReceiptVerdict(
   }
   const previous = await prisma.receiptCheck.findUnique({ where: { imageHash: verdict.imageHash } });
   if (previous?.contactId === contact.id && previous.awaitingDeliveryChoice) {
-    await askDeliveryChoice(contact);
+    // Тот же скриншот, пока ждём ответа про Telegram: напоминание, а не тишина.
+    await tellAlreadyAccepted(contact, null, previous.imageHash);
     return;
   }
   // ТОТ ЖЕ СКРИНШОТ ПРИСЛАН ВТОРОЙ РАЗ ТЕМ ЖЕ ЧЕЛОВЕКОМ (двойной тап, «где ссылка?»).
@@ -402,7 +410,7 @@ export async function handleReceiptVerdict(
   // (человек уже знает, что чек у Ширин), отклонённый — решение владельца в силе.
   if (!existingId && previous && previous.contactId === contact.id && previous.kind !== "unchecked") {
     if (receiptAccepted(previous) || (previous.kind === "duplicate" && /доступ уже открыт/.test(previous.reason))) {
-      await tellAlreadyAccepted(contact);
+      await tellAlreadyAccepted(contact, null, previous.imageHash);
       return;
     }
     if ((previous.ownerDecision === "PENDING" && previous.ownerAlerts) || previous.ownerDecision === "REJECTED") return;
@@ -486,11 +494,12 @@ export async function handleReceiptVerdict(
   // перевод. Тот же номер у другого человека — стоп; у того же — это второй
   // скриншот одного перевода.
   let sameTxn = false;
+  let seenHash: string | null = null;
   const txn = verdict.transactionId?.trim();
   if (txn && txn.length >= 6) {
     const seen = await prisma.receiptCheck.findFirst({
       where: { transactionId: txn, imageHash: { not: verdict.imageHash }, OR: ACCEPTED_WHERE },
-      select: { contactId: true, createdAt: true },
+      select: { contactId: true, createdAt: true, imageHash: true },
     });
     if (seen && seen.contactId !== contact.id) {
       kind = "suspicious";
@@ -499,6 +508,7 @@ export async function handleReceiptVerdict(
       doubts.push("номер операции уже использован другим человеком");
     } else if (seen) {
       sameTxn = true;
+      seenHash = seen.imageHash;
     }
   }
 
@@ -507,6 +517,7 @@ export async function handleReceiptVerdict(
   // платёж и не повод для тревоги.
   let sameTransfer: "settled" | "pending" | null = sameTxn && kind === "valid" ? "settled" : null;
   let sameTransferProven = sameTxn;
+  let sameTransferHash: string | null = seenHash;
   if (kind === "valid" && amount != null && !sameTransfer) {
     const recent = await prisma.receiptCheck.findFirst({
       where: {
@@ -517,13 +528,14 @@ export async function handleReceiptVerdict(
         OR: [...ACCEPTED_WHERE, { ownerDecision: "PENDING", ownerAlerts: { not: null } }],
       },
       orderBy: { createdAt: "desc" },
-      select: { amount: true, linkSent: true, ownerDecision: true, kind: true, awaitingDeliveryChoice: true, transactionId: true },
+      select: { amount: true, linkSent: true, ownerDecision: true, kind: true, awaitingDeliveryChoice: true, transactionId: true, imageHash: true },
     });
     // Два РАЗНЫХ номера операции - это два перевода, а не два скриншота одного.
     const differentTxn = Boolean(recent?.transactionId && txn && txn.length >= 6 && recent.transactionId !== txn);
     if (recent?.amount != null && !differentTxn && Math.abs(recent.amount - amount) <= SAME_TRANSFER_AMOUNT_GAP) {
       sameTransfer = receiptAccepted(recent) ? "settled" : "pending";
       sameTransferProven = Boolean(recent.transactionId && txn && recent.transactionId === txn);
+      sameTransferHash = recent.imageHash;
     }
   }
 
@@ -531,6 +543,7 @@ export async function handleReceiptVerdict(
   // это не соседний скриншот — может быть второй платёж. Не выдаём второй курс
   // за те же деньги; клиентке говорим, что уже принято, владельцу — на глаза.
   let duplicatePayment = false;
+  let duplicateHash: string | null = null;
   if (kind === "valid" && amount != null && !sameTransfer) {
     const sameAmount = await prisma.receiptCheck.findFirst({
       where: {
@@ -540,10 +553,11 @@ export async function handleReceiptVerdict(
         imageHash: { not: verdict.imageHash },
         createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) },
       },
-      select: { createdAt: true },
+      select: { createdAt: true, imageHash: true },
     });
     if (sameAmount) {
       duplicatePayment = true;
+      duplicateHash = sameAmount.imageHash;
       hard = true;
       kind = "suspicious";
       reason = `${reason} (такая же сумма уже открыла доступ ${sameAmount.createdAt.toLocaleString("ru-RU")} — похоже, тот же перевод прислан второй раз)`;
@@ -639,9 +653,12 @@ export async function handleReceiptVerdict(
       ? own.grant.map((c) => COURSE_TITLE[c]).join(", ")
       : own.duplicate
         ? "ничего - курс по этой сумме у клиентки уже есть"
-        : "ничего - сумма не сходится с ценами курсов"
+        : own.revoked.length > 0
+          ? "ничего - доступ по курсу был отозван ранее (вернуть можно в Клиентах)"
+          : "ничего - сумма не сходится с ценами курсов"
     : null;
   const closeAsDuplicate = Boolean(own?.duplicate);
+  const noCourseForAmount = Boolean(own) && own!.wanted.length === 0;
   const waitingForChoice = isClean && (await awaitingDeliveryChoice(contact.id));
   const needsOwner = !linkSent && !waitingForChoice && !closedAsDuplicate;
   const knownFraud = Boolean(blocked) || Boolean(reused);
@@ -716,7 +733,7 @@ export async function handleReceiptVerdict(
     return;
   }
   if (saved && closedAsDuplicate === "settled") {
-    await tellAlreadyAccepted(contact);
+    await tellAlreadyAccepted(contact, null, sameTransferHash);
     if (!sameTransferProven) {
       await notifyOwnerText(contact, `второй скриншот принят как повтор уже принятого перевода (${amount != null ? Math.round(amount * 100) / 100 : "?"} сомони), номер операции не подтвердил. Если это новый перевод - откройте чек в панели.`);
     }
@@ -742,17 +759,17 @@ export async function handleReceiptVerdict(
   } else if (saved && duplicatePayment) {
     // Если клиентка ждёт вопроса про Telegram и вопрос уже задан, "принято" не
     // скажешь - ссылки ещё нет: тогда обычное "чек получила, передаю Ширин".
-    const told = await tellAlreadyAccepted(contact);
+    const told = await tellAlreadyAccepted(contact, null, duplicateHash);
     if (!told) await notifyCustomerReceiptForwarded(contact, saved);
     if (await isBotFrozen()) return;
-    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate, noCourseForAmount);
   } else if (saved && needsOwner) {
     if (contact.askedAltScreenshotAt) {
       await prisma.contact.update({ where: { id: contact.id }, data: { askedAltScreenshotAt: null } }).catch((err) => {
         logError("receiptVerdict:resetAltFlagAfterSecond", err);
       });
     }
-    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+    await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate, noCourseForAmount);
     // Мошеннику (чёрный список, повторный скриншот) ничего не обещаем —
     // владелец сам решит, что ему сказать.
     if (!knownFraud && !maybeServed) await notifyCustomerReceiptForwarded(contact, saved);

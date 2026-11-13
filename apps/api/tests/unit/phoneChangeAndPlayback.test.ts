@@ -1,3 +1,4 @@
+import { ACCEPTED_WHERE } from "../../src/receiptAccepted.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../helpers.js";
 
@@ -127,7 +128,7 @@ describe("смена телефона через бота", () => {
       where: {
         contactId: "c-1",
         imageHash: { in: ["hash-1"] },
-        OR: [{ ownerDecision: "APPROVED" }, { linkSent: true }],
+        OR: ACCEPTED_WHERE, // единое понятие "чек принят" (src/receiptAccepted.ts)
       },
     });
     expect(db.model("receiptCheck").create).not.toHaveBeenCalled();

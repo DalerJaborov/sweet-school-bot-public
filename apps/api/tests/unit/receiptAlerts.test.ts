@@ -8,6 +8,7 @@ import { mockPrisma, restorePrisma, fakeContact, type PrismaMock } from "../help
  * карточку («уже обработано»), а тревога по уже выданному доступу закрывается сама.
  */
 const editCaption = vi.fn(async (..._a: unknown[]) => undefined);
+const editKeyboard = vi.fn(async (..._a: unknown[]) => undefined);
 const answerCallback = vi.fn(async (..._a: unknown[]) => undefined);
 vi.mock("../../src/telegram.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/telegram.js")>("../../src/telegram.js");
@@ -15,6 +16,7 @@ vi.mock("../../src/telegram.js", async () => {
     ...actual,
     editCaption: (...a: unknown[]) => editCaption(...a),
     answerCallback: (...a: unknown[]) => answerCallback(...a),
+    editKeyboard: (...a: unknown[]) => editKeyboard(...a),
     trustedChatIds: vi.fn(async () => ["1"]),
   };
 });
@@ -108,6 +110,17 @@ describe("нажатие устаревшей кнопки", () => {
     await press("ok:ghost");
     expect(answerCallback).toHaveBeenCalled();
     expect(editCaption).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("старая карточка с 'Подтвердить' и недоплатой", () => {
+  it("нажатие 'Подтвердить': дорисовываются кнопки выбора курса", async () => {
+    db.model("receiptCheck").findUnique.mockResolvedValue(row({ amount: 40 }));
+    db.model("receiptCheck").updateMany.mockResolvedValue({ count: 1 });
+    await press("ok:r1");
+    expect(editKeyboard).toHaveBeenCalledTimes(1);
+    const kb = editKeyboard.mock.calls[0][3] as { text: string }[][];
+    expect(kb.flat().map((b) => b.text).join(" ")).toMatch(/Арт-десерты/);
   });
 });
 
@@ -213,7 +226,15 @@ describe("сторож: понятие «чек принят» живёт в о�
     const copies = files.filter((f) => {
       if (f.endsWith("receiptAccepted.ts")) return false;
       const text = fsm.readFileSync(f, "utf8");
-      return /OR:\s*\[\s*\{\s*linkSent:\s*true\s*\}\s*,\s*\{\s*ownerDecision:\s*"APPROVED"/.test(text);
+      // любой порядок записи, любые кавычки, in:[...] вместо равенства: в одном OR-массиве
+      // (или в ownerDecision: { in: [...] }) рядом linkSent и одобрение
+      const norm = text.replace(/\s+/g, "").replace(/'/g, '"');
+      const arrays = norm.match(/OR:\[.{0,400}?\]\]?/g) ?? [];
+      const ins = norm.match(/ownerDecision:\{in:\[[^\]]*\]\}/g) ?? [];
+      return (
+        arrays.some((a) => /linkSent:true/.test(a) && /"APPROVED"/.test(a)) ||
+        ins.some((a) => /"APPROVED"/.test(a) && /"HANDLED"/.test(a))
+      );
     });
     expect(copies).toEqual([]);
   });

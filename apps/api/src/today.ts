@@ -9,7 +9,8 @@ import { healthReport } from "./health.js";
 import { storageConfig } from "./storage/s3.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { getPrices } from "./services/priceService.js";
-import { COURSE_50, COURSE_70, COURSE_TITLE, type PriceTable } from "./prices.js";
+import { COURSE_TITLE, type PriceTable } from "./prices.js";
+import { coursesForAmount } from "./courses.js";
 import { completedCoursesSince } from "./metrics.js";
 import { buildMainSummary, type MainSummary } from "./todaySummary.js";
 
@@ -115,14 +116,12 @@ function handleOf(c: { id: string; username?: string | null; igUserId: string; c
   return { contactId: c.id, handle, instagramUrl: instagram, channel: c.channel ?? null };
 }
 
-/** Тот же допуск, что у allocate(): −6 на комиссию, +30 сверху. */
-export function guessCourse(amount: number | null, p: PriceTable): string | null {
+/** Подсказка курса по сумме: те же границы, что у решения владельца (допуск из настроек). */
+export async function guessCourse(amount: number | null, _p?: PriceTable): Promise<string | null> {
   if (amount == null) return null;
-  if (amount >= p.bundle - 6 && amount <= p.bundleFull + 40) return "оба курса";
-  const single = ([COURSE_50, COURSE_70] as const)
-    .filter((c) => amount >= p.price[c] - 6 && amount <= p.price[c] + 30)
-    .sort((a, b) => Math.abs(amount - p.price[a]) - Math.abs(amount - p.price[b]));
-  return single.length > 0 ? COURSE_TITLE[single[0]] : null;
+  const courses = await coursesForAmount(Math.round(amount));
+  if (courses.length >= 2) return "оба курса";
+  return courses.length === 1 ? COURSE_TITLE[courses[0]] : null;
 }
 
 function reviewText(course: string | null): string {
@@ -250,7 +249,7 @@ async function buildToday(): Promise<TodayResponse> {
       who: handleOf(r.contact),
       imageUrl: r.imageUrl,
       amount: r.amount,
-      courseGuess: guessCourse(r.amount, prices),
+      courseGuess: await guessCourse(r.amount, prices),
       reason: r.reason,
       confidence: r.confidence,
       createdAt: r.createdAt.toISOString(),

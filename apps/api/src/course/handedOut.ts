@@ -22,6 +22,26 @@ import { findPanelInviteByLink } from "../links/telegramInvites.js";
  */
 const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
 
+const MANUAL_LINK_ALL = /(?:https?:\/\/)?[^\s]*\/l\/[A-Za-z0-9_-]{10,}|(?:https?:\/\/)?t\.me\/(?:\+|joinchat\/)[\w-]+/gi;
+
+/** Настоящие ссылки, которые Ширин вручную присылала клиентке, ПОШТУЧНО (по возрастанию времени). */
+export async function manualLinks(contactId: string, since: Date): Promise<{ url: string; at: Date }[]> {
+  // ПОСЛЕДНИЕ 50 сообщений (по убыванию) и разворот: иначе длинная переписка с
+  // Ширин теряет свежую ссылку (ревью PR 72).
+  const latest = await prisma.message.findMany({
+    where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+    select: { text: true, createdAt: true },
+  });
+  const rows = [...(latest ?? [])].reverse();
+  const out: { url: string; at: Date }[] = [];
+  for (const m of rows) {
+    for (const hit of (m.text ?? "").match(MANUAL_LINK_ALL) ?? []) out.push({ url: hit, at: m.createdAt });
+  }
+  return out;
+}
+
 export async function manualLinkSince(contactId: string, since: Date): Promise<boolean> {
   const rows = await prisma.message.findMany({
     where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
@@ -88,7 +108,7 @@ export async function deliveredCoursesSince(contactId: string, since: Date): Pro
       contactId,
       revokedAt: null,
       accessDeliveryUncertainAt: null,
-      inviteLink: { not: null },
+      OR: [{ inviteLink: { not: null } }, { accessIssuedAt: { not: null } }],
       createdAt: { gte: since },
     },
     select: { course: true },
@@ -119,18 +139,44 @@ export async function receiptServedState(contactId: string, since: Date, courses
 export async function settleChoiceIfHandedOut(contactId: string): Promise<boolean> {
   const waiting = await prisma.purchase.findMany({
     where: { contactId, revokedAt: null, deliveryAwaitingChoice: true },
-    select: { id: true, createdAt: true, inviteLink: true },
+    select: { id: true, createdAt: true, inviteLink: true, course: true },
   });
   if (!waiting || waiting.length === 0) return false;
   const settled: string[] = [];
-  // Ссылка Ширин не привязана к курсу: по одному её сообщению снимаем ожидание,
-  // только если ждёт ровно одна покупка (комплект из двух не трогаем).
-  for (const p of waiting) {
-    if (p.inviteLink || (waiting.length === 1 && (await manualLinkSince(contactId, p.createdAt)))) settled.push(p.id);
+  const open = waiting.filter((p) => !p.inviteLink);
+  for (const p of waiting) if (p.inviteLink) settled.push(p.id);
+  // Каждая ручная ссылка "тратится" один раз (ревью PR 72): закрывает не больше одной
+  // покупки - последней, созданной до неё, - и её адрес записывается в покупку, так что
+  // следующие проверки эту ссылку уже не учитывают. Две ссылки в одном сообщении
+  // закрывают две покупки.
+  const at = (d: Date | undefined | null): number => (d instanceof Date ? d.getTime() : 0);
+  // Потраченные ссылки НЕ пишем в inviteLink (по нему groupAccess ищет, кто вошёл в
+  // группу, и отзывает доступ): считаем без состояния. Уже закрытые вручную покупки
+  // (accessIssuedAt есть, inviteLink нет) расходуют столько же первых ссылок.
+  const manualDone = await prisma.purchase.findMany({
+    where: { contactId, revokedAt: null, inviteLink: null, accessIssuedAt: { not: null } },
+    select: { createdAt: true },
+  });
+  const since = new Date(Math.min(...waiting.map((p) => at(p.createdAt)), ...(manualDone ?? []).map((p) => at(p.createdAt))));
+  const spentCount = (manualDone ?? []).length;
+  const links = (await manualLinks(contactId, since)).slice(spentCount);
+  for (const l of links) {
+    const candidates = open.filter((p) => !settled.includes(p.id) && at(p.createdAt) <= at(l.at));
+    candidates.sort((x, y) => at(y.createdAt) - at(x.createdAt));
+    if (candidates[0]) settled.push(candidates[0].id);
   }
   if (settled.length === 0) return false;
-  await prisma.purchase.updateMany({ where: { id: { in: settled } }, data: { deliveryAwaitingChoice: false } });
-  // Владельцу про это больше не пишем (11.11.2026: «вы прислали ссылку вручную... проверьте» — шум).
+  // accessIssuedAt: метка "выдано вручную" - планировщик не считает курс недоставленным
+  for (const id of settled) {
+    await prisma.purchase.update({ where: { id }, data: { deliveryAwaitingChoice: false, accessIssuedAt: new Date() } });
+  }
+  // Владельцу про это не пишем (11.11.2026: «вы прислали ссылку вручную... проверьте» - шум).
+  const leftover = waiting.filter((p) => !settled.includes(p.id));
+  if (leftover.length > 0) {
+    // Часть покупок ещё ждёт: вопрос про Telegram нужно задать заново (ответ "да" после
+    // сообщения Ширин не засчитывается) - сбрасываем состояние вопроса.
+    await prisma.contact.updateMany({ where: { id: contactId }, data: { deliveryChoicePromptState: null, deliveryChoicePromptMid: null } });
+  }
   if (settled.length === waiting.length) {
     await prisma.receiptCheck.updateMany({
       where: { contactId, awaitingDeliveryChoice: true },

@@ -5,7 +5,7 @@ import { type ClientLanguage } from "./ai/clientLanguage.js";
 import { contactLanguage } from "./ai/contactLanguage.js";
 import { sendToContact } from "./messaging/send.js";
 import { markExamplesAsSuccessful } from "./ai/styleLearning.js";
-import { planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
+import { coursesForAmount, planForAmount, ownedCourses, COURSE_50, COURSE_70, COURSE_TITLE, type Course, type Allocation } from "./courses.js";
 import { closeCards } from "./receiptAlerts.js";
 import { getPrices } from "./services/priceService.js";
 import { grantCourses } from "./ai.js";
@@ -62,7 +62,7 @@ export async function decideReceipt(
     // (владельцу и сестре) теряют кнопки.
     const row = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, select: { ownerAlerts: true } }).catch(() => null);
     if (row?.ownerAlerts) {
-      const text = result.status === "rejected" ? "отклонено" : result.status === "approved" ? "подтверждено, ссылка отправлена" : "закрыто, ссылка не отправлялась";
+      const text = result.status === "rejected" ? "отклонено" : result.status === "approved" ? "подтверждено, ссылка отправлена" : result.message;
       await closeCards(row, `Чек обработан: ${text}`).catch((err) => logError("receiptDecision:closeCards", err));
     }
   }
@@ -89,6 +89,9 @@ async function decideReceiptInner(
     }
     if (check.amount == null) {
       return { ok: false, reason: "needs_course", message: "Сумма на чеке не прочиталась — выберите курс явно" };
+    }
+    if ((await coursesForAmount(Math.round(check.amount))).length === 0) {
+      return { ok: false, reason: "needs_course", message: "Сумма не подходит ни к одному курсу — выберите курс явно" };
     }
   }
 
@@ -162,13 +165,15 @@ async function decideReceiptInner(
   // выбранного курса, а не угаданное число.
   let amount: number;
   let plan: Allocation;
-  if (receipt.amount != null) {
+  let revokedFromPlan: Course[] = [];
+  if (receipt.amount != null && (await coursesForAmount(Math.round(receipt.amount))).length > 0) {
     amount = receipt.amount;
     // ТОЛЬКО курсы, которые даёт сама сумма чека, и только те, которых у клиентки
     // ещё нет (ревью PR 67): allocate() ради удобства раскладки мог выдать
     // "второй курс" за повторный чек на ту же сумму - то есть бесплатно.
     const own = await planForAmount(receipt.contactId, amount);
     const grant = own.grant;
+    revokedFromPlan = own.revoked;
     plan = {
       grant,
       note: grant.length > 0 ? `по сумме: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "этот курс у клиентки уже есть - ничего не выдано",
@@ -182,7 +187,8 @@ async function decideReceiptInner(
           ? [courseChoice]
           : [];
     const { price } = await getPrices();
-    amount = grant.reduce((sum, c) => sum + price[c], 0);
+    // Сумма на чеке есть - в покупки пишем её (а не цену курса), иначе отчёт врёт.
+    amount = receipt.amount != null ? receipt.amount : grant.reduce((sum, c) => sum + price[c], 0);
     plan = {
       grant,
       note: grant.length > 0 ? `выбрано владельцем вручную: ${grant.map((c) => COURSE_TITLE[c]).join(", ")}` : "уже куплено",
@@ -198,7 +204,7 @@ async function decideReceiptInner(
     where: { contactId: receipt.contactId, course: { in: plan.grant }, revokedAt: { not: null } },
     select: { course: true, revokedAt: true },
   });
-  const revokedCourses = new Set((revokedRows ?? []).filter((r) => r.revokedAt).map((r) => r.course));
+  const revokedCourses = new Set<string>([...(revokedRows ?? []).filter((r) => r.revokedAt).map((r) => r.course), ...revokedFromPlan]);
   if (revokedCourses.size > 0) {
     // Из комплекта убираем только отозванный курс; оплаченный второй выдаём.
     plan = { ...plan, grant: plan.grant.filter((c) => !revokedCourses.has(c)) };
@@ -214,7 +220,7 @@ async function decideReceiptInner(
   // A previous send failure preserves the paid purchase. Retry its delivery,
   // rather than allocating another course from the same payment amount.
   const pending = await prisma.purchase.findMany({
-    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null, deliveryAwaitingChoice: false },
+    where: { contactId: receipt.contactId, source: "RECEIPT", revokedAt: null, inviteLink: null, accessIssuedAt: null, deliveryAwaitingChoice: false },
   });
   if (pending.some((p) => p.accessDeliveryUncertainAt)) {
     await prisma.receiptCheck.update({ where: { id: receiptId }, data: { ownerDecision: "PENDING", decidedAt: null, linkSent: false } });

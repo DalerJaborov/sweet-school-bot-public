@@ -11,7 +11,8 @@ import { prisma as originalPrisma, setPrismaClient } from "../../src/db.js";
  * ошибок в условиях запросов. Здесь схема накатывается во временный файл, а
  * Telegram и отправка клиенту - заглушки.
  */
-const sendToContact = vi.fn(async (..._a: unknown[]) => "mid-1");
+let midCounter = 0;
+const sendToContact = vi.fn(async (..._a: unknown[]) => `mid-${++midCounter}`);
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[]) => sendToContact(...a) }));
 const sendReceiptForReview = vi.fn(async (..._a: unknown[]) => ({ chatId: "owner-1", messageId: 5 }));
 const sendTelegramMessage = vi.fn(async (..._a: unknown[]) => 1);
@@ -32,6 +33,8 @@ import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 import { settleChoiceIfHandedOut } from "../../src/course/handedOut.js";
 import { closeSettledReceiptAlerts, resetSweepClock } from "../../src/receiptAlerts.js";
 import { decideReceipt } from "../../src/receiptDecision.js";
+import { deferGrantForChoice, lastBotMessageIsQuestionOrService } from "../../src/course/deliveryChoice.js";
+import { planForAmount, splitAmount } from "../../src/courses.js";
 import { resetPriceCache } from "../../src/services/priceService.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -66,6 +69,7 @@ beforeEach(async () => {
     await (db[t] as unknown as { deleteMany: () => Promise<unknown> }).deleteMany();
   }
   await db.setting.create({ data: { key: "telegramBotToken", value: "tok" } });
+  await db.setting.create({ data: { key: "courseDeliveryMode", value: "both" } });
 });
 
 async function newContact(id: string) {
@@ -308,7 +312,7 @@ describe("настоящая база: ревью 4", () => {
     expect(args.caption).toMatch(/сумма не сходится/);
   });
 
-  it("второй платёж, пока ждём ответа про Telegram: клиентке уходит 'передаю Ширин', а не тишина", async () => {
+  it("второй платёж, пока ждём ответа про Telegram: клиентке уходит напоминание, а не тишина", async () => {
     const c = await db.contact.create({
       data: { id: "d4", igUserId: "ig-d4", username: "d4", deliveryChoicePromptState: "WAITING" },
     });
@@ -322,7 +326,7 @@ describe("настоящая база: ревью 4", () => {
     await handleReceiptVerdict(c, verdict("second70", { amount: 70 }));
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
     expect(sendToContact).toHaveBeenCalledTimes(1);
-    expect(String(sendToContact.mock.calls[0][1])).toMatch(/Ширин/);
+    expect(String(sendToContact.mock.calls[0][1])).toMatch(/Telegram/);
   });
 
   it("округление: 43.6 автоматика и панель считают одинаково (оба - курс 50)", async () => {
@@ -339,3 +343,239 @@ describe("настоящая база: ревью 4", () => {
     expect((grantCourses.mock.calls[1][1] as { grant: string[] }).grant).toEqual(["COURSE50"]);
   });
 });
+
+describe("настоящая база: ревью 5", () => {
+  it("недоплата 40 после 'Подтвердить': нужен явный выбор курса, ссылка 'выше' не обещается", async () => {
+    const c = await newContact("e1");
+    const r = await db.receiptCheck.create({
+      data: { contactId: c.id, kind: "suspicious", confidence: 90, reason: "r", imageHash: "u40", amount: 40, ownerDecision: "PENDING" },
+    });
+    const first = await decideReceipt(r.id, "approve");
+    expect(first).toMatchObject({ ok: false, reason: "needs_course" });
+    expect((await db.receiptCheck.findUnique({ where: { id: r.id } }))?.ownerDecision).toBe("PENDING");
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    const chosen = await decideReceipt(r.id, "approve", "COURSE50");
+    expect(chosen).toMatchObject({ ok: true, status: "approved" });
+  });
+
+  it("недоплата 40: в карточке вместо 'Подтвердить' выбор курса", async () => {
+    const c = await newContact("e2");
+    await handleReceiptVerdict(c, verdict("c40", { amount: 40 }));
+    expect((sendReceiptForReview.mock.calls[0][2] as { needsCourseChoice: boolean }).needsCourseChoice).toBe(true);
+  });
+
+  it("второй платёж, пока вопрос про Telegram ждёт ответа: клиентке уходит напоминание", async () => {
+    const c = await db.contact.create({ data: { id: "e3", igUserId: "ig-e3", username: "e3", deliveryChoicePromptState: "WAITING" } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    // выдача идёт через настоящий deferGrantForChoice (как в боевом grantCourses) внутри области принятого чека
+    grantCourses.mockImplementationOnce(async (cc: unknown, plan: unknown, amt: unknown, v: unknown) => {
+      await deferGrantForChoice(cc as never, plan as never, amt as number, v as never, { purpose: "verified_receipt_access" });
+      return [];
+    });
+    await handleReceiptVerdict(c, verdict("p50", { amount: 50 }));
+    expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
+  });
+
+  it("курс 50 куплен, но не доставлен: карточка честно 'откроет Арт-десерты', не 'дубль'", async () => {
+    const c = await newContact("e4");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, source: "RECEIPT" } });
+    await handleReceiptVerdict(c, verdict("r50", { amount: 50, tamperingSuspected: true }));
+    const args = sendReceiptForReview.mock.calls[0][2] as { caption: string; closeAsDuplicate: boolean };
+    expect(args.closeAsDuplicate).toBe(false);
+    expect(args.caption).toMatch(/Подтвердить откроет: Арт-десерты/);
+  });
+
+  it("курс 70 отозван, чек на 70: карточка говорит про отзыв, не обещает курс", async () => {
+    const c = await newContact("e5");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, revokedAt: new Date(), inviteLink: "https://x/l/abc" } });
+    await handleReceiptVerdict(c, verdict("r70", { amount: 70, tamperingSuspected: true }));
+    const args = sendReceiptForReview.mock.calls[0][2] as { caption: string };
+    expect(args.caption).toMatch(/отозван/);
+  });
+});
+
+describe("настоящая база: ревью PR 72", () => {
+  it("после напоминания номер вопроса обновлён: короткое 'да' будет засчитано", async () => {
+    const c = await db.contact.create({ data: { id: "f1", igUserId: "ig-f1", username: "f1", deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: "mid-old" } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    // выдача идёт через настоящий deferGrantForChoice (как в боевом grantCourses) внутри области принятого чека
+    grantCourses.mockImplementationOnce(async (cc: unknown, plan: unknown, amt: unknown, v: unknown) => {
+      await deferGrantForChoice(cc as never, plan as never, amt as number, v as never, { purpose: "verified_receipt_access" });
+      return [];
+    });
+    await handleReceiptVerdict(c, verdict("f1-50", { amount: 50 }));
+    const fresh = await db.contact.findUnique({ where: { id: c.id } });
+    const lastOut = await db.message.findFirst({ where: { contactId: c.id, direction: "OUT" }, orderBy: { createdAt: "desc" } });
+    expect(fresh?.deliveryChoicePromptMid).toBeTruthy();
+    expect(fresh?.deliveryChoicePromptMid).not.toBe("mid-old");
+    expect(lastOut?.mid).toBe(fresh?.deliveryChoicePromptMid);
+  });
+
+  it("курс 50 выдан руками, чек 70: покупка 70 записана на полную сумму 70, а не 35", async () => {
+    const c = await newContact("f2");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, inviteLink: "https://x/l/m", source: "MANUAL" } });
+    await deferGrantForChoice(c, { grant: ["COURSE50", "COURSE70"], note: "n" }, 70, { amount: 70, currency: "TJS" }, {});
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p70?.amount).toBe(70);
+  });
+
+  it("чек 40 + выбор курса 50: в покупку идёт сумма чека 40, не цена курса", async () => {
+    const c = await newContact("f3");
+    const r = await db.receiptCheck.create({ data: { contactId: c.id, kind: "suspicious", confidence: 80, reason: "r", imageHash: "f3", amount: 40, ownerDecision: "PENDING" } });
+    grantCourses.mockResolvedValueOnce(["COURSE50"]);
+    await decideReceipt(r.id, "approve", "COURSE50");
+    expect(grantCourses.mock.calls[0][2]).toBe(40);
+  });
+
+  it("ссылка Ширин сняла вопрос: курс помечен выданным вручную и не считается недоставленным", async () => {
+    const c = await newContact("f4");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Вот https://shirinsweets.online/l/aBcD234567" } });
+    expect(await settleChoiceIfHandedOut(c.id)).toBe(true);
+    const plan = await planForAmount(c.id, 70);
+    expect(plan.grant).toEqual([]);
+    expect(plan.duplicate).toBe(true);
+    expect(plan.retry).toEqual([]);
+  });
+
+  it("первый вопрос про Telegram не дошёл (FAILED): второй чек не тонет в тишине", async () => {
+    const c = await db.contact.create({ data: { id: "f5", igUserId: "ig-f5", username: "f5", deliveryChoicePromptState: "FAILED" } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    // выдача идёт через настоящий deferGrantForChoice (как в боевом grantCourses) внутри области принятого чека
+    grantCourses.mockImplementationOnce(async (cc: unknown, plan: unknown, amt: unknown, v: unknown) => {
+      await deferGrantForChoice(cc as never, plan as never, amt as number, v as never, { purpose: "verified_receipt_access" });
+      return [];
+    });
+    await handleReceiptVerdict(c, verdict("f5-50", { amount: 50 }));
+    expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
+  });
+
+  it("отозван курс 70, чек 70, 'Подтвердить': ответ про отзыв, а не 'дубль'", async () => {
+    const c = await newContact("f6");
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, revokedAt: new Date(), inviteLink: "https://x/l/a" } });
+    const r = await db.receiptCheck.create({ data: { contactId: c.id, kind: "suspicious", confidence: 80, reason: "r", imageHash: "f6", amount: 70, ownerDecision: "PENDING" } });
+    const res = await decideReceipt(r.id, "approve");
+    expect(String((res as { message: string }).message)).toMatch(/отозван/);
+  });
+});
+
+describe("настоящая база: ревью PR 72 (2)", () => {
+  it("вопрос уже задавали, платёж подтверждён владельцем: клиентке уходит напоминание, не тишина", async () => {
+    const c = await db.contact.create({ data: { id: "g1", igUserId: "ig-g1", username: "g1", deliveryChoicePromptState: "WAITING", deliveryChoicePromptMid: "old-q" } });
+    await deferGrantForChoice(c, { grant: ["COURSE70"], note: "n" }, 70, { amount: 70, currency: "TJS" }, {});
+    expect(sendToContact.mock.calls.map((x) => String(x[1])).join(" ")).toMatch(/Telegram/);
+    const fresh = await db.contact.findUnique({ where: { id: c.id } });
+    expect(fresh?.deliveryChoicePromptMid).not.toBe("old-q");
+  });
+
+  it("после служебных сообщений бота короткое 'да' засчитывается; после обычной реплики или Ширин - нет", async () => {
+    const c = await newContact("g2");
+    const t0 = Date.now() - 60_000;
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "q1", text: "Шумо Telegram доред?", createdAt: new Date(t0) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "s1", text: "Чекро гирифтам, ба Ширин барои тафтиш медиҳам.", createdAt: new Date(t0 + 1000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "s2", text: "Этот перевод мы уже приняли — ссылка на уроки выше в этом чате.", createdAt: new Date(t0 + 2000) } });
+    expect(await lastBotMessageIsQuestionOrService(c.id, "q1")).toBe(true);
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", mid: "x1", text: "Курс стоит 70 сомони", createdAt: new Date(t0 + 3000) } });
+    expect(await lastBotMessageIsQuestionOrService(c.id, "q1")).toBe(false);
+    expect(await lastBotMessageIsQuestionOrService(c.id, null)).toBe(false);
+  });
+
+  it("выдан вручную курс 50, потом пришёл чек 70: ожидание по 50 снимается, по 70 остаётся", async () => {
+    const c = await newContact("g3");
+    const t0 = Date.now() - 20 * 60_000;
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(t0) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(t0 + 60_000) } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(t0 + 10 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    const p50 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE50" } } });
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p50?.deliveryAwaitingChoice).toBe(false);
+    expect(p70?.deliveryAwaitingChoice).toBe(true);
+  });
+
+  it("деление суммы одно: 121 на двоих = 60 + 61 и в выдаче, и в ожидании выбора", async () => {
+    expect(splitAmount(121, 2)).toEqual([60, 61]);
+    const c = await newContact("g4");
+    await deferGrantForChoice(c, { grant: ["COURSE50", "COURSE70"], note: "n" }, 121, { amount: 121, currency: "TJS" }, {});
+    const rows = await db.purchase.findMany({ where: { contactId: c.id } });
+    expect(rows.map((r) => r.amount).sort()).toEqual([60, 61]);
+  });
+});
+
+describe("настоящая база: ссылка Ширин тратится один раз", () => {
+  it("оплата 50 (30 мин назад), оплата 70 (20 мин), одна ссылка (5 мин): после ТРЁХ проверок подряд закрыта только покупка 70", async () => {
+    const c = await newContact("h1");
+    const now = Date.now();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 30 * 60_000) } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 20 * 60_000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 5 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    await settleChoiceIfHandedOut(c.id);
+    await settleChoiceIfHandedOut(c.id);
+    const p50 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE50" } } });
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p70?.deliveryAwaitingChoice).toBe(false);
+    // адрес ссылки в inviteLink НЕ пишем (по нему groupAccess ищет вошедших в группу)
+    expect(p70?.inviteLink).toBeNull();
+    expect(p70?.accessIssuedAt).not.toBeNull();
+    expect(p50?.deliveryAwaitingChoice).toBe(true);
+    expect(p50?.inviteLink).toBeNull();
+    // владельцу про ручную ссылку не пишем (решение 11.11.2026: шум)
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    // вопрос про Telegram сброшен: следующее сообщение клиентки задаст его заново
+    const contactAfter = await db.contact.findUnique({ where: { id: c.id } });
+    expect(contactAfter?.deliveryChoicePromptState).toBeNull();
+  });
+
+  it("одно сообщение с двумя ссылками на комплект закрывает обе покупки", async () => {
+    const c = await newContact("h2");
+    const now = Date.now();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 30 * 60_000) } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 30 * 60_000 + 1000) } });
+    await db.message.create({
+      data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Группы: https://t.me/+AAAAbbbb1111 и https://t.me/+CCCCdddd2222", createdAt: new Date(now - 5 * 60_000) },
+    });
+    await settleChoiceIfHandedOut(c.id);
+    await settleChoiceIfHandedOut(c.id);
+    const rows = await db.purchase.findMany({ where: { contactId: c.id } });
+    expect(rows.every((r) => r.deliveryAwaitingChoice === false)).toBe(true);
+    expect(rows.every((r) => r.inviteLink === null && r.accessIssuedAt !== null)).toBe(true);
+  });
+
+  it("тот же номер операции, пока ждём ответа про Telegram и Ширин ведёт разговор: клиентке служебных фраз не шлём (решение 11.11.2026)", async () => {
+    const c = await db.contact.create({ data: { id: "h3", igUserId: "ig-h3", username: "h3", deliveryChoicePromptState: "WAITING", humanTakenOverAt: new Date() } });
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
+    await db.receiptCheck.create({
+      data: { contactId: c.id, kind: "valid", confidence: 95, reason: "ok", imageHash: "h3-first", amount: 70, awaitingDeliveryChoice: true, transactionId: "TXN-H3-111111", createdAt: new Date(Date.now() - 40 * 60_000) },
+    });
+    await handleReceiptVerdict(c, verdict("h3-second", { amount: 70, transactionId: "TXN-H3-111111" }));
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
+
+  it("31 сообщение Ширин без ссылки, потом ссылка: покупка всё равно закрывается (берём последние сообщения)", async () => {
+    const c = await newContact("h4");
+    const now = Date.now();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 3 * 3600_000) } });
+    for (let i = 0; i < 31; i++) {
+      await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: `Сообщение ${i}`, createdAt: new Date(now - 2 * 3600_000 + i * 1000) } });
+    }
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 3600_000) } });
+    expect(await settleChoiceIfHandedOut(c.id)).toBe(true);
+    const p70 = await db.purchase.findUnique({ where: { contactId_course: { contactId: c.id, course: "COURSE70" } } });
+    expect(p70?.deliveryAwaitingChoice).toBe(false);
+  });
+
+  it("личная ссылка сайта, уже потраченная на покупку 50, не мешает закрыть 70 второй ссылкой (счёт без записи адресов)", async () => {
+    const c = await newContact("h5");
+    const now = Date.now();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 60 * 60_000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 50 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 40 * 60_000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 30 * 60_000) } });
+    await settleChoiceIfHandedOut(c.id);
+    const rows = await db.purchase.findMany({ where: { contactId: c.id } });
+    expect(rows.every((r) => r.deliveryAwaitingChoice === false)).toBe(true);
+  });
+});
+
