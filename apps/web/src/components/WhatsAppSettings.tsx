@@ -8,8 +8,9 @@ export function WhatsAppSettings() {
   const [paused,setPaused] = useState<Paused[]>([]);
   const [error,setError] = useState("");
   const [busy,setBusy] = useState(false);
+  const [receiptsOnly,setReceiptsOnly] = useState(false);
   async function refresh() {
-    try { const [s,p] = await Promise.all([api<Status>("/admin/v1/whatsapp/status"),api<Paused[]>("/admin/v1/conversations/paused")]); setStatus(s);setPaused(p);setError(""); }
+    try { const [s,p,cfg] = await Promise.all([api<Status>("/admin/v1/whatsapp/status"),api<Paused[]>("/admin/v1/conversations/paused"),api<Record<string,string>>("/admin/settings")]); setStatus(s);setPaused(p);setReceiptsOnly(cfg.whatsappReceiptsOnly==="true");setError(""); }
     catch(e) { setError(e instanceof Error?e.message:"Не удалось проверить подключение"); }
   }
   useEffect(()=>{void refresh();const t=setInterval(()=>void refresh(),5000);return()=>clearInterval(t);},[]);
@@ -17,12 +18,17 @@ export function WhatsAppSettings() {
     setBusy(true);setError("");
     try {await api(path,{method:"POST",body:{}});await refresh();} catch(e){setError(e instanceof Error?e.message:"Ошибка подключения");} finally{setBusy(false);}
   }
+  async function flipReceiptsOnly(next:boolean) {
+    setBusy(true);setError("");
+    try {await api("/admin/settings",{method:"PUT",body:{whatsappReceiptsOnly:String(next)}});setReceiptsOnly(next);} catch(e){setError(e instanceof Error?e.message:"Не удалось переключить");} finally{setBusy(false);}
+  }
   return <section aria-labelledby="wa-title" style={{marginBlock:24,paddingBlock:16,borderBlock:"1px solid #ddd"}}>
     <h3 id="wa-title">WhatsApp</h3>
     <p>Только ответы на новые личные обращения. Всем сохранённым контактам помощник не отвечает.</p>
     <p role="status"><strong>{names[status.state]||"Проверяем подключение"}</strong>{status.contactsReady?` · Контактов в списке запретов: ${status.blockedCount??0}`:" · Ждём проверки контактов"}</p>
     {status.qrDataUrl?.startsWith("data:image/")&&<><img src={status.qrDataUrl} alt="QR-код подключения WhatsApp" style={{width:264,maxWidth:"100%"}}/><p>На телефоне: WhatsApp → Связанные устройства → Привязка устройства.</p></>}
     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{([['start','Подключить по QR'],['resume','Включить ответы'],['pause','Пауза'],['logout','Отключить устройство']] as const).map(([a,label])=><button key={a} type="button" className="btn" disabled={busy||status.state==="not_configured"||(a==="resume"&&!status.contactsReady)} onClick={()=>void action(`/admin/v1/whatsapp/${a}`)}>{label}</button>)}</div>
+    <label style={{display:"flex",gap:8,alignItems:"flex-start",marginBlock:12}}><input type="checkbox" checked={receiptsOnly} disabled={busy} onChange={e=>void flipReceiptsOnly(e.target.checked)}/><span><strong>Только чеки</strong> — бот в WhatsApp молчит, но чеки проверяет: оплата считается, ссылка на курс уходит сама. Ответы должны быть включены («Включить ответы»), иначе WhatsApp не видит и чеки.</span></label>
     {!!status.attention&&<p className="msg err">Требуют проверки обращения: {status.attention}. Откройте «Задачи» → «Нужен ответ» и ответьте вручную.</p>}
     {error&&<p role="alert" className="msg err">{error}</p>}
     <p className="hint">Ваш ручной ответ останавливает помощника в этом чате. Исключение — ссылка после проверки оплаты. Контактам из списка запретов не отправляется и она.</p>
