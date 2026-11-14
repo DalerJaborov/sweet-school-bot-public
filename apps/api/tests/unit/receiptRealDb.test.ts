@@ -65,15 +65,28 @@ beforeEach(async () => {
   sendReceiptForReview.mockClear();
   sendTelegramMessage.mockClear();
   grantCourses.mockClear();
-  for (const t of ["receiptCheck", "purchase", "message", "contact", "setting"] as const) {
+  for (const t of ["receiptCheck", "purchase", "message", "telegramInvite", "contact", "setting"] as const) {
     await (db[t] as unknown as { deleteMany: () => Promise<unknown> }).deleteMany();
   }
   await db.setting.create({ data: { key: "telegramBotToken", value: "tok" } });
   await db.setting.create({ data: { key: "courseDeliveryMode", value: "both" } });
+  await db.setting.create({ data: { key: "telegramChatId50", value: GROUP50 } });
+  await db.setting.create({ data: { key: "telegramChatId70", value: GROUP70 } });
 });
 
-async function newContact(id: string) {
-  return db.contact.create({ data: { id, igUserId: `ig-${id}`, username: id } });
+// Ссылки Ширин сверяются с курсом (handedOut.manualLinkServesCourse, ревью PR 72):
+// приглашение должно быть создано из панели в группу курса, личная ссылка сайта -
+// принадлежать этому человеку.
+const GROUP50 = "-100500";
+const GROUP70 = "-100700";
+const PERSONAL = "aBcD234567";
+
+async function newContact(id: string, data: Record<string, unknown> = {}) {
+  return db.contact.create({ data: { id, igUserId: `ig-${id}`, username: id, ...data } });
+}
+
+async function panelInvite(link: string, chatId: string) {
+  await db.telegramInvite.create({ data: { groupKey: chatId === GROUP50 ? "COURSE50" : "COURSE70", chatId, inviteLink: link } });
 }
 
 function verdict(hash: string, overrides: Record<string, unknown> = {}) {
@@ -95,6 +108,7 @@ function verdict(hash: string, overrides: Record<string, unknown> = {}) {
 describe("настоящая база: ручная ссылка после вопроса о доставке", () => {
   it("платёж 70 ждёт ответа про Telegram, Ширин прислала t.me/+: чек получает linkSent, повтор скриншота его не затирает", async () => {
     const c = await newContact("c1");
+    await panelInvite("https://t.me/+abcDEF123xyz", GROUP70);
     await db.purchase.create({
       data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true },
     });
@@ -428,7 +442,7 @@ describe("настоящая база: ревью PR 72", () => {
   });
 
   it("ссылка Ширин сняла вопрос: курс помечен выданным вручную и не считается недоставленным", async () => {
-    const c = await newContact("f4");
+    const c = await newContact("f4", { accessTokenId: PERSONAL });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true } });
     await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Вот https://shirinsweets.online/l/aBcD234567" } });
     expect(await settleChoiceIfHandedOut(c.id)).toBe(true);
@@ -481,7 +495,7 @@ describe("настоящая база: ревью PR 72 (2)", () => {
   });
 
   it("выдан вручную курс 50, потом пришёл чек 70: ожидание по 50 снимается, по 70 остаётся", async () => {
-    const c = await newContact("g3");
+    const c = await newContact("g3", { accessTokenId: PERSONAL });
     const t0 = Date.now() - 20 * 60_000;
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(t0) } });
     await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(t0 + 60_000) } });
@@ -503,12 +517,13 @@ describe("настоящая база: ревью PR 72 (2)", () => {
 });
 
 describe("настоящая база: ссылка Ширин тратится один раз", () => {
-  it("оплата 50 (30 мин назад), оплата 70 (20 мин), одна ссылка (5 мин): после ТРЁХ проверок подряд закрыта только покупка 70", async () => {
+  it("оплата 50 (30 мин назад), оплата 70 (20 мин), одна ссылка в группу 70 (5 мин): после ТРЁХ проверок подряд закрыта только покупка 70", async () => {
     const c = await newContact("h1");
+    await panelInvite("https://t.me/+Group70h1", GROUP70);
     const now = Date.now();
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 30 * 60_000) } });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 20 * 60_000) } });
-    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша ссылка https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 5 * 60_000) } });
+    await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "Ваша группа https://t.me/+Group70h1", createdAt: new Date(now - 5 * 60_000) } });
     await settleChoiceIfHandedOut(c.id);
     await settleChoiceIfHandedOut(c.id);
     await settleChoiceIfHandedOut(c.id);
@@ -529,6 +544,8 @@ describe("настоящая база: ссылка Ширин тратится 
 
   it("одно сообщение с двумя ссылками на комплект закрывает обе покупки", async () => {
     const c = await newContact("h2");
+    await panelInvite("https://t.me/+AAAAbbbb1111", GROUP50);
+    await panelInvite("https://t.me/+CCCCdddd2222", GROUP70);
     const now = Date.now();
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 30 * 60_000) } });
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 30 * 60_000 + 1000) } });
@@ -553,7 +570,7 @@ describe("настоящая база: ссылка Ширин тратится 
   });
 
   it("31 сообщение Ширин без ссылки, потом ссылка: покупка всё равно закрывается (берём последние сообщения)", async () => {
-    const c = await newContact("h4");
+    const c = await newContact("h4", { accessTokenId: PERSONAL });
     const now = Date.now();
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: new Date(now - 3 * 3600_000) } });
     for (let i = 0; i < 31; i++) {
@@ -566,7 +583,7 @@ describe("настоящая база: ссылка Ширин тратится 
   });
 
   it("личная ссылка сайта, уже потраченная на покупку 50, не мешает закрыть 70 второй ссылкой (счёт без записи адресов)", async () => {
-    const c = await newContact("h5");
+    const c = await newContact("h5", { accessTokenId: PERSONAL });
     const now = Date.now();
     await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: new Date(now - 60 * 60_000) } });
     await db.message.create({ data: { contactId: c.id, direction: "OUT", byHuman: true, text: "https://shirinsweets.online/l/aBcD234567", createdAt: new Date(now - 50 * 60_000) } });

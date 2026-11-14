@@ -145,6 +145,24 @@ export async function coursesForAmount(amount: number): Promise<Course[]> {
 }
 
 /**
+ * ОДНО ПОНЯТИЕ «ЭТУ ПОКУПКУ БОТ ЕЩЁ ДОЛЖЕН ДОСТАВИТЬ» (ревью PR 72).
+ * Только покупка ПО ЧЕКУ без ссылки и без метки «выдано вручную» (accessIssuedAt
+ * ставят settleChoiceIfHandedOut и settleManualHandout). Ручная запись из панели
+ * (source MANUAL) и ручная выдача Ширин уже у человека: раньше такие покупки
+ * считались недоставленными, карточка обещала «Подтвердить откроет: 21 рецепт»,
+ * а кнопка слала вторую ссылку и не записывала оплату.
+ * Читают: planForAmount, grantCourses, deferGrantForChoice; тесты - receiptReview6.test.ts.
+ */
+export function awaitsBotDelivery(p: {
+  source?: string | null;
+  inviteLink?: string | null;
+  accessIssuedAt?: Date | null;
+  revokedAt?: Date | null;
+}): boolean {
+  return !p.revokedAt && (p.source ?? "RECEIPT") === "RECEIPT" && !p.inviteLink && !p.accessIssuedAt;
+}
+
+/**
  * ОДНА ФУНКЦИЯ "ЧТО ОТКРОЕТ ЭТА СУММА" для решения владельца, для строки в
  * карточке и для автоматики (ревью PR 67): курсы суммы минус уже купленное.
  * Сумма округляется ОДИН раз, здесь: чек хранит Math.round(сумма), и панель
@@ -162,7 +180,7 @@ export async function planForAmount(
   const rows = await prisma.purchase
     .findMany({
       where: { contactId, course: { in: wanted } },
-      select: { course: true, revokedAt: true, inviteLink: true, accessIssuedAt: true, deliveryAwaitingChoice: true },
+      select: { course: true, source: true, revokedAt: true, inviteLink: true, accessIssuedAt: true, deliveryAwaitingChoice: true },
     })
     .catch(() => []);
   const revoked: Course[] = [];
@@ -173,7 +191,7 @@ export async function planForAmount(
     if (r.revokedAt) revoked.push(c);
     // Куплен, но ссылка не ушла (сбой отправки) и не ждёт ответа про Telegram:
     // решение владельца ПОВТОРИТ доставку, значит это не "дубль".
-    else if (r.inviteLink === null && r.accessIssuedAt === null && r.deliveryAwaitingChoice === false) retry.push(c);
+    else if (awaitsBotDelivery(r) && r.deliveryAwaitingChoice === false) retry.push(c);
     else owned.push(c);
   }
   const grant = wanted.filter((c) => !revoked.includes(c) && !owned.includes(c));

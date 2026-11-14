@@ -20,6 +20,7 @@ import { rememberAlert } from "../receiptAlerts.js";
 import { ACCEPTED_WHERE, receiptAccepted } from "../receiptAccepted.js";
 import { manualLinkServesCourse, manualLinksSince, manualLinkSince, receiptServedState } from "../course/handedOut.js";
 import { notifyOwnerDirect } from "../systemAlerts.js";
+import { oneAtATimeForContact } from "../receiptQueue.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -195,6 +196,10 @@ async function tellAlreadyAccepted(contact: Contact, lastText: string | null = n
 
 /** Коды, которые toSomoni() считает сомони: такой чек не «в валюте». */
 const SOMONI_CODES = new Set(["TJS", "SOMONI", "СОМОНИ"]);
+/** Код валюты чека одним способом на весь разбор: « tjs » - это сомони, пусто - сомони. */
+function currencyCode(raw: string | null | undefined): string {
+  return (raw ?? "").trim().toUpperCase() || "TJS";
+}
 
 /**
  * УЖЕ ПОКУПАЛА ДО ЭТОГО ЧЕКА (решение владельца Q20, 15.11.2026). Чек без даты
@@ -321,7 +326,10 @@ async function settleManualHandout(
       const row = await prisma.purchase.create({
         data: {
           contactId: contact.id, course, amount: shares[i],
-          rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", inviteLink: linkFor.get(course) ?? null,
+          rawAmount: verdict.amount, currency: currencyCode(verdict.currency), inviteLink: linkFor.get(course) ?? null,
+          // Метка «выдано вручную», как у settleChoiceIfHandedOut: без неё покупка
+          // без ссылки считалась недоставленной, и кнопка Ширин слала вторую ссылку.
+          accessIssuedAt: linkFor.has(course) ? null : new Date(),
         },
       });
       if (row?.id) created.push(row.id);
@@ -372,34 +380,10 @@ type ReceiptVerdictInput = {
   transactionId?: string | null;
 };
 
-/**
- * ЧЕКИ ОДНОГО ЧЕЛОВЕКА - ПО ОДНОМУ (ревью PR 72, гонка из бэклога 08.11).
- * Тот же скриншот дважды подряд (двойная отправка), два скриншота одного
- * перевода или живой разбор вместе с очередью перепроверки шли параллельно:
- * оба не видели строки друг друга, и второй разбор продолжал доставку покупки,
- * которую первый ещё не отправил, - клиентке уходили ДВЕ одноразовые ссылки.
- * Деньги защищает уникальность покупки в базе; эта очередь убирает вторую
- * ссылку и лишнюю карточку. api работает одним процессом (docker-compose), поэтому
- * замка в памяти достаточно; при нескольких копиях api нужен замок в базе.
- */
-const receiptQueues = new Map<string, Promise<void>>();
-async function oneReceiptAtATime<T>(contactId: string, run: () => Promise<T>): Promise<T> {
-  const before = receiptQueues.get(contactId) ?? Promise.resolve();
-  let release!: () => void;
-  const mine = new Promise<void>((resolve) => (release = resolve));
-  const tail = before.then(() => mine);
-  receiptQueues.set(contactId, tail);
-  try {
-    await before;
-    return await run();
-  } finally {
-    release();
-    if (receiptQueues.get(contactId) === tail) receiptQueues.delete(contactId);
-  }
-}
-
+/** Чеки одного человека разбираются по одному, в одной очереди с кнопкой Ширин
+ *  и ответом про Telegram (receiptQueue.ts): иначе две одноразовые ссылки. */
 export function handleReceiptVerdict(contact: Contact, verdict: ReceiptVerdictInput, existingId?: string): Promise<void> {
-  return oneReceiptAtATime(contact.id, () => handleReceiptVerdictNow(contact, verdict, existingId));
+  return oneAtATimeForContact(contact.id, () => handleReceiptVerdictNow(contact, verdict, existingId));
 }
 
 async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdictInput, existingId?: string): Promise<void> {
@@ -416,7 +400,7 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
     const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
     queuedAt = queued?.createdAt ?? null;
     if (queued) {
-      const tjs = verdict.amount != null && (verdict.currency ?? "TJS").toUpperCase() === "TJS";
+      const tjs = verdict.amount != null && SOMONI_CODES.has(currencyCode(verdict.currency));
       // Другой чек этого человека уже открыл доступ после этого: покупки могли
       // появиться от него, а не от ручной выдачи - решают обычные проверки
       // повтора и второго платежа ниже, молча не закрываем.
@@ -481,8 +465,8 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
 
   // ЧЕК ИЗ-ЗА ГРАНИЦЫ. Переводим по текущему курсу и дальше работаем уже с сомони.
   let amount = verdict.amount;
-  const currency = (verdict.currency ?? "TJS").toUpperCase();
-  if (amount != null && currency !== "TJS") {
+  const currency = currencyCode(verdict.currency);
+  if (amount != null && !SOMONI_CODES.has(currency)) {
     const converted = await toSomoni(amount, currency);
     if (converted == null) {
       kind = "suspicious";
@@ -650,7 +634,7 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
   if (verdict.confidence < RECEIPT_CONFIDENCE_THRESHOLD) causes.push("ИИ не уверен, что это чек");
   if (!conversionFailed && !(amount != null && Number.isFinite(amount) && amount > 0)) causes.push("сумма не прочиталась");
   if (verdict.recipientMatches !== true) causes.push("не удалось подтвердить получателя (наш номер)");
-  if (!verdict.currency) causes.push("не определена валюта");
+  if (!verdict.currency?.trim()) causes.push("не определена валюта");
   // Ни даты, ни номера операции: у новой клиентки (первая покупка) это не повод
   // для проверки, а вот у той, кто уже покупала, - да (пересохранённый старый чек).
   // Решение владельца Q20 (15.11.2026): ссылку сам не выдаём, чек - Ширин с
@@ -738,7 +722,7 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
   const unreadable =
     verdict.confidence < RECEIPT_CONFIDENCE_THRESHOLD ||
     (!conversionFailed && amount == null) ||
-    !verdict.currency ||
+    !verdict.currency?.trim() ||
     (verdict.kind === "valid" && verdict.recipientMatches !== true);
   const askClientFirst = !isClean && needsOwner && !hard && unreadable && !contact.askedAltScreenshotAt;
   if (askClientFirst) reason = `${reason} (попросили клиента прислать другой скриншот)`;
@@ -799,7 +783,7 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
   const humanTalking = contactAutomationBlocked(contact);
   if (humanTalking) {
     if (saved && (needsOwner || duplicatePayment) && !closedAsDuplicate) {
-      await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+      await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate, noCourseForAmount);
     }
     return;
   }

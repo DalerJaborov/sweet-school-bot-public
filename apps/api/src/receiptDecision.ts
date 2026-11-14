@@ -9,6 +9,7 @@ import { coursesForAmount, planForAmount, ownedCourses, COURSE_50, COURSE_70, CO
 import { closeCards } from "./receiptAlerts.js";
 import { getPrices } from "./services/priceService.js";
 import { grantCourses } from "./ai.js";
+import { oneAtATimeForContact } from "./receiptQueue.js";
 
 /** Курс, выбранный владельцем вручную — используется, когда сумма на чеке не
  *  прочиталась (см. courseChoice ниже): "BOTH" — оба курса разом. */
@@ -56,7 +57,12 @@ export async function decideReceipt(
   courseChoice?: CourseChoice,
   opts: { reason?: string } = {}
 ): Promise<ReceiptDecisionResult> {
-  const result = await decideReceiptInner(receiptId, action, courseChoice, opts);
+  // В одной очереди с разбором чеков и ответом про Telegram этого человека
+  // (receiptQueue.ts): иначе кнопка и автоматика могли выдать две ссылки.
+  const owner = await prisma.receiptCheck.findUnique({ where: { id: receiptId }, select: { contactId: true } }).catch(() => null);
+  const result = owner?.contactId
+    ? await oneAtATimeForContact(owner.contactId, () => decideReceiptInner(receiptId, action, courseChoice, opts))
+    : await decideReceiptInner(receiptId, action, courseChoice, opts);
   if (result.ok) {
     // Решение принято (кнопкой или из панели) - ВСЕ карточки этого чека в Telegram
     // (владельцу и сестре) теряют кнопки.

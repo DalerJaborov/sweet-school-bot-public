@@ -1,5 +1,6 @@
-import { prisma, getSetting } from "../db.js";
-import { chatKeyFor, type Course } from "../courses.js";
+import { prisma, getSetting, logError } from "../db.js";
+import { chatKeyFor, COURSE_TITLE, type Course } from "../courses.js";
+import { notifyOwnerDirect } from "../systemAlerts.js";
 import { findPanelInviteByLink } from "../links/telegramInvites.js";
 
 /**
@@ -24,22 +25,34 @@ const MANUAL_LINK = /\/l\/[A-Za-z0-9_-]{10,}|t\.me\/(?:\+|joinchat\/)[\w-]+/i;
 
 const MANUAL_LINK_ALL = /(?:https?:\/\/)?[^\s]*\/l\/[A-Za-z0-9_-]{10,}|(?:https?:\/\/)?t\.me\/(?:\+|joinchat\/)[\w-]+/gi;
 
-/** Настоящие ссылки, которые Ширин вручную присылала клиентке, ПОШТУЧНО (по возрастанию времени). */
+/**
+ * Настоящие ссылки, которые Ширин вручную присылала клиентке после `since`:
+ * каждый адрес ОДИН раз (переслала ту же ссылку дважды - это одна ссылка), с
+ * моментом ПЕРВОЙ отправки. Берём последние 200 сообщений Ширин: свежая ссылка
+ * в длинной переписке не теряется (ревью PR 72).
+ */
 export async function manualLinks(contactId: string, since: Date): Promise<{ url: string; at: Date }[]> {
-  // ПОСЛЕДНИЕ 50 сообщений (по убыванию) и разворот: иначе длинная переписка с
-  // Ширин теряет свежую ссылку (ревью PR 72).
   const latest = await prisma.message.findMany({
     where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: since }, text: { not: null } },
     orderBy: { createdAt: "desc" },
-    take: 50,
+    take: 200,
     select: { text: true, createdAt: true },
   });
   const rows = [...(latest ?? [])].reverse();
-  const out: { url: string; at: Date }[] = [];
+  const out = new Map<string, { url: string; at: Date }>();
   for (const m of rows) {
-    for (const hit of (m.text ?? "").match(MANUAL_LINK_ALL) ?? []) out.push({ url: hit, at: m.createdAt });
+    for (const hit of (m.text ?? "").match(MANUAL_LINK_ALL) ?? []) {
+      const url = hit.replace(/[.,!?)»"']+$/u, "");
+      const key = linkKey(url);
+      if (!out.has(key)) out.set(key, { url, at: m.createdAt });
+    }
   }
-  return out;
+  return [...out.values()];
+}
+
+/** Один адрес - один ключ: с https:// и без, в любом регистре домена. */
+function linkKey(url: string): string {
+  return url.replace(/^https?:\/\//i, "").replace(/^(www\.)/i, "");
 }
 
 export async function manualLinkSince(contactId: string, since: Date): Promise<boolean> {
@@ -132,9 +145,22 @@ export async function receiptServedState(contactId: string, since: Date, courses
 }
 
 /**
- * Вопрос «есть ли Telegram?» ждёт ответа, но эта покупка уже выдана (у неё есть
- * ссылка) или Ширин прислала настоящую ссылку после покупки: снимаем ожидание
- * ТОЛЬКО у таких покупок. true - не осталось ни одной ждущей покупки.
+ * Вопрос «есть ли Telegram?» ждёт ответа, но покупка уже выдана (у неё есть
+ * ссылка) или Ширин прислала ссылку, которая ПРАВДА открывает этот курс этому
+ * человеку: снимаем ожидание ТОЛЬКО у таких покупок. true - не осталось ни одной
+ * ждущей покупки.
+ *
+ * ДЕНЬГИ (ревью PR 72): раньше ссылка не сверялась с курсом - клиентка купила оба
+ * курса, Ширин прислала группу «Арт-десерты», а закрывался «21 рецепт» (последняя
+ * покупка); бот потом слал ещё раз не тот курс, а «21 рецепт» не приходил никогда.
+ * Теперь каждая ссылка сверяется manualLinkServesCourse:
+ *  - личная ссылка сайта ЭТОГО человека (/l/<код>) открывает все его курсы -
+ *    закрывает все покупки, созданные до неё;
+ *  - приглашение в группу (из панели) закрывает только покупку своего курса;
+ *  - незнакомая ссылка (создана в самом Telegram, чужая, просроченная) не закрывает
+ *    ничего: Далеру одна строка «сверьте», без повторов.
+ * Покупка на курс одна (уникальность в базе), поэтому повтор той же ссылки не
+ * закроет вторую покупку.
  */
 export async function settleChoiceIfHandedOut(contactId: string): Promise<boolean> {
   const waiting = await prisma.purchase.findMany({
@@ -142,48 +168,64 @@ export async function settleChoiceIfHandedOut(contactId: string): Promise<boolea
     select: { id: true, createdAt: true, inviteLink: true, course: true },
   });
   if (!waiting || waiting.length === 0) return false;
-  const settled: string[] = [];
-  const open = waiting.filter((p) => !p.inviteLink);
-  for (const p of waiting) if (p.inviteLink) settled.push(p.id);
-  // Каждая ручная ссылка "тратится" один раз (ревью PR 72): закрывает не больше одной
-  // покупки - последней, созданной до неё, - и её адрес записывается в покупку, так что
-  // следующие проверки эту ссылку уже не учитывают. Две ссылки в одном сообщении
-  // закрывают две покупки.
   const at = (d: Date | undefined | null): number => (d instanceof Date ? d.getTime() : 0);
-  // Потраченные ссылки НЕ пишем в inviteLink (по нему groupAccess ищет, кто вошёл в
-  // группу, и отзывает доступ): считаем без состояния. Уже закрытые вручную покупки
-  // (accessIssuedAt есть, inviteLink нет) расходуют столько же первых ссылок.
-  const manualDone = await prisma.purchase.findMany({
-    where: { contactId, revokedAt: null, inviteLink: null, accessIssuedAt: { not: null } },
-    select: { createdAt: true },
-  });
-  const since = new Date(Math.min(...waiting.map((p) => at(p.createdAt)), ...(manualDone ?? []).map((p) => at(p.createdAt))));
-  const spentCount = (manualDone ?? []).length;
-  const links = (await manualLinks(contactId, since)).slice(spentCount);
-  for (const l of links) {
-    const candidates = open.filter((p) => !settled.includes(p.id) && at(p.createdAt) <= at(l.at));
-    candidates.sort((x, y) => at(y.createdAt) - at(x.createdAt));
-    if (candidates[0]) settled.push(candidates[0].id);
+  const settled = new Set<string>(waiting.filter((p) => p.inviteLink).map((p) => p.id));
+  const open = waiting.filter((p) => !p.inviteLink);
+  const unverified: string[] = [];
+  if (open.length > 0) {
+    const since = new Date(Math.min(...open.map((p) => at(p.createdAt))));
+    for (const link of await manualLinks(contactId, since)) {
+      const before = open.filter((p) => at(p.createdAt) <= at(link.at));
+      if (before.length === 0) continue;
+      let served = false;
+      for (const p of before) {
+        if (await manualLinkServesCourse(contactId, link.url, p.course as Course).catch(() => false)) {
+          settled.add(p.id);
+          served = true;
+        }
+      }
+      if (!served) unverified.push(link.url);
+    }
   }
-  if (settled.length === 0) return false;
+  const leftover = waiting.filter((p) => !settled.has(p.id));
+  if (unverified.length > 0 && leftover.length > 0) await reportUnverifiedLinks(contactId, unverified, leftover);
+  if (settled.size === 0) return false;
   // accessIssuedAt: метка "выдано вручную" - планировщик не считает курс недоставленным
-  for (const id of settled) {
-    await prisma.purchase.update({ where: { id }, data: { deliveryAwaitingChoice: false, accessIssuedAt: new Date() } });
+  // (courses.awaitsBotDelivery). Адрес в inviteLink НЕ пишем: по нему groupAccess ищет,
+  // кто вошёл в группу.
+  for (const p of waiting) {
+    if (!settled.has(p.id)) continue;
+    await prisma.purchase.update({
+      where: { id: p.id },
+      data: { deliveryAwaitingChoice: false, ...(p.inviteLink ? {} : { accessIssuedAt: new Date() }) },
+    });
   }
-  // Владельцу про это не пишем (11.11.2026: «вы прислали ссылку вручную... проверьте» - шум).
-  const leftover = waiting.filter((p) => !settled.includes(p.id));
+  // Владельцу про закрытые ручной ссылкой не пишем (11.11.2026: шум).
   if (leftover.length > 0) {
     // Часть покупок ещё ждёт: вопрос про Telegram нужно задать заново (ответ "да" после
     // сообщения Ширин не засчитывается) - сбрасываем состояние вопроса.
     await prisma.contact.updateMany({ where: { id: contactId }, data: { deliveryChoicePromptState: null, deliveryChoicePromptMid: null } });
+    return false;
   }
-  if (settled.length === waiting.length) {
-    await prisma.receiptCheck.updateMany({
-      where: { contactId, awaitingDeliveryChoice: true },
-      // linkSent: платёж принят и обслужен вручную - проверки повторов и отчёт видят его
-      data: { awaitingDeliveryChoice: false, linkSent: true },
-    });
-    return true;
+  await prisma.receiptCheck.updateMany({
+    where: { contactId, awaitingDeliveryChoice: true },
+    // linkSent: платёж принят и обслужен вручную - проверки повторов и отчёт видят его
+    data: { awaitingDeliveryChoice: false, linkSent: true },
+  });
+  return true;
+}
+
+/** Ссылку Ширин не удалось сверить с курсом: оплату не закрываем, Далеру одна
+ *  строка на ссылку (тех-чат, как в receiptVerdict.settleManualHandout). */
+async function reportUnverifiedLinks(contactId: string, links: string[], leftover: { course: string }[]): Promise<void> {
+  const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { username: true, igUserId: true } });
+  const who = contact?.username ? `@${contact.username}` : (contact?.igUserId ?? contactId);
+  const titles = leftover.map((p) => COURSE_TITLE[p.course as Course] ?? p.course).join(", ");
+  for (const link of links) {
+    await notifyOwnerDirect(
+      `${who}: Ширин прислала ссылку вручную, но бот не узнал, в какой она курс. Ждёт выдачи: ${titles}. ` +
+        "Если доступ уже выдан - сверьте группу; иначе бот спросит про Telegram и выдаст сам.",
+      { dedupeKey: `manual-link-unverified:${contactId}:${linkKey(link)}`, cooldownMs: 30 * 24 * 3_600_000 },
+    ).catch((err) => logError("handedOut:unverifiedLink", err));
   }
-  return false;
 }

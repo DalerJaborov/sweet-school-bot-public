@@ -6,8 +6,9 @@ import { contactLanguage } from "../ai/contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked, currentReceiptEvidence } from "../messaging/automation.js";
 import { metaFailureKind } from "../messaging/metaErrors.js";
-import { splitAmount, type Allocation, type Course } from "../courses.js";
+import { awaitsBotDelivery, splitAmount, type Allocation, type Course } from "../courses.js";
 import { settleChoiceIfHandedOut } from "./handedOut.js";
+import { oneAtATimeForContact } from "../receiptQueue.js";
 
 export type CourseDeliveryChoice = "telegram" | "web";
 export function isDeliveryChoice(value: unknown): value is CourseDeliveryChoice {
@@ -117,7 +118,9 @@ export async function deferGrantForChoice(
     for (let i = 0; i < plan.grant.length; i++) {
       const course = plan.grant[i];
       const prior = await tx.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
-      if (prior?.revokedAt || prior?.inviteLink || prior?.accessDeliveryUncertainAt) continue;
+      // Отозванная, уже выданная (ссылкой, вручную, записью из панели) или с неясной
+      // доставкой покупка в ожидание вопроса про Telegram не возвращается.
+      if (prior && (!awaitsBotDelivery(prior) || prior.accessDeliveryUncertainAt)) continue;
       if (prior) {
         await tx.purchase.update({ where: { id: prior.id }, data: { deliveryAwaitingChoice: true } });
       } else {
@@ -277,6 +280,14 @@ export async function askDeliveryChoice(
 /** Deterministic entry before the model and access recovery. No fresh payment,
  * no question state, or an unrelated answer => never chooses a delivery mode. */
 export async function handleDeliveryChoiceReply(contact: Contact, text: string): Promise<boolean> {
+  // Нет ожидающей покупки - очередь не нужна (обычное сообщение не ждёт разбора чеков).
+  const pending = await prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null, deliveryAwaitingChoice: true } });
+  if (!pending) return false;
+  // В одной очереди с разбором чеков и кнопкой Ширин (receiptQueue.ts).
+  return oneAtATimeForContact(contact.id, () => handleDeliveryChoiceReplyNow(contact, text));
+}
+
+async function handleDeliveryChoiceReplyNow(contact: Contact, text: string): Promise<boolean> {
   const receipt = await prisma.receiptCheck.findFirst({
     where: {
       contactId: contact.id,

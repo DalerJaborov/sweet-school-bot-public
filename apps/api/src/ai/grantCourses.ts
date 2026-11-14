@@ -4,7 +4,7 @@ import { contactLanguage } from "./contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { createOneTimeInviteLink } from "../telegram.js";
 import { rememberInviteLink } from "../groupAccess.js";
-import { chatIdFor, COURSE_TITLE, splitAmount, type Allocation, type Course } from "../courses.js";
+import { awaitsBotDelivery, chatIdFor, COURSE_TITLE, splitAmount, type Allocation, type Course } from "../courses.js";
 import {
   deliveryModeFor,
   issueCourseLink,
@@ -98,7 +98,8 @@ export async function grantCourses(
     const existing = await prisma.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
     if (existing) {
       // Resume only an undelivered active purchase; never revive revoked access.
-      if (existing.revokedAt || existing.inviteLink || existing.accessDeliveryUncertainAt ||
+      // Ручная запись и ручная выдача Ширин - уже доставлены (courses.awaitsBotDelivery).
+      if (!awaitsBotDelivery(existing) || existing.accessDeliveryUncertainAt ||
           (existing.deliveryAwaitingChoice && !opts.fromDeliveryChoice)) continue;
       purchaseId = existing.id;
     } else {
