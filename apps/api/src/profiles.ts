@@ -1,4 +1,5 @@
 import { prisma, getSetting, logError } from "./db.js";
+import { instagramViaPage } from "./metaTokenAlarm.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { env } from "./env.js";
 import { showsCourseInterest } from "./ai/relevance.js";
@@ -32,19 +33,21 @@ type Profile = { name?: string; username?: string; profile_pic?: string; profile
 
 async function fetchProfile(igUserId: string, channel: string): Promise<Profile | null> {
   if (channel !== "INSTAGRAM" && channel !== "MESSENGER") return null;
+  // Instagram через Страницу (igSendVia=page) — профиль спрашиваем у graph.facebook.com ключом Страницы.
+  const viaPage = channel === "MESSENGER" || (await instagramViaPage());
   const messenger = channel === "MESSENGER";
-  const token = (await getSetting(messenger ? "fbPageToken" : "igToken"))?.trim();
+  const token = (await getSetting(viaPage ? "fbPageToken" : "igToken"))?.trim();
   if (!token) return null;
 
   const fields = messenger ? "name,profile_pic" : "name,username,profile_pic";
   const path = `/${GRAPH_VERSION}/${igUserId}?fields=${fields}`;
 
-  const url = messenger
+  const url = viaPage
     ? `${FB_ORIGIN}${path}&access_token=${encodeURIComponent(token)}`
     : env.igProxyBase
       ? `${env.igProxyBase}${path}&access_token=${encodeURIComponent(token)}`
       : `${IG_ORIGIN}${path}`;
-  const headers: Record<string, string> = messenger
+  const headers: Record<string, string> = viaPage
     ? {}
     : env.igProxyBase
       ? env.igProxyKey

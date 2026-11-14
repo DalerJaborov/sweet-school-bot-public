@@ -124,6 +124,21 @@ export function contactAutomationBlocked(contact: ContactPolicy, purpose: Messag
   return purpose !== "verified_receipt_access" && humanSilenceActive(contact);
 }
 
+/**
+ * WHATSAPP: «БОТ МОЛЧИТ, НО ЧЕКИ СЧИТАЕТ» (владелец 13.11.2026).
+ *
+ * Раньше, чтобы бот не болтал в WhatsApp, владелец ставил мост на паузу — и мост
+ * выбрасывал ВСЕ входящие, чеки тоже: оплаты из WhatsApp не считались, ссылка не
+ * уходила. Теперь мост остаётся включённым, а этот рубильник глушит в WhatsApp
+ * любые сообщения бота (ответы ИИ, напоминания, вложения), кроме ссылки после
+ * проверенного чека (verified_receipt_access) и сообщений самой Ширин.
+ * Одна дверь: проверка в assertContactMessagingAllowed, её вызывает каждая отправка.
+ */
+export const WHATSAPP_RECEIPTS_ONLY_SETTING = "whatsappReceiptsOnly";
+export async function whatsappReceiptsOnly(): Promise<boolean> {
+  return (await getSetting(WHATSAPP_RECEIPTS_ONLY_SETTING)) === "true";
+}
+
 /** Reload immediately before each network operation, including transport retries. */
 export async function assertContactMessagingAllowed(contactId: string, purpose: MessagePurpose = "reply"): Promise<void> {
   if (purpose === "human" || permission.getStore() === "human") return;
@@ -134,6 +149,9 @@ export async function assertContactMessagingAllowed(contactId: string, purpose: 
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) throw new ContactMessagingBlocked("missing contact");
   if (contactAutomationBlocked(contact, purpose)) throw new ContactMessagingBlocked("contact policy");
+  if (purpose === "reply" && contact.channel === "WHATSAPP" && (await whatsappReceiptsOnly())) {
+    throw new ContactMessagingBlocked("whatsapp receipts only");
+  }
 }
 
 export function withContactMessaging<T>(contactId: string, purpose: MessagePurpose, send: () => Promise<T>): Promise<T> {
