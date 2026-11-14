@@ -6,7 +6,7 @@ import { sendToContact } from "./messaging/send.js";
 import { chatIdFor, COURSE_50, COURSE_70, COURSE_TITLE, type Course } from "./courses.js";
 import { deliveryModeFor, issueCourseLink } from "./course/delivery.js";
 import { recordPanelInviteJoin, revokeInvitesForContact } from "./links/telegramInvites.js";
-import { removeContactFromGroups } from "./groupExit.js";
+import { recordGroupJoin, removeContactFromGroups } from "./groupExit.js";
 
 /**
  * ДОСТУП В ЗАКРЫТЫЕ ГРУППЫ: кто вошёл и как отобрать.
@@ -232,6 +232,8 @@ export async function handleChatMember(update: ChatMemberUpdate): Promise<void> 
   // по КОНКРЕТНОЙ купленной группе — без этого поле Purchase.joinedAt так и
   // оставалось бы всегда пустым, и проверочное сообщение никогда бы не ушло.
   if (joined) {
+    // Каждый вход — в журнал: после удаления и повторного входа пометка «в группе» снова верна.
+    await recordGroupJoin(contact.id, String(update.chat?.id ?? ""), String(userId));
     await prisma.purchase
       .updateMany({
         where: { contactId: contact.id, inviteLink: link, joinedAt: null },
@@ -416,7 +418,9 @@ export async function restoreAccess(contactId: string): Promise<{ ok: boolean; d
     }
     await prisma.purchase.update({
       where: { id: purchase.id },
-      data: { revokedAt: null, ...(telegramLink ? { inviteLink: telegramLink } : {}) },
+      // Выданная ссылка помечается на покупке и для сайта (как в grantCourses): иначе
+      // правило «одна ссылка» и проверка «уже выдано» её не видят (дыра из #78).
+      data: { revokedAt: null, inviteLink: link },
     });
     try {
       const text = revokedPurchases.length > 1 ? `${COURSE_TITLE[course]}\n${link}` : link;

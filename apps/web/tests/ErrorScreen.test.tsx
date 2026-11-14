@@ -96,29 +96,22 @@ describe("ErrorScreen: публичный код покупательницы", 
   });
 });
 
-describe("ErrorScreen: переключение на Telegram (одна ссылка на человека)", () => {
+describe("ErrorScreen: нет кнопки «в Telegram» (ревью PR 64: ученица только на сайте теряла уроки)", () => {
   afterEach(() => localStorage.clear());
 
-  it("ссылка на сайт не действует — кнопка ведёт в WhatsApp с просьбой «хочу в Telegram» и кодом", async () => {
-    localStorage.setItem("course.recoveryCode", "7F3A-91C2");
-    render(<ErrorScreen t={t} error={{ message: "Ссылка не действует", reason: "not_found" }} onRetry={() => undefined} />);
-
-    const link = await screen.findByRole("link", { name: t.switchToTelegram });
-    const text = decodeURIComponent(String(link.getAttribute("href")).split("text=")[1]);
-    expect(text).toBe(`${t.switchToTelegramWa}. ${t.linkBrokenCode}: 7F3A-91C2`);
-    expect(String(link.getAttribute("href")).startsWith("https://wa.me/992905355355?text=")).toBe(true);
-  });
-
-  it("при отказе по другой причине (доступ закрыт, нет сети) кнопки Telegram нет", async () => {
-    render(<ErrorScreen t={t} error={{ message: "x", reason: "revoked" }} onRetry={() => undefined} school={contacts} />);
-    expect(screen.queryByRole("link", { name: t.switchToTelegram })).toBeNull();
-  });
-
-  it("по-таджикски — тексты таджикские, «шумо»-стиль", async () => {
-    const tg = dict("tg");
-    render(<ErrorScreen t={tg} error={{ message: "x", reason: "no_session" }} onRetry={() => undefined} />);
-    const link = await screen.findByRole("link", { name: tg.switchToTelegram });
-    expect(decodeURIComponent(String(link.getAttribute("href")))).toContain(tg.switchToTelegramWa);
-  });
+  for (const reason of ["not_found", "no_session", "revoked", "network"] as const) {
+    it(`отказ «${reason}»: ни кнопки, ни ссылки с просьбой перевести в Telegram`, async () => {
+      localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+      render(<ErrorScreen t={t} error={{ message: "x", reason }} onRetry={() => undefined} school={contacts} />);
+      // Прежние подписи кнопки (ru/tg) — их нет ни в каком виде.
+      expect(screen.queryByText(/Открыть уроки в Telegram|Дарсҳоро дар Telegram/i)).toBeNull();
+      // Ни одна ссылка не несёт готовую просьбу «хочу в Telegram» боту.
+      for (const link of screen.queryAllByRole("link")) {
+        expect(decodeURIComponent(String(link.getAttribute("href")))).not.toMatch(/хочу в telegram|дар telegram мехоҳам/i);
+      }
+      expect("switchToTelegram" in t).toBe(false);
+      expect("switchToTelegram" in dict("tg")).toBe(false);
+    });
+  }
 });
 

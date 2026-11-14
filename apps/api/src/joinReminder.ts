@@ -151,6 +151,18 @@ async function sweep(): Promise<void> {
 
     // Пришедшая с сайта получает платформу при любом режиме (deliveryModeFor).
     const contactMode = await deliveryModeFor(contact);
+    // Режим «Telegram» отбирает «не вошла в группу», но она учится на сайте (выбор
+    // «сайт», в том числе после ручной выдачи ссылки владельцем — PR 64 v2) и уроки
+    // уже открывала: напоминать «вы ещё не открыли уроки» неправда. Отметка ставится — один раз.
+    if (mode === "telegram" && contactMode === "web") {
+      const unopened = await prisma.purchase.count({
+        where: { contactId: contact.id, revokedAt: null, firstOpenedAt: null },
+      });
+      if (unopened === 0) {
+        await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
+        continue;
+      }
+    }
     const deliveredUpdates: { id: string; link: string }[] = [];
     const links = windowOpen ? await reissueLinks(contact.id, botToken, contactMode, deliveredUpdates) : [];
     let uncertain = pendingUncertain;

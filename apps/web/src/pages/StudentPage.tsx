@@ -32,6 +32,8 @@ const EVENT_LABEL: Record<string, string> = {
   blocked: "Заблокировано",
   unblocked: "Разблокировано",
   removed: "Убрана из группы Telegram",
+  joined: "Вошла в группу Telegram",
+  left: "В группе Telegram её уже не было",
 };
 const ACTOR_LABEL: Record<string, string> = {
   owner: "вы",
@@ -70,13 +72,17 @@ export function StudentPage({ contactId, onBack }: { contactId: string; onBack: 
     if (!ok) return;
     setBusy("link");
     try {
-      const r = await api<{ url: string }>(`/admin/metrics/student/${contactId}/link`, { method: "POST" });
+      const r = await api<{ url: string; closedInvite?: boolean }>(`/admin/metrics/student/${contactId}/link`, {
+        method: "POST",
+      });
       setLink(r.url);
+      // Закрытое приглашение называем вслух: дверь не закрывается незаметно.
+      const closed = r.closedInvite ? " Приглашение в группу Telegram закрыто." : "";
       try {
         await navigator.clipboard?.writeText(r.url);
-        toast("Новая ссылка скопирована — перешлите её ученице");
+        toast(`Новая ссылка скопирована — перешлите её ученице.${closed}`);
       } catch {
-        toast("Ссылка готова — скопируйте её ниже");
+        toast(`Ссылка готова — скопируйте её ниже.${closed}`);
       }
     } catch (e) {
       toast(e instanceof Error ? e.message : "Не удалось выдать ссылку", "error");

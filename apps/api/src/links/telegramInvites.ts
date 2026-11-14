@@ -1,6 +1,6 @@
 import { prisma, getSetting, logError, logInfo, logWarn } from "../db.js";
 import { chatKeyFor, COURSE_50, COURSE_70, COURSE_TITLE } from "../courses.js";
-import { alertOwnerProblem, removeFromGroupChat } from "../groupExit.js";
+import { alertOwnerProblem, recordGroupJoin, removeFromGroupChat } from "../groupExit.js";
 
 /**
  * ПРИГЛАШЕНИЯ В TELEGRAM-ГРУППЫ ИЗ ПАНЕЛИ (раздел «Ссылки», 08.11.2026).
@@ -430,6 +430,13 @@ export async function recordPanelInviteJoin(link: string, user: JoinedUser, join
           data: { joinedAt: now },
         })
         .catch((err) => logError("links:joinPurchase", err));
+    }
+    // Вход в журнал карточки (пометка «в группе», groupExit.inGroupNow) — если вошла именно она.
+    const linked = await prisma.contact
+      .findUnique({ where: { id: invite.contactId }, select: { telegramUserId: true } })
+      .catch(() => null);
+    if (linked?.telegramUserId === String(telegramUserId)) {
+      await recordGroupJoin(invite.contactId, invite.chatId, String(telegramUserId));
     }
   }
   return true;

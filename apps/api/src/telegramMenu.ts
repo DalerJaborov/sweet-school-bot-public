@@ -343,7 +343,8 @@ ${result.url}
 
 ` +
       "Она личная: откроется на первом телефоне, где её нажмут, пересылать дальше нельзя. " +
-      "Прошлая ссылка с этой минуты не работает.";
+      "Прошлая ссылка с этой минуты не работает." +
+      (result.closedInvite ? " Приглашение в группу Telegram закрыто (из самой группы её не убирали)." : "");
     // Прошлая ссылка уже погашена: если сообщение не ушло, повторяем без кнопки, а не теряем ссылку.
     if (!(await sendWithMarkup(botToken, chatId, body, shareButton(result.url)))) {
       await sendTelegramMessage(botToken, chatId, body);
@@ -531,11 +532,18 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
   }
   const switchCard = /^mn:sw:([0-9a-f-]{36}):([wt])$/.exec(query.data ?? "");
   if (switchCard && query.id && chatId) {
+    // Карточка одноразовая и живёт сутки (channelSwitch.ts): второе и позднее нажатие ничего не меняют.
     const done = await approveSwitchByOwner(switchCard[1], switchCard[2] === "w" ? "web" : "telegram").catch((err) => {
       logError("telegramMenu:approveSwitch", err);
-      return false;
+      return "failed" as const;
     });
-    await answerCallback(botToken, query.id, done ? "Готово, переведена" : "Не получилось");
+    const answer = {
+      ok: "Готово, переведена, ей написали",
+      expired: "Карточка устарела или уже использована. Если нужно — «Выдать ссылку» в меню",
+      banned: "В группе она заблокирована: разблокируйте её в самой группе",
+      failed: "Не получилось. Если доступ у неё не отобран, попробуйте через минуту",
+    }[done];
+    await answerCallback(botToken, query.id, answer);
     return;
   }
   const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");

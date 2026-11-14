@@ -1,13 +1,15 @@
 import type { Contact, Purchase } from "@prisma/client";
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { techChatIds, sendTelegramMessage, createOneTimeInviteLink, revokeInviteLink } from "../telegram.js";
-import { shouldSendAlert } from "../alertGate.js";
+import { createOneTimeInviteLink, revokeInviteLink } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { chatIdFor, COURSE_TITLE, type Course } from "../courses.js";
 import { canTransferNow, issueMagicLink, recentTransfers, releaseAllDevices, shortCode } from "./access.js";
 import { coursePlatformReady } from "./delivery.js";
 import { revokeInvitesForContact } from "../links/telegramInvites.js";
 import { alertOwnerProblem, removeContactFromGroups } from "../groupExit.js";
+import { checkInviteTargets, withPersonLock } from "./groupInvite.js";
+import { settleChoiceIfHandedOut } from "./handedOut.js";
 
 /**
  * ОДНА ДЕЙСТВУЮЩАЯ ССЫЛКА НА ЧЕЛОВЕКА (владелец 08.11.2026).
@@ -35,11 +37,29 @@ import { alertOwnerProblem, removeContactFromGroups } from "../groupExit.js";
  *  - Закрывать Telegram-дверь, когда сайт выдан, везде один путь:
  *    closeTelegramAccess. Удаляет из группы только перевод «человек просит сайт»
  *    (бот или кнопка владельца) и только ПОСЛЕ доставки сайтовой ссылки; ручная
- *    выдача ссылки владельцем (/ссылка, «Новая ссылка») лишь отзывает приглашение.
+ *    выдача ссылки владельцем (ownerLink.ts: кнопка, /ссылка, «Новая ссылка»)
+ *    лишь отзывает приглашение и ПОМЕЧАЕТ выдачу (markWebIssuedByOwner).
+ *    Общий выпуск ссылки (delivery.ts issueCourseLink) ничего не закрывает: иначе
+ *    возврат доступа и прочие пути закрывали бы дверь незаметно (ревью PR 64).
+ *  - Приглашение в группу тому, кто уже в ней, не выдаётся (его можно переслать
+ *    подруге): общая проверка course/groupInvite.ts, как у «Выдать ссылку».
+ *  - Карточка владельцу («Перевести») одноразовая и живёт сутки, как карточка
+ *    «Разрешить перенос» (phoneChange.ts): старое нажатие не переведёт человека,
+ *    чьё положение давно другое.
  */
 
 export type SwitchTarget = "web" | "telegram";
-export type SwitchOutcome = "switched" | "already" | "limit" | "revoked" | "failed" | "unavailable";
+export type SwitchOutcome =
+  | "switched"
+  | "already"
+  | "limit"
+  | "revoked"
+  | "failed"
+  | "unavailable"
+  /** Не смогли проверить, в группе ли она: новое приглашение наугад не выдаём. */
+  | "unverifiable"
+  /** В группе курса она забанена: войти по приглашению не сможет, нужен владелец. */
+  | "banned";
 type Lang = "ru" | "tg" | "en";
 
 const DAY_MS = 86_400_000;
@@ -116,7 +136,8 @@ const CONFIRM: Record<Lang, { web: string; webMany: string; telegram: string; vi
   },
   en: {
     web: "Move you to the website? The Telegram invitation will stop working and your place in the group will be closed. Reply yes to confirm.",
-    webMany: "Move you to the website? The Telegram invitations will stop working and your places in the groups will be closed. Reply yes to confirm.",
+    webMany:
+      "Move you to the website? The Telegram invitations will stop working and your places in the groups will be closed. Reply yes to confirm.",
     telegram: "Move you to Telegram? The website link will stop working. Reply yes to confirm.",
     viaOwner: "Changing the way you log in needs Shirin's permission. Pass your request to her? Reply yes to confirm.",
   },
@@ -146,7 +167,7 @@ export async function askSwitchConfirmation(contact: Contact, target: SwitchTarg
   pending.set(contact.id, { target, until: Date.now() + PENDING_MS });
   // Обещать «пришлю сразу» можно, только если бот переведёт сам; иначе просьба уйдёт Ширин.
   const purchases = await prisma.purchase.findMany({ where: { contactId: contact.id, revokedAt: null } });
-  const direct = purchases.length > 0 && (isFreeSwitch(purchases) || canTransferNow(contact));
+  const direct = purchases.length > 0 && (isFreeSwitch(contact, purchases) || canTransferNow(contact));
   const many = target === "web" && purchases.length > 1;
   await deliver(
     contact,
@@ -157,7 +178,17 @@ export async function askSwitchConfirmation(contact: Contact, target: SwitchTarg
 
 const TEXT: Record<
   Lang,
-  { web: string; telegram: string; passed: string; approvedWeb: string; approvedTelegram: string }
+  {
+    web: string;
+    telegram: string;
+    passed: string;
+    approvedWeb: string;
+    approvedTelegram: string;
+    /** Переход в Telegram, а она уже в группе: нового приглашения нет (его можно было бы переслать). */
+    inGroup: string;
+    /** Часть курсов: приглашения выше, а в этих группах она уже есть. */
+    alsoInGroup: string;
+  }
 > = {
   ru: {
     web:
@@ -173,6 +204,10 @@ const TEXT: Record<
     approvedTelegram:
       "Ширин разрешила перевод в Telegram. Вот приглашение в группу с уроками, оно одноразовое. " +
       "Ссылка на сайт больше не открывает уроки:\n",
+    inGroup:
+      "Перевела вас в Telegram. Вы уже в группе с уроками: откройте её в Telegram. " +
+      "Ссылка на сайт больше не открывает уроки.",
+    alsoInGroup: "В этой группе вы уже есть, она открывается в Telegram: ",
   },
   tg: {
     web:
@@ -188,6 +223,10 @@ const TEXT: Record<
     approvedTelegram:
       "Ширин гузаронидан ба Telegram-ро иҷозат дод. Мана даъват ба гурӯҳи дарсҳо, он яквақта аст. " +
       "Линки сайт дигар дарсҳоро намекушояд:\n",
+    inGroup:
+      "Шуморо ба Telegram гузарондам. Шумо аллакай дар гурӯҳи дарсҳо ҳастед: онро дар Telegram кушоед. " +
+      "Линки сайт дигар дарсҳоро намекушояд.",
+    alsoInGroup: "Дар ин гурӯҳ шумо аллакай ҳастед, онро дар Telegram кушоед: ",
   },
   en: {
     web: "I moved you to the website. Here is your link, open it on your phone. The Telegram group invitation no longer works:\n",
@@ -196,6 +235,9 @@ const TEXT: Record<
     passed: "I passed this to Shirin, she will look and reply.",
     approvedWeb: "Your lessons are now on the website. Here is your link:\n",
     approvedTelegram: "Shirin approved the move to Telegram. Here is the group invitation:\n",
+    inGroup:
+      "I moved you to Telegram. You are already in the lessons group, open it in Telegram. The website link no longer opens the lessons.",
+    alsoInGroup: "You are already in this group, open it in Telegram: ",
   },
 };
 
@@ -214,11 +256,22 @@ function webLinkIsLive(contact: Pick<Contact, "accessTokenId" | "accessIssuedAt"
   return Boolean(contact.accessTokenId && contact.accessIssuedAt && contact.accessIssuedAt.getTime() > DAY_MS);
 }
 
-/** Переключение бесплатное: первые сутки после покупки либо ничего ещё не открывала. */
-export function isFreeSwitch(purchases: Pick<Purchase, "createdAt" | "firstOpenedAt" | "joinedAt">[]): boolean {
+/**
+ * Переключение бесплатное: первые сутки после покупки либо ничего ещё не
+ * открывала. «Открывала» — это и сайт (firstOpenedAt), и вход в группу: отметка
+ * на покупке (joinedAt) ИЛИ на контакте (joinedGroupAt). Старые оплаты и входы
+ * по ссылкам из панели отмечены только на контакте — без него вошедшая в группу
+ * считалась бы «ничего не открывавшей» и переключалась бы бесплатно без конца
+ * (ревью PR 64).
+ */
+export function isFreeSwitch(
+  contact: Pick<Contact, "joinedGroupAt">,
+  purchases: Pick<Purchase, "createdAt" | "firstOpenedAt" | "joinedAt">[],
+): boolean {
   if (purchases.length === 0) return false;
   const first = Math.min(...purchases.map((p) => p.createdAt.getTime()));
   if (Date.now() - first < FREE_WINDOW_MS) return true;
+  if (contact.joinedGroupAt) return false;
   return purchases.every((p) => !p.firstOpenedAt && !p.joinedAt);
 }
 
@@ -284,7 +337,8 @@ export async function closeTelegramAccess(
   const invites = await invitesOf(contact, purchases);
   if (botToken) {
     for (const { link, chatIds } of invites) {
-      if (!(await revokeInvite(botToken, link, chatIds))) problems.push("приглашение в группу отозвать не удалось, отзовите его вручную");
+      if (!(await revokeInvite(botToken, link, chatIds)))
+        problems.push("приглашение в группу отозвать не удалось, отзовите его вручную");
     }
   } else if (invites.length > 0) {
     problems.push("приглашение в группу отозвать не удалось (не задан маркер бота), отзовите его вручную");
@@ -294,7 +348,8 @@ export async function closeTelegramAccess(
     logError("channelSwitch:panelInvites", err);
     return -1;
   });
-  if (panelFailed !== 0 && panelFailed !== undefined) problems.push("ссылку из раздела «Ссылки» отозвать не удалось, отзовите её там");
+  if (panelFailed !== 0 && panelFailed !== undefined)
+    problems.push("ссылку из раздела «Ссылки» отозвать не удалось, отзовите её там");
   // Из группы убираем ТОЛЬКО в переводе «человек просит сайт» (после доставки сайтовой
   // ссылки). Ручная выдача ссылки владельцем приглашение отзывает, но не выгоняет.
   if (opts.removeFromGroup) {
@@ -331,6 +386,16 @@ export async function switchCourseChannel(
   kind: "bot" | "owner",
   language?: Lang,
 ): Promise<SwitchOutcome> {
+  // Одна выдача за раз на человека (общий замок с «Выдать ссылку»): иначе две ссылки сразу.
+  return withPersonLock<SwitchOutcome>(contact.id, "failed", () => switchLocked(contact, target, kind, language));
+}
+
+async function switchLocked(
+  contact: Contact,
+  target: SwitchTarget,
+  kind: "bot" | "owner",
+  language?: Lang,
+): Promise<SwitchOutcome> {
   const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
   if (!fresh || fresh.accessRevokedAt || fresh.spamBlockedAt) return "revoked";
   // Только действующие покупки: отозванную переключение не оживляет.
@@ -338,7 +403,7 @@ export async function switchCourseChannel(
   if (purchases.length === 0) return "revoked";
   if (alreadyThere(fresh, purchases, target)) return "already";
 
-  const free = isFreeSwitch(purchases);
+  const free = isFreeSwitch(fresh, purchases);
   if (kind === "bot") {
     if (!free && !canTransferNow(fresh)) return "limit";
   }
@@ -348,7 +413,7 @@ export async function switchCourseChannel(
 
   return target === "web"
     ? toWeb(fresh, purchases, kind, kind === "owner" ? text.approvedWeb : text.web, chargeData)
-    : toTelegram(fresh, purchases, kind, kind === "owner" ? text.approvedTelegram : text.telegram, chargeData);
+    : toTelegram(fresh, purchases, kind, text, chargeData);
 }
 
 /** Записать ссылку с проверкой «прежняя ещё та же». */
@@ -419,20 +484,30 @@ async function toTelegram(
   fresh: Contact,
   purchases: Purchase[],
   kind: "bot" | "owner",
-  intro: string,
+  text: (typeof TEXT)[Lang],
   chargeData: Record<string, unknown>,
 ): Promise<SwitchOutcome> {
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return "unavailable";
+
+  // Уже в группе — новое приглашение не выдаём: его можно переслать подруге.
+  // Проверка общая с «Выдать ссылку» (groupInvite.ts); не смогли проверить — отказ.
+  const check = await checkInviteTargets(fresh, purchases, botToken);
+  if ("fail" in check) return "unverifiable";
+  if (check.banned.length > 0) return "banned";
+  // «Уже в группе» без её Telegram-идентификатора — только по старым отметкам входа:
+  // проверить, не вышла ли она, нельзя, а сайт сейчас закроется. Наугад не переводим.
+  if (!fresh.telegramUserId?.trim() && check.inGroup.length > 0) return "unverifiable";
+  // Курс без группы потерялся бы целиком, когда сайт закроется.
+  if (check.withoutGroup.length > 0) return "unavailable";
 
   // Сначала приглашения: их можно сделать, ничего не ломая.
   const created: { purchase: Purchase; link: string }[] = [];
   const dropCreated = async () => {
     for (const c of created) await revokeInvite(botToken, c.link, await purchaseChats([c.purchase])).catch(() => false);
   };
-  for (const purchase of purchases) {
-    const chatId = await chatIdFor(purchase.course as Course);
-    const link = chatId ? await createOneTimeInviteLink(botToken, chatId) : null;
+  for (const { purchase, chatId } of check.targets) {
+    const link = await createOneTimeInviteLink(botToken, chatId);
     if (!link) {
       await dropCreated();
       return "unavailable";
@@ -447,11 +522,16 @@ async function toTelegram(
     await dropCreated();
     return "failed";
   }
-  const lines =
-    created.length > 1
-      ? created.map((c) => `${COURSE_TITLE[c.purchase.course as Course] ?? c.purchase.course}\n${c.link}`).join("\n\n")
-      : created[0].link;
-  if (!(await deliver(fresh, intro + lines, kind === "owner"))) {
+  const title = (p: Purchase) => COURSE_TITLE[p.course as Course] ?? p.course;
+  const many = created.length + check.inGroup.length > 1;
+  const inviteLines = created.map((c) => (many ? `${title(c.purchase)}\n${c.link}` : c.link)).join("\n\n");
+  const body =
+    created.length === 0
+      ? text.inGroup
+      : (kind === "owner" ? text.approvedTelegram : text.telegram) +
+        inviteLines +
+        (check.inGroup.length > 0 ? `\n\n${text.alsoInGroup}${check.inGroup.map(title).join(", ")}` : "");
+  if (!(await deliver(fresh, body, kind === "owner"))) {
     await restoreLink(fresh, dead);
     await dropCreated();
     return "failed";
@@ -459,8 +539,12 @@ async function toTelegram(
 
   // Приглашение доставлено — сайтовые сессии гасим: удаляются все устройства
   // (а с ними и офлайн-ключи). Заблокированные владельцем не трогаем.
-  // Одним куском: устройства удаляются и выбор записывается вместе, иначе остались бы обе двери.
-  const previous = await invitesOf(fresh, purchases);
+  // Прежние приглашения — только тех покупок, по которым выдано новое: у вошедших
+  // в группу старое приглашение уже использовано, а отметка о входе по нему нужна.
+  const previous = await invitesOf(
+    { ...fresh, inviteLink: created.length > 0 ? fresh.inviteLink : null },
+    created.map((c) => c.purchase),
+  );
   // Сначала гасим сайтовые сессии: если запись ниже оборвётся, открытым останется только Telegram.
   await releaseAllDevices(fresh.id, kind === "owner" ? "owner" : "bot");
   await prisma.$transaction(async (tx) => {
@@ -472,12 +556,22 @@ async function toTelegram(
     }
     await tx.contact.update({
       where: { id: fresh.id },
-      data: { courseDeliveryChoice: "telegram", inviteLink: created[created.length - 1].link, ...chargeData },
+      data: {
+        courseDeliveryChoice: "telegram",
+        ...(created.length > 0 ? { inviteLink: created[created.length - 1].link } : {}),
+        ...chargeData,
+      },
     });
   });
   // Прежние приглашения (режим «обе ссылки») отзываем: у человека остаётся только новое.
-  for (const { link, chatIds } of previous) await revokeInvite(botToken, link, chatIds).catch(() => false);
-  logInfo("course:channelSwitch", `контакт ${fresh.id}: сайт -> Telegram (${kind})`);
+  for (const { link, chatIds } of previous) {
+    if (created.some((c) => c.link === link)) continue;
+    await revokeInvite(botToken, link, chatIds).catch(() => false);
+  }
+  logInfo(
+    "course:channelSwitch",
+    `контакт ${fresh.id}: сайт -> Telegram (${kind}), приглашений ${created.length}, уже в группе ${check.inGroup.length}`,
+  );
   return "switched";
 }
 
@@ -501,15 +595,12 @@ export async function handleSwitchRequest(
     revoked: "просит сменить способ входа, но доступ отозван или покупки нет — решайте вы",
     failed: "просит сменить способ входа, но ссылку отправить не удалось",
     unavailable: "просит сменить способ входа, но нужная ссылка недоступна (группа или курс не настроены)",
+    unverifiable:
+      "просит перейти в Telegram, но проверить, есть ли она уже в группе, не получилось — новое приглашение не выдано",
+    banned: "просит перейти в Telegram, но в группе курса она заблокирована: разблокируйте её в группе вручную",
   };
-  await askOwner(contact, target, why[outcome], outcome !== "revoked");
+  await askOwner(contact, target, why[outcome], outcome !== "revoked" && outcome !== "banned");
   return outcome;
-}
-
-async function ownerChat(): Promise<{ botToken: string; chatId: string } | null> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  return botToken && chatId ? { botToken, chatId } : null;
 }
 
 function who(contact: Contact): string {
@@ -518,25 +609,49 @@ function who(contact: Contact): string {
     .join(", ");
 }
 
-export async function askOwner(contact: Contact, target: SwitchTarget, what: string, withButton: boolean): Promise<void> {
-  const chat = await ownerChat();
-  if (!chat) return;
-  if (!(await shouldSendAlert(`channel-switch:${target}:${contact.id}`, { cooldownMs: 12 * 3_600_000 }))) return;
+/** Карточка «Перевести» живёт сутки и нажимается один раз (как «Разрешить перенос»). */
+const APPROVAL_TTL_MS = 24 * 3_600_000;
+const approvals = new Map<string, { target: SwitchTarget; until: number }>();
+/** Только для тестов. */
+export function resetSwitchApprovals(): void {
+  approvals.clear();
+}
+
+export async function askOwner(
+  contact: Contact,
+  target: SwitchTarget,
+  what: string,
+  withButton: boolean,
+): Promise<void> {
   const to = target === "web" ? "сайт" : "Telegram";
   const button =
     target === "web" && contact.joinedGroupAt ? "Перевести на сайт и убрать из группы" : `Перевести на ${to}`;
-  await sendTelegramMessage(
-    chat.botToken,
-    chat.chatId,
-    `${who(contact)}: ${what}. Хочет: ${to}.` +
+  // Разрешение ставим до отправки (нажатие может прийти раньше ответа Telegram);
+  // карточка не ушла (повтор за 12 часов) — возвращаем прежнее как было.
+  const prior = approvals.get(contact.id);
+  if (withButton) approvals.set(contact.id, { target, until: Date.now() + APPROVAL_TTL_MS });
+  const sent = await sendKind(
+    // «decision» — невыключаемый вид: карточка с кнопкой не пропадёт, даже если «безопасность» выключена.
+    withButton ? "decision" : "security",
+    `🔓 ${who(contact)}: ${what}. Хочет: ${to}.` +
       (withButton
         ? " Если это она, нажмите кнопку: прежний способ входа перестанет работать, новая ссылка уйдёт ей в чат."
         : ""),
-    undefined,
-    withButton
-      ? { inline_keyboard: [[{ text: button, callback_data: `mn:sw:${contact.id}:${target === "web" ? "w" : "t"}` }]] }
-      : undefined,
-  ).catch((err) => logError("channelSwitch:askOwner", err));
+    {
+      dedupeKey: `channel-switch:${target}:${contact.id}`,
+      cooldownMs: 12 * 3_600_000,
+      ...(withButton
+        ? { buttons: [[{ text: button, callback_data: `mn:sw:${contact.id}:${target === "web" ? "w" : "t"}` }]] }
+        : {}),
+    },
+  ).catch((err) => {
+    logError("channelSwitch:askOwner", err);
+    return 0;
+  });
+  if (withButton && sent === 0) {
+    if (prior) approvals.set(contact.id, prior);
+    else approvals.delete(contact.id);
+  }
 }
 
 /** Хозяйке пишем только когда что-то не вышло; свой ключ, не общий часовой «готово». */
@@ -548,36 +663,81 @@ async function reportProblems(contact: Contact, what: string, problems: string[]
   );
 }
 
-/** Владелец нажал кнопку «Перевести»: лимит и «уже в группе» его решением снимаются. */
-export async function approveSwitchByOwner(contactId: string, target: SwitchTarget): Promise<boolean> {
+export type ApproveResult = "ok" | "expired" | "banned" | "failed";
+
+/**
+ * Владелец нажал кнопку «Перевести»: месячный лимит его решением снимается.
+ * «Уже в группе» — НЕ снимается: приглашение сверх группы можно переслать.
+ * Карточка одноразовая и со сроком: второе нажатие и нажатие через сутки — "expired".
+ */
+export async function approveSwitchByOwner(contactId: string, target: SwitchTarget): Promise<ApproveResult> {
+  const approval = approvals.get(contactId);
+  // Гасим до первого await: два одновременных нажатия не пройдут оба.
+  approvals.delete(contactId);
+  if (!approval || approval.until < Date.now() || approval.target !== target) return "expired";
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  if (!contact) return false;
+  if (!contact) return "failed";
   const outcome = await switchCourseChannel(contact, target, "owner");
   logInfo("course:channelSwitch", `контакт ${contactId}: владелец разрешил переход на ${target}, итог ${outcome}`);
-  return outcome === "switched" || outcome === "already";
+  if (outcome === "switched" || outcome === "already") return "ok";
+  if (outcome === "banned") return "banned";
+  // Сбой отправки или проверки — карточка снова действует до своего срока (как в phoneChange.ts).
+  if (outcome === "failed" || outcome === "unverifiable" || outcome === "unavailable")
+    approvals.set(contactId, approval);
+  return "failed";
 }
 
 /**
- * Владелец сам выдал сайтовую ссылку (/ссылка, «Новая ссылка» в панели, возврат
- * доступа) человеку, у которого был Telegram: приглашение в группу отзываем
- * (иначе у человека два способа), но из группы НЕ убираем: Ширин всего лишь
- * обновила ссылку, и ученицу выгонять не за что. Не трогаем и тогда, когда уроки
- * курса ещё не готовы на сайте. Возвращает true, если приглашение закрыто.
+ * ВЛАДЕЛЕЦ САМ ВЫДАЛ ССЫЛКУ НА САЙТ (ownerLink.ts: кнопка «Выдать ссылку → на сайт»,
+ * /ссылка в боте, «Новая ссылка» в панели) — ПОМЕТИТЬ выдачу, чтобы правило
+ * «одна ссылка» её видело (дыра из #78: ссылка уходила, а в базе — ни следа):
+ *  - покупки без ссылки получают эту ссылку (как в grantCourses), ожидание
+ *    вопроса «куда прислать» снимается — повторный чек не выдаст вторую дверь;
+ *  - выбор человека — «сайт»: напоминание и следующая выдача не пришлют
+ *    приглашение в группу поверх сайта;
+ *  - неиспользованные приглашения в группу гаснут; из группы НЕ убираем — Ширин
+ *    всего лишь выдала ссылку, выгонять ученицу не за что.
+ * Курс, которого ещё нет на сайте, не трогаем: его доступ — группа.
+ * Возвращает, закрыто ли приглашение (владелец видит это в ответе).
  */
-export async function closeTelegramDoor(contactId: string): Promise<boolean> {
+export async function markWebIssuedByOwner(
+  contactId: string,
+  url: string,
+): Promise<{ closedInvite: boolean; problems: string[] }> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  if (!contact) return false;
+  if (!contact) return { closedInvite: false, problems: [] };
   const purchases = await prisma.purchase.findMany({ where: { contactId, revokedAt: null } });
-  const hasDoor =
-    contact.courseDeliveryChoice === "telegram" ||
-    isTelegramLink(contact.inviteLink) ||
-    purchases.some((p) => isTelegramLink(p.inviteLink));
-  if (!hasDoor) return false;
   const ready = await Promise.all(purchases.map((p) => coursePlatformReady(p.course as Course)));
-  if (!ready.every(Boolean)) return false;
-  const problems = await closeTelegramAccess(contact, purchases, "owner", { removeFromGroup: false });
-  await prisma.contact.update({ where: { id: contactId }, data: { courseDeliveryChoice: "web", inviteLink: null } });
-  logInfo("course:channelSwitch", `контакт ${contactId}: владелец выдал сайт, приглашение в группу закрыто`);
+  const onSite = purchases.filter((_, i) => ready[i]);
+  const allOnSite = purchases.length > 0 && onSite.length === purchases.length;
+
+  const hadInvite = isTelegramLink(contact.inviteLink) || purchases.some((p) => isTelegramLink(p.inviteLink));
+  const problems =
+    allOnSite && (hadInvite || contact.courseDeliveryChoice === "telegram")
+      ? await closeTelegramAccess(contact, purchases, "owner", { removeFromGroup: false })
+      : [];
+
+  await prisma.$transaction(async (tx) => {
+    if (onSite.length > 0) {
+      await tx.purchase.updateMany({
+        where: { id: { in: onSite.map((p) => p.id) }, revokedAt: null, inviteLink: null },
+        data: { inviteLink: url },
+      });
+    }
+    if (allOnSite) {
+      await tx.contact.update({
+        where: { id: contactId },
+        data: { courseDeliveryChoice: "web", ...(hadInvite ? { inviteLink: null } : {}) },
+      });
+    }
+  });
+  // Вопрос «куда прислать» по этим покупкам снят, чек закрыт как обслуженный.
+  await settleChoiceIfHandedOut(contactId).catch((err) => logError("channelSwitch:settleChoice", err));
+  const closedInvite = allOnSite && hadInvite;
+  logInfo(
+    "course:channelSwitch",
+    `контакт ${contactId}: владелец выдал сайт${closedInvite ? ", приглашение в группу закрыто" : ""}`,
+  );
   await reportProblems(contact, "сайт выдан, приглашение закрыто", problems);
-  return true;
+  return { closedInvite, problems };
 }

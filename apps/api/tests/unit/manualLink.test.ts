@@ -7,9 +7,17 @@ vi.mock("../../src/telegram.js", async (importOriginal) => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
-const issueCourseLink = vi.fn(async () => "https://sweetbot.royalhome.tj/course.html?token=НОВАЯ");
-vi.mock("../../src/course/delivery.js", () => ({
-  issueCourseLink: (...a: unknown[]) => issueCourseLink(...a),
+// /ссылка идёт общей дверью ручной выдачи (ownerLink.ts): её логика проверена в ownerLink.test и channelSwitchRealDb.test.
+const issueOwnerLink = vi.fn(async (..._a: unknown[]) => ({
+  ok: true as const,
+  kind: "web" as const,
+  url: "https://sweetbot.royalhome.tj/course.html?token=НОВАЯ",
+  courses: ["Торты"],
+  closedInvite: false,
+}));
+vi.mock("../../src/course/ownerLink.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/course/ownerLink.js")>()),
+  issueOwnerLink: (...a: unknown[]) => issueOwnerLink(...a),
 }));
 
 import { handleManualLinkCommand } from "../../src/course/manualLink.js";
@@ -41,7 +49,7 @@ beforeEach(() => {
   db.model("purchase").findMany.mockResolvedValue([]);
   db.model("purchase").count.mockResolvedValue(0);
   sendTelegramMessage.mockClear();
-  issueCourseLink.mockClear();
+  issueOwnerLink.mockClear();
 });
 
 afterEach(() => {
@@ -72,7 +80,7 @@ describe("Ручная выдача ссылки командой из Telegram"
     const handled = await handleManualLinkCommand(msg("/ссылка @malika", 999));
 
     expect(handled).toBe(true); // съедено, дальше не ведём
-    expect(issueCourseLink).not.toHaveBeenCalled();
+    expect(issueOwnerLink).not.toHaveBeenCalled();
     expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
@@ -82,7 +90,7 @@ describe("Ручная выдача ссылки командой из Telegram"
     SETTINGS.telegramOwnerChatId = "111";
 
     expect(handled).toBe(false);
-    expect(issueCourseLink).not.toHaveBeenCalled();
+    expect(issueOwnerLink).not.toHaveBeenCalled();
   });
 
   it("выдаёт свежую ссылку и предупреждает, что прошлая умерла", async () => {
@@ -92,7 +100,7 @@ describe("Ручная выдача ссылки командой из Telegram"
     await handleManualLinkCommand(msg("/ссылка @malika"));
 
     // Ссылка — на человека: одна на все его курсы.
-    expect(issueCourseLink).toHaveBeenCalledWith("contact-1", { automatic: false });
+    expect(issueOwnerLink).toHaveBeenCalledWith("contact-1", "web");
     expect(lastReply()).toContain("token=НОВАЯ");
     expect(lastReply()).toContain("@malika");
     expect(lastReply()).toContain("Малика");
@@ -106,7 +114,7 @@ describe("Ручная выдача ссылки командой из Telegram"
 
     await handleManualLinkCommand(msg("/ссылка @malika"));
 
-    expect(issueCourseLink).not.toHaveBeenCalled();
+    expect(issueOwnerLink).not.toHaveBeenCalled();
     expect(lastReply()).toContain("отобран");
   });
 
@@ -115,7 +123,7 @@ describe("Ручная выдача ссылки командой из Telegram"
 
     await handleManualLinkCommand(msg("/ссылка @malika"));
 
-    expect(issueCourseLink).not.toHaveBeenCalled();
+    expect(issueOwnerLink).not.toHaveBeenCalled();
     expect(lastReply()).toContain("нет оплаченного курса");
   });
 
@@ -124,7 +132,7 @@ describe("Ручная выдача ссылки командой из Telegram"
 
     await handleManualLinkCommand(msg("/ссылка malika"));
 
-    expect(issueCourseLink).not.toHaveBeenCalled();
+    expect(issueOwnerLink).not.toHaveBeenCalled();
     expect(lastReply()).toContain("@malika_cake");
   });
 

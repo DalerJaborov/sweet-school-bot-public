@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { prisma, getSetting } from "../db.js";
-import { chatIdFor, type Course } from "../courses.js";
-import { createOneTimeInviteLink, getChatMemberStatus, revokeInviteLink } from "../telegram.js";
+import { createOneTimeInviteLink, revokeInviteLink } from "../telegram.js";
 import { rememberInviteLink } from "../groupAccess.js";
 import { issueCourseLink } from "./delivery.js";
+import { checkInviteTargets, withPersonLock } from "./groupInvite.js";
+import { markWebIssuedByOwner } from "./channelSwitch.js";
 
 /**
  * ВЫДАТЬ ЛИЧНУЮ ССЫЛКУ ОДНИМ НАЖАТИЕМ — общая логика для кнопки в Telegram-боте
@@ -18,10 +19,16 @@ import { issueCourseLink } from "./delivery.js";
  *  - Приглашение тому, кто уже в группе, не выдаётся: его можно переслать
  *    подруге. Проверяем три вещи — отметка на покупке, отметка входа на
  *    контакте и сам Telegram (getChatMember). Не смогли проверить — отказ.
+ *    Проверка общая с переходом «хочу в Telegram» — course/groupInvite.ts.
  *  - «В Telegram» не трогает сайтовую ссылку вообще, поэтому у кого Telegram
  *    нет или не нужен, сайтовый доступ не пропадает.
  *  - Никакого скрытого закрытия двери: ни отзыва доступа, ни выгона из группы.
  *    Гасится только прежнее НЕИСПОЛЬЗОВАННОЕ приглашение этого же человека.
+ *  - «На сайт» ПОМЕЧАЕТСЯ (одна ссылка на человека, дыра из #78): покупки без
+ *    ссылки получают эту ссылку, выбор человека — «сайт», неиспользованные
+ *    приглашения в группу гаснут; из группы никого не убираем. Что закрыто —
+ *    видно владельцу в ответе (closedInvite). Все ручные выдачи сайта (кнопка,
+ *    /ссылка, «Новая ссылка» в панели) идут сюда — сторож ownerLinkDoor.test.ts.
  *
  * Дверь: вызывающий код обязан сам проверить, что просит владелец (чат из
  * trustedChatIds в боте, вход в панель по requireAuth).
@@ -45,7 +52,7 @@ export type FailReason =
   | "tg-failed";
 
 export type IssueResult =
-  | { ok: true; kind: "web"; url: string; courses: string[] }
+  | { ok: true; kind: "web"; url: string; courses: string[]; closedInvite: boolean }
   | { ok: true; kind: "telegram"; links: { course: string; url: string }[] }
   | { ok: false; reason: FailReason };
 
@@ -66,12 +73,6 @@ export const REASON_TEXT: Record<FailReason, string> = {
   busy: "Для этого человека ссылка выдаётся прямо сейчас. Подождите минуту и посмотрите результат.",
   "tg-failed": "Telegram не дал приглашение. Проверьте, что бот — администратор группы с правом приглашать.",
 };
-
-// kicked — забанена вручную: приглашение ей всё равно можно переслать другому.
-const IN_GROUP = new Set(["member", "administrator", "creator", "restricted", "kicked"]);
-
-/** Один человек — одна выдача за раз (панель и бот одновременно не должны выпустить два приглашения). */
-const issuing = new Set<string>();
 
 export const MIN_QUERY = 2;
 const FIND_LIMIT = 6;
@@ -137,13 +138,10 @@ export async function findPeople(query: string): Promise<Person[]> {
 
 /** Выдать ссылку. Каждый вызов — отдельное решение владельца (одно нажатие = одна выдача). */
 export async function issueOwnerLink(contactId: string, kind: LinkKind): Promise<IssueResult> {
-  if (issuing.has(contactId)) return { ok: false, reason: "busy" };
-  issuing.add(contactId);
-  try {
-    return await issueOwnerLinkLocked(contactId, kind);
-  } finally {
-    issuing.delete(contactId);
-  }
+  // Один человек — одна выдача за раз (панель, бот и переход по просьбе не должны выпустить две ссылки).
+  return withPersonLock<IssueResult>(contactId, { ok: false, reason: "busy" }, () =>
+    issueOwnerLinkLocked(contactId, kind),
+  );
 }
 
 async function issueOwnerLinkLocked(contactId: string, kind: LinkKind): Promise<IssueResult> {
@@ -160,42 +158,19 @@ async function issueOwnerLinkLocked(contactId: string, kind: LinkKind): Promise<
   if (kind === "web") {
     const url = await issueCourseLink(contactId, { automatic: false });
     if (!url) return { ok: false, reason: "no-base" };
-    return { ok: true, kind: "web", url, courses: purchases.map((p) => p.course) };
+    const { closedInvite } = await markWebIssuedByOwner(contactId, url);
+    return { ok: true, kind: "web", url, courses: purchases.map((p) => p.course), closedInvite };
   }
 
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken) return { ok: false, reason: "no-bot" };
 
-  // Кого вообще можно звать: курс, в который человек ещё не вошёл. Если вход
-  // на контакте уже отмечен, зовём только в курсы, купленные ПОСЛЕ него.
-  // Известен Telegram человека — решает сам Telegram (вышла из группы — можно позвать снова).
-  // Неизвестен — верим только отметкам входа, а прошлое приглашение без отметки не даёт
-  // понять, вошла ли она: отказываем (его могли использовать по ссылке, созданной вручную).
-  const candidates = contact.telegramUserId
-    ? purchases
-    : purchases.filter((p) => !p.joinedAt && (!contact.joinedGroupAt || p.createdAt > contact.joinedGroupAt));
-  if (candidates.length === 0) return { ok: false, reason: "in-group" };
-  if (!contact.telegramUserId && candidates.some((p) => p.inviteLink?.startsWith("https://t.me/"))) {
-    return { ok: false, reason: "unknown-member" };
-  }
-
-  // Прицельная проверка у самого Telegram, пока ни одно приглашение не выпущено.
-  const targets: { purchase: (typeof candidates)[number]; chatId: string }[] = [];
-  let withoutGroup = 0;
-  for (const p of candidates) {
-    const chatId = await chatIdFor(p.course as Course);
-    if (!chatId) {
-      withoutGroup++;
-      continue;
-    }
-    if (contact.telegramUserId) {
-      const status = await getChatMemberStatus(botToken, chatId, contact.telegramUserId);
-      if (status === null) return { ok: false, reason: "check-failed" };
-      if (IN_GROUP.has(status)) continue;
-    }
-    targets.push({ purchase: p, chatId });
-  }
-  if (targets.length === 0) return { ok: false, reason: withoutGroup > 0 ? "no-group" : "in-group" };
+  // Кого можно звать — общая дверь course/groupInvite.ts (уже в группе — не зовём).
+  const check = await checkInviteTargets(contact, purchases, botToken);
+  if ("fail" in check) return { ok: false, reason: check.fail };
+  // kicked — забанена вручную: приглашение ей всё равно можно переслать другому.
+  const { targets } = check;
+  if (targets.length === 0) return { ok: false, reason: check.withoutGroup.length > 0 ? "no-group" : "in-group" };
 
   const links: { course: string; url: string }[] = [];
   const stale: { chatId: string; link: string }[] = [];

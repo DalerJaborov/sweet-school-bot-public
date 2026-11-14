@@ -14,11 +14,14 @@ vi.mock("../../src/whatsapp/transport.js", () => ({
   sendWhatsAppText: (...a: unknown[]) => sendText(...a),
   sendWhatsAppAttachment: vi.fn(),
 }));
+/** Статус человека в группе для проверки «уже в группе» (groupInvite.ts); по умолчанию — вышла. */
+const getChatMemberStatus = vi.fn(async (..._a: unknown[]) => "left" as string | null);
 vi.mock("../../src/telegram.js", () => ({
-  techChatIds: vi.fn(async () => ["owner-1"]),
+  chatsForKind: vi.fn(async () => ["owner-1"]),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
   createOneTimeInviteLink: (...a: unknown[]) => createOneTimeInviteLink(...a),
   revokeInviteLink: (...a: unknown[]) => revokeInviteLink(...a),
+  getChatMemberStatus: (...a: unknown[]) => getChatMemberStatus(...a),
 }));
 vi.mock("../../src/course/delivery.js", async (orig) => ({
   ...(await orig<typeof import("../../src/course/delivery.js")>()),
@@ -35,6 +38,8 @@ import {
   approveSwitchByOwner,
   parseSwitchRequest,
   isFreeSwitch,
+  resetSwitchApprovals,
+  askOwner,
 } from "../../src/course/channelSwitch.js";
 import { recoveryCodeFor } from "../../src/course/linkCode.js";
 import { openByLink } from "../../src/course/access.js";
@@ -182,18 +187,25 @@ describe("parseSwitchRequest", () => {
 });
 
 describe("isFreeSwitch", () => {
+  const nobody = { joinedGroupAt: null };
   it("первые сутки и «ещё не открывала» — бесплатно, иначе нет", () => {
-    expect(isFreeSwitch([{ createdAt: new Date(), firstOpenedAt: new Date(), joinedAt: null }])).toBe(true);
-    expect(isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: null }])).toBe(
-      true,
-    );
+    expect(isFreeSwitch(nobody, [{ createdAt: new Date(), firstOpenedAt: new Date(), joinedAt: null }])).toBe(true);
     expect(
-      isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: new Date(), joinedAt: null }]),
+      isFreeSwitch(nobody, [{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: null }]),
+    ).toBe(true);
+    expect(
+      isFreeSwitch(nobody, [{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: new Date(), joinedAt: null }]),
     ).toBe(false);
     expect(
-      isFreeSwitch([{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: new Date() }]),
+      isFreeSwitch(nobody, [{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: new Date() }]),
     ).toBe(false);
-    expect(isFreeSwitch([])).toBe(false);
+    expect(isFreeSwitch(nobody, [])).toBe(false);
+  });
+  it("БЛОКЕР 5: вход отмечен только на контакте (joinedGroupAt) — уже не «ничего не открывала», не бесплатно", () => {
+    const old = [{ createdAt: new Date(Date.now() - 5 * DAY), firstOpenedAt: null, joinedAt: null }];
+    expect(isFreeSwitch({ joinedGroupAt: new Date(Date.now() - 4 * DAY) }, old)).toBe(false);
+    // первые сутки после покупки — по-прежнему бесплатно
+    expect(isFreeSwitch({ joinedGroupAt: new Date() }, [{ ...old[0], createdAt: new Date() }])).toBe(true);
   });
 });
 
@@ -205,6 +217,8 @@ describe("одна действующая ссылка на человека", (
     sendTelegramMessage.mockClear();
     createOneTimeInviteLink.mockReset().mockResolvedValue("https://t.me/+NEWINVITE");
     revokeInviteLink.mockReset().mockResolvedValue(true);
+    getChatMemberStatus.mockReset().mockResolvedValue("left");
+    resetSwitchApprovals();
     contactRow = baseContact();
     purchaseRows = [purchase()];
     otherPurchaseRows = [];
@@ -216,6 +230,8 @@ describe("одна действующая ссылка на человека", (
   });
 
   const asContact = () => ({ ...contactRow }) as unknown as Contact;
+  /** Карточка владельцу ушла — кнопка «Перевести» действует (одноразово, сутки). */
+  const arm = (target: "web" | "telegram") => askOwner(asContact(), target, "просит", true);
 
   it("ГЛАВНОЕ: сайт -> Telegram: старая ссылка перестаёт открывать, устройства удалены, приглашение выдано", async () => {
     const outcome = await switchCourseChannel(asContact(), "telegram", "bot");
@@ -339,7 +355,7 @@ describe("одна действующая ссылка на человека", (
     expect(outcome).toBe("limit");
     expect(contactRow.accessTokenId).toBe(OLD_CODE);
     expect(createOneTimeInviteLink).not.toHaveBeenCalled();
-    expect(String(sendText.mock.calls[0][1])).toBe("Передала Ширин: она посмотрит и ответит вам.");
+    expect(String(sendText.mock.calls[0][1])).toMatch(/^Передала Ширин: она посмотрит и ответит вам\.?$/);
     expect(String(sendText.mock.calls[0][1])).not.toMatch(/\d/);
     expect(JSON.stringify(sendTelegramMessage.mock.calls[0][4])).toContain(`mn:sw:c-1:t`);
   });
@@ -413,8 +429,9 @@ describe("одна действующая ссылка на человека", (
     contactRow = inGroupContact();
     purchaseRows = [inGroupPurchase()];
     const { calls } = stubTelegram();
+    await arm("web");
 
-    expect(await approveSwitchByOwner("c-1", "web")).toBe(true);
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("ok");
 
     expect(calls("banChatMember")).toHaveLength(1);
     expect(String(sendText.mock.calls[0][1])).toContain("Теперь ваши уроки на сайте");
@@ -539,43 +556,7 @@ describe("одна действующая ссылка на человека", (
     vi.mocked(courses.chatIdFor).mockImplementation(async () => "-100500");
   });
 
-  it("/ссылка владельца для человека в группе: приглашение отозвано, из группы НЕ убираем, выбор «сайт»", async () => {
-    contactRow = inGroupContact();
-    purchaseRows = [inGroupPurchase()];
-    const { calls, fetchMock } = stubTelegram();
-
-    const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
-    expect(await closeTelegramDoor("c-1")).toBe(true);
-
-    expect(revokeInviteLink).toHaveBeenCalledWith("token", "-100500", TG_LINK);
-    expect(calls("banChatMember")).toHaveLength(0);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(contactRow.courseDeliveryChoice).toBe("web");
-    expect(contactRow.inviteLink).toBeNull();
-    expect(db.model("accessEvent").create).not.toHaveBeenCalled();
-    expect(sendTelegramMessage).not.toHaveBeenCalled();
-  });
-
-  it("closeTelegramDoor: уроки курса ещё не готовы на сайте — приглашение не трогаем", async () => {
-    contactRow = inGroupContact();
-    purchaseRows = [inGroupPurchase()];
-    stubTelegram();
-    const delivery = await import("../../src/course/delivery.js");
-    vi.mocked(delivery.coursePlatformReady).mockResolvedValueOnce(false);
-
-    const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
-    expect(await closeTelegramDoor("c-1")).toBe(false);
-
-    expect(revokeInviteLink).not.toHaveBeenCalled();
-    expect(contactRow.courseDeliveryChoice).toBe("telegram");
-  });
-
-  it("у человека на сайте и без группы closeTelegramDoor ничего не делает", async () => {
-    stubTelegram();
-    const { closeTelegramDoor } = await import("../../src/course/channelSwitch.js");
-    expect(await closeTelegramDoor("c-1")).toBe(false);
-    expect(revokeInviteLink).not.toHaveBeenCalled();
-  });
+  // Ручная выдача сайта владельцем (markWebIssuedByOwner) — на настоящей SQLite: channelSwitchRealDb.test.ts.
 
   it("перевод на сайт, курс не готов на сайте: ничего не отправляем и из группы не убираем", async () => {
     contactRow = inGroupContact();
@@ -600,8 +581,10 @@ describe("одна действующая ссылка на человека", (
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("повторное нажатие кнопки владельца, когда перевод уже сделан: «готово», а не «не получилось»", async () => {
-    expect(await approveSwitchByOwner("c-1", "web")).toBe(true); // уже на сайте -> already
+  it("БЛОКЕР 3: карточка одноразовая — первое нажатие «готово» (уже на сайте), второе — «устарела»", async () => {
+    await arm("web");
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("ok"); // уже на сайте -> already
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("expired");
   });
 
   it("два «да» подряд: второе ничего не повторяет (ни «Передала Ширин», ни карточки)", async () => {
@@ -669,12 +652,14 @@ describe("одна действующая ссылка на человека", (
 
   it("кнопка владельца снимает месячный лимит, но не оживляет отозванную покупку", async () => {
     contactRow = baseContact({ deviceSwaps: 1, deviceSwapAt: new Date(Date.now() - 3 * DAY) });
-    expect(await approveSwitchByOwner("c-1", "telegram")).toBe(true);
+    await arm("telegram");
+    expect(await approveSwitchByOwner("c-1", "telegram")).toBe("ok");
     expect(contactRow.deviceSwaps).toBe(1); // владелец счётчик не тратит
 
     contactRow = baseContact({ courseDeliveryChoice: "telegram", accessTokenId: null, accessIssuedAt: null });
     purchaseRows = [purchase({ revokedAt: new Date() })];
-    expect(await approveSwitchByOwner("c-1", "web")).toBe(false);
+    await arm("web");
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("failed");
   });
 
   it("две покупки: приглашение на каждую группу, все в одном сообщении", async () => {

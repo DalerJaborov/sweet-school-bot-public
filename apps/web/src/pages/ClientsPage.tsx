@@ -219,7 +219,8 @@ export function ClientsPage({ onOpenStudent }: { onOpenStudent?: (contactId: str
                 {c.paid && !c.accessRevokedAt && <span className="chip chip-ok">оплатил</span>}
                 {c.channel === "MANUAL" && c.paid && !c.accessRevokedAt && <span className="chip">платформа курсов</span>}
                 {c.channel !== "MANUAL" && c.paid && !c.joinedGroupAt && !c.accessRevokedAt && <span className="chip chip-warn">не вошёл в группу</span>}
-                {c.joinedGroupAt && <span className="chip chip-ok">в группе</span>}
+                {/* «в группе» — сейчас, по журналу входов и удалений (inGroup с сервера), а не «когда-то входила» */}
+                {c.inGroup && <span className="chip chip-ok">в группе</span>}
               </div>
             </div>
             <div className="list-actions">

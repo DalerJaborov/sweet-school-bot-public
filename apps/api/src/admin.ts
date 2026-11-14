@@ -32,6 +32,7 @@ import { getPrices } from "./services/priceService.js";
 import { resolveGeminiKeys } from "./ai/geminiKeys.js";
 import { geminiGenerateUrl, geminiProxyHeaders } from "./gemini.js";
 import { revokeAccess, restoreAccess } from "./groupAccess.js";
+import { GROUP_EVENT_ACTIONS, inGroupNow } from "./groupExit.js";
 import { offsetMs, localDayStart } from "./dailyReport.js";
 import { countNotOpened } from "./notOpened.js";
 import { linksAdminRouter } from "./links/routes.js";
@@ -968,7 +969,8 @@ adminRouter.get("/admin/contacts", async (req, res) => {
     include: {
       deliveries: { include: { funnel: { select: { name: true } } }, orderBy: { updatedAt: "desc" }, take: 1 },
       _count: { select: { messages: true } },
-      accessEvents: { where: { action: "removed" }, orderBy: { createdAt: "desc" }, take: 1 },
+      // Последняя запись о группе (вход / удаление / уже не было): пометка «в группе» — по ней (groupExit.inGroupNow).
+      accessEvents: { where: { action: { in: [...GROUP_EVENT_ACTIONS] } }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
   const { rows, hasMore } = paginate(contacts, take);
@@ -992,10 +994,8 @@ adminRouter.get("/admin/contacts", async (req, res) => {
       // владелец видит, за кем идти, и кого выгонять за фальшивый чек.
       joinedGroupAt: c.joinedGroupAt,
       accessRevokedAt: c.accessRevokedAt,
-      // После удаления из группы (журнал «removed») отметка гаснет, пока человек не войдёт снова.
-      inGroup:
-        Boolean(c.telegramUserId) &&
-        !(c.accessEvents?.[0] && (!c.joinedGroupAt || c.accessEvents[0].createdAt >= c.joinedGroupAt)),
+      // После удаления из группы отметка гаснет и снова горит после повторного входа.
+      inGroup: inGroupNow(c, c.accessEvents?.[0]),
       tags: parseStringArray(c.tags),
       messages: c._count.messages,
       updatedAt: c.updatedAt,

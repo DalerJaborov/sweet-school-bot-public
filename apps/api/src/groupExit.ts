@@ -1,7 +1,6 @@
 import type { Contact, Purchase } from "@prisma/client";
 import { prisma, getSetting, logError, logInfo } from "./db.js";
-import { techChatIds, sendTelegramMessage } from "./telegram.js";
-import { shouldSendAlert } from "./alertGate.js";
+import { sendKind } from "./notify.js";
 import { chatIdFor, COURSE_50, COURSE_70, type Course } from "./courses.js";
 
 /**
@@ -21,8 +20,11 @@ import { chatIdFor, COURSE_50, COURSE_70, type Course } from "./courses.js";
  *    навсегда, это ПРОБЛЕМА: повторяем и зовём хозяйку.
  *  - Бан только в группах курсов, купленных ЭТИМ контактом, и не там, где у
  *    другого контакта с тем же Telegram есть действующая покупка.
- *  - Каждое удаление пишется в журнал (AccessEvent «removed»), отметки «в группе»
- *    сбрасываются.
+ *  - Каждое удаление пишется в журнал (AccessEvent «removed»), каждый вход по
+ *    нашей ссылке — тоже («joined», recordGroupJoin). «В группе ли она сейчас» —
+ *    по последней из этих двух записей (inGroupNow): отметки входа
+ *    (joinedGroupAt, Purchase.joinedAt) хранят ПЕРВЫЙ вход и после повторного
+ *    входа не меняются, поэтому по ним одним пометка «в группе» врала (ревью PR 64).
  */
 
 const API = "https://api.telegram.org";
@@ -105,7 +107,7 @@ export async function removeFromGroupChat(
   return { chatId, state: "removed" };
 }
 
-/** Человек, по нашим данным, сейчас в группе (по отметкам входа). */
+/** Человек, по нашим данным, хоть раз входил в группу (по отметкам входа). */
 export function isInGroup(
   contact: Pick<Contact, "joinedGroupAt">,
   purchases: Pick<Purchase, "joinedAt">[],
@@ -179,6 +181,8 @@ export async function removeContactFromGroups(
     const result = await removeFromGroupChat(botToken, chatId, telegramUserId);
     report.results.push(result);
     if (result.state === "removed") await recordRemoval(contact.id, chatId, telegramUserId, actor);
+    // Её уже нет в группе (вышла сама) — тоже в журнал, иначе пометка «в группе» осталась бы.
+    else if (result.state === "absent") await recordAbsent(contact.id, chatId, telegramUserId, actor);
     else if (result.state === "ban_failed")
       report.problems.push(`из группы убрать не удалось (${result.detail ?? "ошибка Telegram"})`);
     else if (result.state === "protected") report.problems.push("она администратор группы, бот её не удалял");
@@ -188,6 +192,44 @@ export async function removeContactFromGroups(
   // История входа (joinedGroupAt, Purchase.joinedAt) НЕ стирается: на неё опираются
   // напоминалка и бесплатность перевода (isFreeSwitch). Факт удаления лежит в журнале.
   return report;
+}
+
+/**
+ * Журнал: человек вошёл в группу по нашей ссылке (бот или «Ссылки» панели). Пишем
+ * КАЖДЫЙ вход, и повторный: только так видно, что после удаления она вернулась.
+ */
+export async function recordGroupJoin(contactId: string, chatId: string, telegramUserId: string): Promise<void> {
+  await prisma.accessEvent
+    .create({
+      data: {
+        contactId,
+        action: "joined",
+        actor: "student",
+        detail: `вошла в группу Telegram ${telegramUserId}, чат ${chatId}`,
+      },
+    })
+    .catch((err) => logError("groupExit:joinEvent", err));
+}
+
+/**
+ * Сейчас в группе (для пометки в «Клиентах»): Telegram её известен и последняя
+ * запись журнала о группе — не «удалена». Вход после удаления снова даёт «в группе».
+ * До журнала входов (старые данные) — по Telegram-идентификатору, как раньше.
+ */
+export function inGroupNow(
+  contact: Pick<Contact, "telegramUserId">,
+  lastGroupEvent: { action: string } | null | undefined,
+): boolean {
+  return Boolean(contact.telegramUserId) && lastGroupEvent?.action !== "removed" && lastGroupEvent?.action !== "left";
+}
+
+/** Записи журнала, по которым решается «в группе ли сейчас» (inGroupNow). */
+export const GROUP_EVENT_ACTIONS = ["joined", "removed", "left"] as const;
+
+async function recordAbsent(contactId: string, chatId: string, telegramUserId: string, actor: "owner" | "bot") {
+  await prisma.accessEvent
+    .create({ data: { contactId, action: "left", actor, detail: `в группе её уже не было: Telegram ${telegramUserId}, чат ${chatId}` } })
+    .catch((err) => logError("groupExit:accessEvent", err));
 }
 
 /** Журнал и отметка в «Ссылках»: человека удалили из группы. Сбой записи не откатывает удаление. */
@@ -209,9 +251,8 @@ async function recordRemoval(contactId: string, chatId: string, telegramUserId: 
  * часовой «готово»), чтобы тревога не пряталась за прошлым сообщением.
  */
 export async function alertOwnerProblem(key: string, text: string): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  if (!botToken || !chatId) return;
-  if (!(await shouldSendAlert(`group-exit:${key}`, { cooldownMs: 30 * 60_000 }))) return;
-  await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("groupExit:alert", err));
+  // Через общую дверь уведомлений (notify.ts): вид «подозрительное с доступом», только владельцу.
+  await sendKind("security", `🚫 ${text}`, { dedupeKey: `group-exit:${key}`, cooldownMs: 30 * 60_000 }).catch((err) =>
+    logError("groupExit:alert", err),
+  );
 }

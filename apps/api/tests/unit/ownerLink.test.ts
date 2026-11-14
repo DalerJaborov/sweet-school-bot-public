@@ -16,6 +16,12 @@ vi.mock("../../src/course/delivery.js", () => ({
   issueCourseLink: (...a: unknown[]) => (issueCourseLink as (...x: unknown[]) => unknown)(...a),
 }));
 
+// Пометка выдачи сайта (одна ссылка на человека) — channelSwitch.ts, проверена на настоящей SQLite.
+const markWebIssuedByOwner = vi.fn(async (..._a: unknown[]) => ({ closedInvite: false, problems: [] as string[] }));
+vi.mock("../../src/course/channelSwitch.js", () => ({
+  markWebIssuedByOwner: (...a: unknown[]) => markWebIssuedByOwner(...a),
+}));
+
 const rememberInviteLink = vi.fn(async () => undefined);
 vi.mock("../../src/groupAccess.js", () => ({
   rememberInviteLink: (...a: unknown[]) => (rememberInviteLink as (...x: unknown[]) => unknown)(...a),
@@ -76,8 +82,16 @@ afterEach(() => {
 describe("Ссылка на сайт", () => {
   it("выпускает свежую ссылку штатным способом (прошлая гаснет) и называет курсы", async () => {
     const r = await issueOwnerLink("c1", "web");
-    expect(r).toEqual({ ok: true, kind: "web", url: "https://shirinsweets.online/l/NEWCODE", courses: ["COURSE50"] });
+    expect(r).toEqual({
+      ok: true,
+      kind: "web",
+      url: "https://shirinsweets.online/l/NEWCODE",
+      courses: ["COURSE50"],
+      closedInvite: false,
+    });
     expect(issueCourseLink).toHaveBeenCalledWith("c1", { automatic: false });
+    // Выдача помечается (дыра из #78): правило «одна ссылка» её видит.
+    expect(markWebIssuedByOwner).toHaveBeenCalledWith("c1", "https://shirinsweets.online/l/NEWCODE");
   });
 
   it("отобранный доступ или спам — ссылки нет", async () => {

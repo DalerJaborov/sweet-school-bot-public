@@ -102,9 +102,9 @@ export async function issueCourseLink(
     where: { id: contactId },
     data: { accessTokenId: jti, accessIssuedAt: new Date() },
   });
-  // Одна действующая ссылка на человека: явная выдача сайта владельцем закрывает Telegram-приглашение.
-  const { closeTelegramDoor } = await import("./channelSwitch.js");
-  await closeTelegramDoor(contactId).catch((err) => logError("delivery:closeTelegramDoor", err));
+  // Telegram-дверь здесь НЕ закрывается (ревью PR 64, «скрытое закрытие»): это
+  // общий выпуск ссылки, им пользуется и возврат доступа. Закрывает её только
+  // явная выдача сайта владельцем — course/channelSwitch.ts markWebIssuedByOwner.
   return url;
 }
 

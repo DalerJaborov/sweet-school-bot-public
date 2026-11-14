@@ -5,7 +5,7 @@ import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
 const sendTelegramMessage = vi.fn(async (..._a: unknown[]) => 1);
 vi.mock("../../src/telegram.js", () => ({
-  techChatIds: vi.fn(async () => ["owner-1"]),
+  chatsForKind: vi.fn(async () => ["owner-1"]),
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...a),
 }));
 
