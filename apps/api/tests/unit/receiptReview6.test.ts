@@ -104,7 +104,9 @@ async function newContact(id: string, data: Record<string, unknown> = {}) {
 }
 
 async function invite(link: string, chatId: string, contactId: string | null = null) {
-  await db.telegramInvite.create({ data: { groupKey: chatId === GROUP50 ? "COURSE50" : "COURSE70", chatId, inviteLink: link, contactId } });
+  await db.telegramInvite.create({
+    data: { groupKey: chatId === GROUP50 ? "COURSE50" : "COURSE70", chatId, inviteLink: link, contactId },
+  });
 }
 
 async function shirinSays(contactId: string, text: string, at: Date) {
@@ -112,11 +114,16 @@ async function shirinSays(contactId: string, text: string, at: Date) {
 }
 
 async function bothWaiting(contactId: string) {
-  await db.purchase.create({ data: { contactId, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: minutesAgo(30) } });
-  await db.purchase.create({ data: { contactId, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: minutesAgo(29) } });
+  await db.purchase.create({
+    data: { contactId, course: "COURSE50", amount: 50, deliveryAwaitingChoice: true, createdAt: minutesAgo(30) },
+  });
+  await db.purchase.create({
+    data: { contactId, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: minutesAgo(29) },
+  });
 }
 
-const purchase = (contactId: string, course: string) => db.purchase.findUnique({ where: { contactId_course: { contactId, course } } });
+const purchase = (contactId: string, course: string) =>
+  db.purchase.findUnique({ where: { contactId_course: { contactId, course } } });
 
 function verdict(hash: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -167,7 +174,15 @@ describe("1-2. ручная ссылка Ширин закрывает толь�
 
   it("незнакомая ссылка (создана в самом Telegram): ничего не закрывает, Далеру одна строка, без повторов", async () => {
     const c = await newContact("a3");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: minutesAgo(30) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE70",
+        amount: 70,
+        deliveryAwaitingChoice: true,
+        createdAt: minutesAgo(30),
+      },
+    });
     await shirinSays(c.id, "Группа https://t.me/+MadeInTelegram1", minutesAgo(5));
     expect(await settleChoiceIfHandedOut(c.id)).toBe(false);
     expect(await settleChoiceIfHandedOut(c.id)).toBe(false);
@@ -178,7 +193,15 @@ describe("1-2. ручная ссылка Ширин закрывает толь�
 
   it("приглашение, выданное ДРУГОМУ человеку, не закрывает покупку", async () => {
     const c = await newContact("a4");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: minutesAgo(30) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE70",
+        amount: 70,
+        deliveryAwaitingChoice: true,
+        createdAt: minutesAgo(30),
+      },
+    });
     await invite("https://t.me/+ForSomeoneElse", GROUP70, "other-contact");
     await shirinSays(c.id, "https://t.me/+ForSomeoneElse", minutesAgo(5));
     expect(await settleChoiceIfHandedOut(c.id)).toBe(false);
@@ -204,15 +227,37 @@ describe("1-2. ручная ссылка Ширин закрывает толь�
   it("ссылка, присланная ДО покупки, её не закрывает", async () => {
     const c = await newContact("a7", { accessTokenId: "PersonalCode777" });
     await shirinSays(c.id, "https://shirinsweets.online/l/PersonalCode777", minutesAgo(60));
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: minutesAgo(30) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE70",
+        amount: 70,
+        deliveryAwaitingChoice: true,
+        createdAt: minutesAgo(30),
+      },
+    });
     expect(await settleChoiceIfHandedOut(c.id)).toBe(false);
   });
 
   it("длинная переписка: 120 сообщений Ширин, потом ссылка - покупка закрывается", async () => {
     const c = await newContact("a8");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, deliveryAwaitingChoice: true, createdAt: minutesAgo(300) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE70",
+        amount: 70,
+        deliveryAwaitingChoice: true,
+        createdAt: minutesAgo(300),
+      },
+    });
     await db.message.createMany({
-      data: Array.from({ length: 120 }, (_, i) => ({ contactId: c.id, direction: "OUT", byHuman: true, text: `Сообщение ${i}`, createdAt: minutesAgo(250 - i) })),
+      data: Array.from({ length: 120 }, (_, i) => ({
+        contactId: c.id,
+        direction: "OUT",
+        byHuman: true,
+        text: `Сообщение ${i}`,
+        createdAt: minutesAgo(250 - i),
+      })),
     });
     await invite("https://t.me/+Group70Late", GROUP70);
     await shirinSays(c.id, "https://t.me/+Group70Late", minutesAgo(10));
@@ -232,7 +277,9 @@ describe("3. ручная запись и ручная выдача - уже д�
 
   it("курс 70 записан вручную из панели, пришёл чек 70: карточка - «уже есть», «Подтвердить» второй ссылки не шлёт", async () => {
     const c = await newContact("m1", { paid: true, paidAt: minutesAgo(60 * 24) });
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70, source: "MANUAL", createdAt: minutesAgo(60 * 24) } });
+    await db.purchase.create({
+      data: { contactId: c.id, course: "COURSE70", amount: 70, source: "MANUAL", createdAt: minutesAgo(60 * 24) },
+    });
     const plan = await planForAmount(c.id, 70);
     expect(plan).toMatchObject({ grant: [], retry: [], duplicate: true });
 
@@ -250,7 +297,14 @@ describe("3. ручная запись и ручная выдача - уже д�
   it("чек закрыт молча после ручной ссылки Ширин: покупка помечена «выдано вручную», кнопка повтор не шлёт", async () => {
     const c = await newContact("m2");
     const queued = await db.receiptCheck.create({
-      data: { contactId: c.id, kind: "unchecked", confidence: 0, reason: "в очереди", imageHash: "m2", createdAt: minutesAgo(30) },
+      data: {
+        contactId: c.id,
+        kind: "unchecked",
+        confidence: 0,
+        reason: "в очереди",
+        imageHash: "m2",
+        createdAt: minutesAgo(30),
+      },
     });
     await shirinSays(c.id, "Вот группа https://t.me/+NotFromPanel1", minutesAgo(10));
     await handleReceiptVerdict(c, verdict("m2"), queued.id);
@@ -271,7 +325,10 @@ describe("4-5. мелочи разбора", () => {
   });
 
   it("Ширин ведёт разговор, сумма ни к одному курсу: в карточке выбор курса, а не «Подтвердить»", async () => {
-    const c = await newContact("s2", { humanTakenOverAt: new Date(), humanSilencedUntil: new Date(Date.now() + 3_600_000) });
+    const c = await newContact("s2", {
+      humanTakenOverAt: new Date(),
+      humanSilencedUntil: new Date(Date.now() + 3_600_000),
+    });
     await handleReceiptVerdict(c, verdict("s2", { amount: 40 }));
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview.mock.calls[0][2]).toMatchObject({ needsCourseChoice: true });
@@ -282,7 +339,15 @@ describe("6. одна очередь на человека", () => {
   it("кнопка Ширин и разбор нового чека того же человека не выдают одновременно", async () => {
     const c = await newContact("q1");
     const pending = await db.receiptCheck.create({
-      data: { contactId: c.id, kind: "suspicious", confidence: 90, reason: "смотрите", imageHash: "q1-old", amount: 50, ownerDecision: "PENDING" },
+      data: {
+        contactId: c.id,
+        kind: "suspicious",
+        confidence: 90,
+        reason: "смотрите",
+        imageHash: "q1-old",
+        amount: 50,
+        ownerDecision: "PENDING",
+      },
     });
     await Promise.all([handleReceiptVerdict(c, verdict("q1-new")), decideReceipt(pending.id, "approve")]);
     expect(grantCourses).toHaveBeenCalledTimes(2);
