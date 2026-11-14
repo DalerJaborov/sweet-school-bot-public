@@ -20,15 +20,14 @@ import {
 import { replyDeliveryMode, deliveryPrompt, videoHelpPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
 import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
-import { sendPrivateReply, metaChannelOf } from "./instagram.js";
-import { sendToContact } from "./messaging/send.js";
+import { sendToContact, sendPrivateReplyRecorded } from "./messaging/send.js";
+import { recordNoReply, policyNoReplyReason, type NoReplyReason } from "./messaging/noReply.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
 import {
   isBotFrozen,
   assertAutomationAllowed,
   contactAutomationBlocked,
-  withContactMessaging,
 } from "./messaging/automation.js";
 import {
   guardOffTopic,
@@ -301,12 +300,48 @@ export async function aiReply(
   attachments: Attachment[] = [],
   rescuedImages: RescuedImage[] = [],
 ): Promise<void> {
+  // СЛЕД КАЖДОГО МОЛЧАНИЯ (аудит 15.11.2026): ход кончился, а клиенту ничего не
+  // ушло — пишем причину в журнал решений (messaging/noReply.ts). По нему аудит
+  // видит «почему», а сторож unansweredWatch.ts отличает решение от потери.
+  const startedAt = new Date();
+  let reason: NoReplyReason | "relevance_gate" | undefined;
+  try {
+    reason = await answerTurn(contact, text, attachments, rescuedImages);
+  } catch (err) {
+    await traceIfUnanswered(contact, startedAt, text, "send_failed");
+    throw err;
+  }
+  // Фильтр «не по делу» сам пишет своё решение (relevanceGate.ts) — второй строки не нужно.
+  if (reason !== "relevance_gate") await traceIfUnanswered(contact, startedAt, text, reason ?? "unknown");
+}
+
+/** Ход закончился без исходящего — записать причину. Ответ ушёл (текст, фото, ссылка) — ничего. */
+async function traceIfUnanswered(contact: Contact, startedAt: Date, text: string, reason: NoReplyReason): Promise<void> {
+  try {
+    const sent = await prisma.message.findFirst({
+      where: { contactId: contact.id, direction: "OUT", createdAt: { gte: startedAt } },
+      select: { id: true },
+    });
+    if (sent) return;
+  } catch (err) {
+    logError("ai:traceNoReply", err);
+  }
+  await recordNoReply(contact, reason, text);
+}
+
+async function answerTurn(
+  contact: Contact,
+  text: string,
+  attachments: Attachment[],
+  rescuedImages: RescuedImage[],
+): Promise<NoReplyReason | "relevance_gate" | undefined> {
   // ЭКСТРЕННАЯ ПАУЗА (владелец 13.09.2026): «всё, кроме воронки». Гасит и
   // выдачу ссылки на курс (maybeRestoreAccess ниже — обычно работает ДАЖЕ при
   // выключенном aiEnabled, см. её комментарий), и отзыв-скриншот, и сам ИИ-ответ
   // одним ранним выходом. Воронка (funnel.ts) вызывается из webhook.ts до
   // aiReply и этой проверки не видит вовсе — её выключить нельзя тем же флагом.
-  if ((await getSetting("botFrozen")) === "true" || contactAutomationBlocked(contact)) return;
+  if ((await getSetting("botFrozen")) === "true") return "frozen";
+  if (contactAutomationBlocked(contact)) return policyNoReplyReason(contact);
 
   if (text && (await handleDeliveryChoiceReply(contact, text))) return;
 
@@ -314,7 +349,7 @@ export async function aiReply(
   // карточки офлайн-курса бот с этим человеком молчит — ни текста, ни голоса —
   // пока тот не напишет про онлайн. Воронка и запись номера на офлайн живут в
   // webhook.ts выше и сюда не доходят, их это не трогает.
-  if ((await offlineHandoffGate(contact, text)) === "silent") return;
+  if ((await offlineHandoffGate(contact, text)) === "silent") return "offline_handoff";
 
   // Побочный эффект, не влияющий на сам ответ: если человеку уже уходило
   // проверочное «как первый урок» (learningCheckIn.ts) и она хоть что-то
@@ -354,12 +389,12 @@ export async function aiReply(
   }
 
   const enabled = (await getSetting("aiEnabled")) === "true";
-  if (!enabled) return;
+  if (!enabled) return "ai_off";
   const apiKeys = await resolveGeminiKeys();
   if (apiKeys.length === 0) {
     logError("ai:aiReply:noGeminiKeys", new Error("Gemini API keys not configured — AI reply skipped"));
     if (contact.channel === "WHATSAPP") throw new Error("WhatsAppGenerationRetry: no keys");
-    return;
+    return "no_keys";
   }
   const primaryKey = apiKeys[0];
 
@@ -388,10 +423,10 @@ export async function aiReply(
 
   // «Не по делу — молчать»: новому собеседнику сначала проверяем, что он вообще
   // пишет про школу (ai/relevanceGate.ts). Курьеру, знакомой и магазину не отвечаем.
-  if (!(await passesRelevanceGate(contact, text, attachments, images.length > 0, language))) return;
+  if (!(await passesRelevanceGate(contact, text, attachments, images.length > 0, language))) return "relevance_gate";
 
   // «Спасибо» без вопроса — живой человек ставит сердечко, а не пишет ещё одно сообщение (ai/reactions.ts).
-  if (attachments.length === 0 && images.length === 0 && (await reactInsteadOfReply(contact, text))) return;
+  if (attachments.length === 0 && images.length === 0 && (await reactInsteadOfReply(contact, text))) return "reaction";
 
   // «Я отправила чек» — а картинки в сообщении нет и в этот ход ничего не
   // спасено. Модели такое не показываем: она верит слову «чек» и отвечает
@@ -424,12 +459,12 @@ export async function aiReply(
       // телеграм-группы) и дальше молчим совсем, даже если спросят про другой
       // десерт. Поэтому считаем по всей переписке, а не по последним сообщениям.
       // Молчаливые виды («пустите бесплатно», назойливость) — ни слова в ответ.
-      if (isSilentKind(verdict.kind)) return;
+      if (isSilentKind(verdict.kind)) return "guard_silent";
       const isRecipe = verdict.kind === "recipe_question";
       const limit = isRecipe ? MAX_RECIPE_REPLIES : MAX_GUARD_REPLIES;
       const recent = await recentOutgoingTexts(contact.id, isRecipe ? 50 : MAX_GUARD_REPLIES);
       const said = recent.filter((t) => isGuardReply(t, isRecipe ? "recipe_question" : undefined)).length;
-      if (said >= limit) return; // уже сказали — дальше отвечает сама Ширин, бот молчит
+      if (said >= limit) return "guard_limit"; // уже сказали — дальше отвечает сама Ширин, бот молчит
       // Звать в закрытый телеграм-чат можно только тем, кто оплатил курс:
       // группа закрытая, и приглашать туда всех подряд нельзя (см. guardReply).
       const isStudent =
@@ -614,6 +649,8 @@ export async function aiReply(
   };
 
   let deliveryFailure: unknown = null;
+  // Почему этот ход может кончиться без ответа — для журнала (aiReply выше).
+  let silence: NoReplyReason | undefined;
   const result = await generate(prompt);
   if ("error" in result) {
     logError("ai:reply", result.error);
@@ -622,6 +659,7 @@ export async function aiReply(
     // кончатся попытки (~13 часов), и владелец узнает, только если так и не вышло.
     if (contact.channel === "WHATSAPP") throw new Error("WhatsAppGenerationRetry: generation unavailable");
     await queuePendingAiReply(contact.id, text).catch((err) => logError("aiReplyRetry:queue", err));
+    silence = "ai_error";
   } else {
     await recordAiCall(contact.id);
     // Штатное молчание требует явной метки NO_REPLY. Пустой ответ провайдера
@@ -634,6 +672,7 @@ export async function aiReply(
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
       replyText = null;
+      silence = "model_no_reply";
     }
     // Модель честно сказала «фактов нет» — «Ширин сама ответит» и зовём её (пункт 7).
     if (replyText && isAskShirin(replyText)) {
@@ -663,6 +702,7 @@ export async function aiReply(
           replyText = null;
         } else if (!replyText || stillIssues.length || replyText.trim() === "[NO_REPLY]") {
           logWarn("ai:replyPolicy", `${contact.id}: held ${issues.join(",")}`);
+          silence = "policy_held";
           if ("error" in fixed) {
             if (contact.channel === "WHATSAPP")
               deliveryFailure = new Error("WhatsAppGenerationRetry: correction unavailable");
@@ -705,8 +745,10 @@ export async function aiReply(
           repeatCtx ?? (await loadRepeatContext(contact.id, text)),
           language,
         );
-        if (replyText === "") replyText = null;
-        else if (replyText === null) {
+        if (replyText === "") {
+          replyText = null;
+          silence = "model_no_reply";
+        } else if (replyText === null) {
           logWarn("ai:emptyAfterFilters", `${contact.id}: handed to Shirin after ${emptiedBy.join(",")}`);
           await handOffUnknownToShirin(contact, text, language);
         }
@@ -740,6 +782,8 @@ export async function aiReply(
           text,
         );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
+        // Голос ушёл, а текст пуст — это ответ; ничего не ушло вовсе — «после фильтров пусто».
+        silence = "filtered_empty";
         for (const part of toSend) {
           // В историю sendToContact сам пишет ровно то, что увидел клиент (после фильтра);
           // запись ниже с тем же mid ничего не меняет. Пусто после фильтра — не шлёт и не пишет.
@@ -760,7 +804,7 @@ export async function aiReply(
   }
 
   const picked = await receiptPromise;
-  if (await isBotFrozen()) return;
+  if (await isBotFrozen()) return silence;
   const verdict = picked?.verdict ?? null;
   const firstImage = picked?.image ?? null;
   // Остальные фото сообщения (не выбранные) больше не чеки в очереди — иначе
@@ -818,6 +862,7 @@ export async function aiReply(
     });
   }
   if (deliveryFailure) throw deliveryFailure;
+  return silence;
 }
 
 /**
@@ -878,9 +923,7 @@ export async function aiReplyToComment(
     // комментариях нет «разговора», в который бот мог бы встрять повторно.
     const guardedText = await humanizeForContact(contact.id, guardReply(verdict.kind, language), [text]);
     try {
-      await withContactMessaging(contact.id, "reply", () =>
-        sendPrivateReply(commentId, guardedText, [], metaChannelOf(contact)),
-      );
+      await sendPrivateReplyRecorded(contact, commentId, guardedText);
     } catch (err) {
       logError("ai:commentGuard:sendPrivateReply", err);
       return "ai_error";
@@ -892,10 +935,7 @@ export async function aiReplyToComment(
   if (await isBudgetExceeded(contact.id)) {
     const fallback = BUDGET_FALLBACK[language];
     try {
-      const mid = await withContactMessaging(contact.id, "reply", () =>
-        sendPrivateReply(commentId, fallback, [], metaChannelOf(contact)),
-      );
-      await recordOutgoingMessage(contact.id, fallback, mid);
+      await sendPrivateReplyRecorded(contact, commentId, fallback);
     } catch (err) {
       logError("ai:commentBudget:sendPrivateReply", err);
     }
@@ -958,9 +998,7 @@ export async function aiReplyToComment(
   if (isAskShirin(result.text)) {
     await handOffUnknownToShirin(contact, text, language, async (reply) => {
       const shown = await humanizeForContact(contact.id, cleanAutomatedReply(reply), [text]);
-      return withContactMessaging(contact.id, "reply", () =>
-        sendPrivateReply(commentId, shown, [], metaChannelOf(contact)),
-      );
+      return sendPrivateReplyRecorded(contact, commentId, shown);
     });
     return "waiting_human";
   }
@@ -971,10 +1009,7 @@ export async function aiReplyToComment(
   }
   const clean = await humanizeForContact(contact.id, cleanGeneratedReply(result.text), [text]);
   if (!clean) return "no_reply";
-  const mid = await withContactMessaging(contact.id, "reply", () =>
-    sendPrivateReply(commentId, clean, [], metaChannelOf(contact)),
-  );
-  await recordOutgoingMessage(contact.id, clean, mid);
+  await sendPrivateReplyRecorded(contact, commentId, clean);
   return "ai";
 }
 

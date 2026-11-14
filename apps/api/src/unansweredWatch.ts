@@ -4,29 +4,38 @@ import { isTrivialMessage } from "./trivialMessage.js";
 import { codeRelevance } from "./ai/relevance.js";
 import { guardOffTopic, isSilentKind } from "./ai/offTopicGuard.js";
 import { humanTakeoverEndsAt, loadHumanSilenceMs, isBotFrozen } from "./messaging/automation.js";
+import { recordNoReply } from "./messaging/noReply.js";
 import { offlineHandoffSilences } from "./ai/offlineHandoff.js";
-import { FOLLOW_PERSONAL_REASON } from "./profiles.js";
 import { aiReply } from "./ai.js";
 
 /**
  * СТОРОЖ «БЕЗ ОТВЕТА» (владелец 09.11.2026: «сделай так, чтобы никто не
  * оставался без ответа»). С 11.11.2026 — БЕЗ СООБЩЕНИЙ В TELEGRAM.
  *
- * Бот иногда молчит НАРОЧНО: Ширин только что ответила сама. Она ответила один
- * раз и ушла — клиент спросил ещё и ждал вечно. Раз в 5 минут сторож смотрит
- * переписки Instagram за последние сутки: последнее сообщение — от клиента,
- * старше `unansweredAfterMinutes` (15 мин), по делу (не «спасибо/ок/смайлик»), и
- * после него никто не ответил. Если бот молчал из-за паузы после ответа Ширин
- * (humanSilenceHours, 3 ч), а пауза уже кончилась — бот отвечает сам на всё, что
- * пришло за паузу.
+ * Раз в 5 минут сторож смотрит переписки Instagram и Messenger за последние
+ * сутки: последнее сообщение — от клиента, старше `unansweredAfterMinutes`
+ * (15 мин), по делу (не «спасибо/ок/смайлик»), и после него никто не ответил.
+ * Если временная тишина уже кончилась и молчать никто не решал — бот отвечает
+ * сам на всё, что накопилось.
  *
- * Раньше во всех остальных случаях сторож писал владельцу «⏳ Ждут ответа в
- * директе» (и про комментарии) — почти каждые полчаса. Владелец 11.11.2026:
- * «мне такой мусор вообще не нужен, кто ждёт ответа в Telegram — не надо».
- * Теперь молчим: кто ждёт, видно в панели, и бот сам ответит, когда пауза кончится.
+ * АУДИТ 15.11.2026 (7 дней прода): 60 человек ждали после паузы Ширин и 24 —
+ * после быстрого ответа на ответ бота. Сторож их не видел, потому что смотрел
+ * только на одну тишину — паузу после ответа Ширин (humanTakeoverEndsAt), только
+ * Instagram и только на сообщения, пришедшие ВО ВРЕМЯ этой паузы. Мимо шли:
+ *  — «сейчас уточню и напишу вам» и «позову Ширин» (humanSilencedUntil, 1 ч):
+ *    всё, что клиент писал в этот час, не подбирал никто и никогда;
+ *  — реакция Ширин (10 мин тишины) — то же;
+ *  — Messenger, хотя пауза там такая же временная (automation.ts);
+ *  — сообщения после конца паузы, на которые бот промолчал из-за сбоя, гонки
+ *    эха или рестарта: «пришло не во время паузы» — значит не моё.
+ * Теперь правило одно: тишина кончилась, ответа нет, решения «молчать» в
+ * журнале нет (ReplyGate action=silent, messaging/noReply.ts) — отвечает бот.
+ * Всё, что бот решает не отвечать, пишется в журнал, поэтому сторож отличает
+ * решение от потери, а не гадает.
  *
- * НЕ ТРОГАЕМ: отметку «личный», поставленную вручную, и «похоже на родню»,
- * заблокированных за спам, WhatsApp и Messenger, людей с отобранным доступом.
+ * НЕ ТРОГАЕМ: отметку «личный» (ручную и «знакомые»), заблокированных за спам,
+ * WhatsApp и сайт, людей с отобранным доступом, офлайн, переданный Ширин, ход,
+ * который ещё в работе (очередь повторов ИИ, необработанный вебхук).
  *
  * Рубильник `unansweredWatchdogEnabled` — по умолчанию ВКЛЮЧЁН.
  */
@@ -96,6 +105,37 @@ async function claim(contactId: string, lastInAt: Date, now: Date): Promise<bool
   return res.count > 0;
 }
 
+/** Каналы, где тишина после Ширин временная и сторож отвечает сам (WhatsApp — вручную, automation.ts). */
+const WATCHED_CHANNELS = ["INSTAGRAM", "MESSENGER"];
+
+/**
+ * Когда кончается временная тишина бота: пауза после живого ответа Ширин или
+ * «ждём человека» (клиент просил, бот сказал «уточню», реакция Ширин).
+ * null — тишины нет; Infinity — бессрочная (не наш случай: WhatsApp).
+ */
+export function silenceEndsAt(contact: Contact, silenceMs: number): number | null {
+  const takeover = humanTakeoverEndsAt(contact, silenceMs);
+  const requested = contact.humanSilencedUntil?.getTime() ?? null;
+  if (takeover === null) return requested;
+  if (requested === null) return takeover;
+  return Math.max(takeover, requested);
+}
+
+/** Ход по этим сообщениям ещё в работе: очередь повторов ИИ или вебхук не дообработан. */
+async function stillInProgress(contactId: string, pending: Message[]): Promise<boolean> {
+  if (await prisma.pendingAiReply.findFirst({ where: { contactId }, select: { id: true } })) return true;
+  const mids = pending.map((m) => m.mid).filter((mid): mid is string => Boolean(mid));
+  if (mids.length === 0) return false;
+  const row = await prisma.webhookInbox.findFirst({
+    where: {
+      state: { in: ["PENDING", "PROCESSING"] },
+      OR: mids.map((mid) => ({ eventKey: { endsWith: `:message:${mid}` } })),
+    },
+    select: { id: true },
+  });
+  return Boolean(row);
+}
+
 export async function runUnansweredWatch(now = new Date()): Promise<void> {
   if ((await getSetting(UNANSWERED_WATCH_SETTING)) === "false") return;
   const silenceMs = await loadHumanSilenceMs();
@@ -110,7 +150,7 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
 
   const candidates = await prisma.contact.findMany({
     where: {
-      channel: "INSTAGRAM",
+      channel: { in: WATCHED_CHANNELS },
       spamBlockedAt: null,
       whatsappSavedContact: false,
       accessRevokedAt: null,
@@ -122,36 +162,43 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
 
   let replies = 0;
   for (const raw of candidates) {
+    if (replies >= MAX_REPLIES_PER_TICK) break;
     const waiting = waitingOf(raw, since, cutoff);
     if (!waiting) continue;
     const { contact, pending } = waiting;
     const lastIn = pending[0];
-    // Отметку «личный» вручную и «похоже на родню» не трогаем вовсе — это не клиенты.
-    if (contact.personal && contact.personalReason !== FOLLOW_PERSONAL_REASON) continue;
+    // «Личный» — вручную или «знакомые» (на них подписана Ширин) — это не клиенты.
+    if (contact.personal) continue;
+    if (now.getTime() - lastIn.createdAt.getTime() >= REPLY_WINDOW_MS) continue;
 
-    // ПАУЗА КОНЧИЛАСЬ — ОТВЕЧАЕТ БОТ. Сообщение пришло, пока Ширин вела
-    // разговор, она не ответила, а пауза уже прошла: дальше ждать некого.
-    const takeoverEnds = humanTakeoverEndsAt(contact, silenceMs);
-    const askedHuman = Boolean(contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > now.getTime());
-    const pauseOver = takeoverEnds !== null && takeoverEnds !== Infinity && now.getTime() >= takeoverEnds;
-    const arrivedDuringPause = takeoverEnds !== null && lastIn.createdAt.getTime() < takeoverEnds;
-    const texts = pending.map((m) => m.text?.trim()).filter((t): t is string => Boolean(t)).reverse();
-    if (
-      !(pauseOver && arrivedDuringPause) || contact.personal || askedHuman || texts.length === 0 ||
-      now.getTime() - lastIn.createdAt.getTime() >= REPLY_WINDOW_MS || replies >= MAX_REPLIES_PER_TICK
-    ) continue;
+    // Тишина ещё идёт — Ширин ведёт разговор или клиент ждёт человека. Кончится — ответим.
+    const ends = silenceEndsAt(contact, silenceMs);
+    if (ends === Infinity || (ends !== null && now.getTime() < ends)) continue;
 
-    // Фильтр «не по делу» уже решил молчать (курьер, магазин, знакомая) — это решение, не забывчивость.
-    const gateSilent = await prisma.replyGate.findFirst({
-      where: { contactId: contact.id, action: "silent", createdAt: { gte: pending[pending.length - 1].createdAt } },
+    // На ПОСЛЕДНЕЕ сообщение бот уже РЕШИЛ молчать (фильтр «не по делу», [NO_REPLY], реакция,
+    // офлайн у Ширин) — это решение, не забывчивость. «Ждём человека» (wait) не мешает.
+    // Считаем от последнего входящего: реакция на «рахмат» не должна глушить вопрос, заданный после.
+    const decided = await prisma.replyGate.findFirst({
+      where: { contactId: contact.id, action: "silent", createdAt: { gte: lastIn.createdAt } },
       select: { id: true },
     });
-    if (gateSilent) continue;
+    if (decided) continue;
     if (await offlineHandoffSilences(contact)) continue;
+    if (await stillInProgress(contact.id, pending)) continue;
 
     if (!(await claim(contact.id, lastIn.createdAt, now))) continue;
+    const texts = pending
+      .map((m) => m.text?.trim())
+      .filter((t): t is string => Boolean(t))
+      .reverse();
+    if (texts.length === 0) {
+      // Только фото/файл: ссылка на вложение уже протухла, а чек разбирает своя очередь.
+      await recordNoReply(contact, "media_only", null);
+      continue;
+    }
     replies++;
     try {
+      // Если и сейчас ответа не будет, aiReply сам запишет причину в журнал.
       await aiReply(contact, texts.join("\n"));
     } catch (err) {
       logError("unansweredWatch:reply", err);

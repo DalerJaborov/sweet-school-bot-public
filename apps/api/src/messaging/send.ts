@@ -2,7 +2,8 @@ import { cleanKeepingWarmTail } from "../ai/replyPolicy.js";
 import { humanizeForContact } from "./humanize.js";
 import crypto from "node:crypto";
 import { prisma, WEB_MID_PREFIX, recordOutgoingMessage, logError } from "../db.js";
-import { channelOf, sendText, sendAttachment, type QuickButton } from "../instagram.js";
+import { channelOf, metaChannelOf, sendText, sendAttachment, sendPrivateReply, type QuickButton } from "../instagram.js";
+import { trackOutgoing } from "./inFlight.js";
 import { stripRepeatGreeting } from "../greeting.js";
 import { toOwnerVoice } from "../voice.js";
 import {
@@ -64,21 +65,26 @@ export async function sendToContact(
   if (!text.trim()) return null;
   const purpose: MessagePurpose = opts.purpose ?? (opts.byHuman ? "human" : "reply");
   const shown = text;
-  const mid = await withContactMessaging(contact.id, purpose, () =>
-    opts.byHuman && !opts.purpose
-      ? withMessagingPermission("human", () => sendContact(contact, shown, buttons, opts))
-      : sendContact(contact, shown, buttons, opts),
-  );
-  // ИСТОРИЯ = ТО, ЧТО УШЛО (08.11.2026). Вызывающий код по старому договору пишет
-  // recordOutgoingMessage(исходный текст, mid) — до фильтра. Пишем здесь первыми уже
-  // отправленный текст: вторая запись с тем же mid ничего не меняет (P2002), а сравнения
-  // по истории (шаблоны, видео, образцы манеры) видят ровно то, что видел клиент, во
-  // всех каналах одинаково. Порядок «отправил → записал» для Meta тот же. Сообщения
-  // Ширин пишет эхо вебхука, не мы. Сайт свою строку уже положил (WEB_MID_PREFIX).
-  if (!opts.byHuman && mid) {
-    await recordOutgoingMessage(contact.id, shown, mid).catch((err) => logError("send:recordShown", err));
-  }
-  return mid;
+  const deliver = async (): Promise<string | null> => {
+    const mid = await withContactMessaging(contact.id, purpose, () =>
+      opts.byHuman && !opts.purpose
+        ? withMessagingPermission("human", () => sendContact(contact, shown, buttons, opts))
+        : sendContact(contact, shown, buttons, opts),
+    );
+    // ИСТОРИЯ = ТО, ЧТО УШЛО (08.11.2026). Вызывающий код по старому договору пишет
+    // recordOutgoingMessage(исходный текст, mid) — до фильтра. Пишем здесь первыми уже
+    // отправленный текст: вторая запись с тем же mid ничего не меняет (P2002), а сравнения
+    // по истории (шаблоны, видео, образцы манеры) видят ровно то, что видел клиент, во
+    // всех каналах одинаково. Порядок «отправил → записал» для Meta тот же. Сообщения
+    // Ширин пишет эхо вебхука, не мы. Сайт свою строку уже положил (WEB_MID_PREFIX).
+    if (!opts.byHuman && mid) {
+      await recordOutgoingMessage(contact.id, shown, mid).catch((err) => logError("send:recordShown", err));
+    }
+    return mid;
+  };
+  // Ответ бота: эхо этой отправки ждёт записи mid и не станет «ответом Ширин» (inFlight.ts).
+  // Сообщение Ширин из панели мы не записываем — его эхо и есть её ответ.
+  return opts.byHuman ? deliver() : trackOutgoing(contact.igUserId, deliver);
 }
 
 async function sendContact(
@@ -109,7 +115,7 @@ export async function sendAttachmentToContact(
   url: string,
   type: "video" | "image" | "audio" | "file" = "image",
 ): Promise<string | null> {
-  return withContactMessaging(contact.id, "reply", async () => {
+  return trackOutgoing(contact.igUserId, () => withContactMessaging(contact.id, "reply", async () => {
     await assertMessagingAllowed();
     const channel = channelOf(contact);
     if (channel !== "WEB") {
@@ -135,6 +141,30 @@ export async function sendAttachmentToContact(
         : await persistWebOutgoing(contact.id, { text: url });
     await markSentMedia(webMid, url);
     return webMid;
+  }));
+}
+
+/**
+ * Личный ответ на комментарий (private reply) — тоже исходящее в директ, и его эхо
+ * тоже приходит вебхуком. Раньше ответ-шаблон защиты под комментарием (ai.ts) не
+ * записывал mid вовсе: эхо считалось «Ширин ответила», и бот замолкал на 3 часа
+ * ровно тогда, когда человек переходил из комментариев в директ. Одна дверь:
+ * отправка и запись mid вместе, внутри trackOutgoing.
+ */
+export async function sendPrivateReplyRecorded(
+  contact: { id: string; igUserId: string; channel: string },
+  commentId: string,
+  text: string,
+  buttons: QuickButton[] = [],
+  opts: { funnel?: boolean } = {},
+): Promise<string | null> {
+  return trackOutgoing(contact.igUserId, async () => {
+    const send = () => sendPrivateReply(commentId, text, buttons, metaChannelOf(contact));
+    const mid = await withContactMessaging(contact.id, "reply", () =>
+      opts.funnel ? withMessagingPermission("funnel", send) : send(),
+    );
+    await recordOutgoingMessage(contact.id, text, mid);
+    return mid;
   });
 }
 

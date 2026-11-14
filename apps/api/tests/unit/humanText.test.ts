@@ -230,11 +230,15 @@ describe("архитектура: текст бота уходит наружу 
       );
 
   it("ответ на комментарий (мимо sendToContact) зовут только ai.ts и funnel.ts, и оба правят текст фильтром", () => {
-    const callers = files(root)
-      .filter((f) => /\bsendPrivateReply\(/.test(fs.readFileSync(f, "utf8")))
-      .map((f) => path.relative(root, f).replaceAll("\\", "/"))
-      .filter((f) => f !== "instagram.ts")
-      .sort();
+    const callersOf = (re: RegExp, own: string[]) =>
+      files(root)
+        .filter((f) => re.test(fs.readFileSync(f, "utf8")))
+        .map((f) => path.relative(root, f).replaceAll("\\", "/"))
+        .filter((f) => !own.includes(f))
+        .sort();
+    // Транспорт зовёт одна дверь: отправка и запись mid вместе (эхо не станет «ответом Ширин»).
+    expect(callersOf(/\bsendPrivateReply\(/, ["instagram.ts"])).toEqual(["messaging/send.ts"]);
+    const callers = callersOf(/\bsendPrivateReplyRecorded\(/, ["messaging/send.ts"]);
     expect(callers).toEqual(["ai.ts", "funnel.ts"]);
     for (const f of callers) expect(fs.readFileSync(path.join(root, f), "utf8")).toContain("humanizeForContact(");
   });

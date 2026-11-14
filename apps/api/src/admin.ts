@@ -639,13 +639,14 @@ function paginate<T>(rows: T[], take: number): { rows: T[]; hasMore: boolean } {
 }
 
 /**
- * Журнал фильтра «не по делу — молчать» (ai/relevanceGate.ts): кому не ответили и почему.
- * ?action=silent|clarify|attention|reply — отбор по решению. Хозяйка видит причину по каждому.
+ * Журнал решений «не отвечаем»: фильтр «не по делу» (ai/relevanceGate.ts) и все
+ * остальные молчания бота (messaging/noReply.ts, cls = "policy").
+ * ?action=silent|wait|clarify|attention|reply — отбор по решению. Хозяйка видит причину по каждому.
  */
 adminRouter.get("/admin/reply-gate", async (req, res) => {
   const take = takeParam(req.query.take, 50, 200);
   const skip = skipParam(req.query.skip);
-  const action = typeof req.query.action === "string" && ["silent", "clarify", "attention", "reply"].includes(req.query.action) ? req.query.action : undefined;
+  const action = typeof req.query.action === "string" && ["silent", "wait", "clarify", "attention", "reply"].includes(req.query.action) ? req.query.action : undefined;
   const rows = await prisma.replyGate.findMany({
     where: action ? { action } : undefined,
     orderBy: { createdAt: "desc" },

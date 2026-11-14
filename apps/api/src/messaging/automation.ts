@@ -118,6 +118,20 @@ export async function everTalkedWithShirin(contact: { id: string; humanTakenOver
   }
 }
 
+/**
+ * Почему дверь не пускает ответ бота этому человеку — для журнала решений
+ * (messaging/noReply.ts). null — дверь открыта.
+ */
+export function automationBlockKind(
+  contact: ContactPolicy,
+  now = Date.now(),
+): "personal" | "human_takeover" | "human_requested" | null {
+  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return "personal";
+  if (humanTakeoverActive(contact, now)) return "human_takeover";
+  if (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > now) return "human_requested";
+  return null;
+}
+
 export function contactAutomationBlocked(contact: ContactPolicy, purpose: MessagePurpose = "reply"): boolean {
   if (purpose === "human") return false;
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return true;

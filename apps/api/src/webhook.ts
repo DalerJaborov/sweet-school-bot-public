@@ -30,6 +30,12 @@ import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
 import { humanSilenceActive, loadHumanSilenceMs } from "./messaging/automation.js";
+import { recordNoReply, policyNoReplyReason } from "./messaging/noReply.js";
+import { outgoingInFlight, waitOutgoingIdle } from "./messaging/inFlight.js";
+
+/** Сколько эхо с незнакомым mid ждёт, пока наша отправка этому человеку запишет mid:
+ *  потолок чуть выше самой долгой отправки (вложение — 60 с, instagram.ts). */
+const ECHO_WAIT_FOR_OWN_SEND_MS = 75_000;
 
 /** Сколько молчит бот, если в переписку вмешалась ЖИВАЯ хозяйка из приложения
  *  Instagram, а не наш код: написала текстом, ответила голосом или просто
@@ -268,6 +274,16 @@ export async function handleEcho(event: MessagingEvent, channel: MetaChannel = "
 
   const known = await prisma.message.findUnique({ where: { mid: msg.mid } });
   if (known) return; // наша же отправка, эхо от Meta — не человек
+
+  // ЭХО ОБОГНАЛО ОТВЕТ GRAPH API (аудит 15.11.2026). Бот прямо сейчас пишет этому
+  // человеку, а mid ещё не записан: это почти наверняка наше же сообщение. Ждём
+  // конца отправки (messaging/inFlight.ts) и смотрим ещё раз — иначе наш ответ
+  // стал бы «ответом Ширин»: пауза бота, отмена воронки, пропущенное сообщение клиента.
+  if (outgoingInFlight(recipientId)) {
+    releaseInboxSlot(); // ожидание — вне потолка очереди вебхуков
+    await waitOutgoingIdle(recipientId, ECHO_WAIT_FOR_OWN_SEND_MS);
+    if (await prisma.message.findUnique({ where: { mid: msg.mid } })) return;
+  }
 
   const contact = await upsertContact(recipientId, null, channel);
 
@@ -561,12 +577,18 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // отметку бот не снимает никогда.
   contact = await releaseFollowSilenceIfClient(contact, { text: textOrVoice, payload });
   if (msg.mid && recognized) await prisma.message.update({ where: { mid: msg.mid }, data: { text: recognized } });
-  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return;
+  if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) {
+    await recordNoReply(contact, "personal", textOrVoice);
+    return;
+  }
 
   // На кого подписана Ширин (знакомые, родня, поставщики) — бот молчит; платящих,
   // пишущих про курс и тех, кто прислал картинку (возможный чек), не трогаем.
   // См. profiles.ts.
-  if (await silenceIfFollowedByBusiness(contact, { hasImage: attachments.some((a) => a.kind === "image"), text: textOrVoice, payload })) return;
+  if (await silenceIfFollowedByBusiness(contact, { hasImage: attachments.some((a) => a.kind === "image"), text: textOrVoice, payload })) {
+    await recordNoReply(contact, "followed", textOrVoice);
+    return;
+  }
 
 
   // ФЛИРТ / ОСКОРБЛЕНИЯ / РЕКЛАМНЫЙ СПАМ / ВИДЕО БЕЗ ТЕКСТА в директе от того,
@@ -581,6 +603,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
       await prisma.contact
         .update({ where: { id: contact.id }, data: { spamBlockedAt: new Date(), spamReason: reason } })
         .catch((err) => logError("webhook:spamBlock", err));
+      await recordNoReply(contact, "abuse", textOrVoice);
       return;
     }
   }
@@ -590,6 +613,7 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
       where: { id: contact.id },
       data: { personal: true, personalReason: `Похоже на личную переписку: «${textOrVoice.slice(0, 100)}»` },
     });
+    await recordNoReply(contact, "looks_personal", textOrVoice);
     return;
   }
 
@@ -598,7 +622,8 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   // Frozen means funnel-only, including before receipt intake and signup.
   // Preserve the incoming history and human takeover rules, then stop here.
   if (frozen || (await getSetting("botFrozen")) === "true") {
-    if (!isHumanSilenced(contact)) await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable: false });
+    const handled = !isHumanSilenced(contact) && (await handleIncomingDm(contact, textOrVoice, payload, { hasAttachments, aiAvailable: false }));
+    if (!handled) await recordNoReply(contact, isHumanSilenced(contact) ? policyNoReplyReason(contact) : "frozen", textOrVoice);
     return;
   }
 
@@ -667,6 +692,8 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
     if (rescuedImages.length > 0) {
       await verifyReceiptsNow(contact, rescuedImages).catch((err) => logError("webhook:receiptDuringHuman", err));
     }
+    // След «ждём человека»: когда пауза кончится, а ответа так и нет — ответит сторож.
+    await recordNoReply(contact, policyNoReplyReason(contact), textOrVoice);
     return;
   }
 
@@ -685,7 +712,12 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
   await debounceMessage(contact.id, textForAi, attachments, rescuedImages, async (mergedText, mergedAttachments, mergedRescued) => {
     try {
       const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-      if (!fresh || isHumanSilenced(fresh)) return; // за время ожидания подключилась хозяйка — картинки уже спасены выше
+      if (!fresh) return;
+      if (isHumanSilenced(fresh)) {
+        // За время ожидания подключилась хозяйка — картинки уже спасены выше; хвост подберёт сторож.
+        await recordNoReply(fresh, policyNoReplyReason(fresh), mergedText);
+        return;
+      }
       await aiReply(fresh, mergedText, mergedAttachments, mergedRescued);
     } finally {
       // Первый вопрос без меню: ответ реально ушёл — воронка пропущена; ИИ

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockPrisma, restorePrisma, fakeContact, fakeFunnel, fakeStep, type PrismaMock } from "../helpers.js";
-vi.mock("../../src/messaging/send.js", () => ({ sendToContact: vi.fn(async () => "sent"), sendAttachmentToContact: vi.fn() }));
+// Личный ответ на комментарий идёт настоящей дверью (sendPrivateReplyRecorded) — до мока instagram.js.
+vi.mock("../../src/messaging/send.js", async (original) => ({
+  ...(await original<typeof import("../../src/messaging/send.js")>()),
+  sendToContact: vi.fn(async () => "sent"),
+  sendAttachmentToContact: vi.fn(),
+}));
 vi.mock("../../src/instagram.js", () => ({
   sendPrivateReply: vi.fn(async () => "mid-1"),
   replyToComment: vi.fn(async () => "reply-1"),
