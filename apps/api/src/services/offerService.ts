@@ -9,6 +9,7 @@ import {
   getPaymentTolerance,
   getPrices,
   MAX_TOLERANCE_DOWN,
+  MAX_TOLERANCE_FOREIGN_PCT,
   MAX_TOLERANCE_UP,
   resetPriceCache,
 } from "./priceService.js";
@@ -40,7 +41,13 @@ export type Offer = {
   prices: { course50: number; course70: number; bundle: number };
   /** Допуск по сумме чека, сомони: down — комиссия банка «съела» часть, up —
    *  комиссия добавлена сверху. Необязателен во входе (старый экран его не шлёт). */
-  payment?: { toleranceDown: number; toleranceUp: number };
+  payment?: {
+    toleranceDown: number;
+    toleranceUp: number;
+    /** Чек в рублях/другой валюте: можно меньше цены на столько процентов (Q20).
+     *  Необязателен во входе: экран без поля не сбрасывает сохранённое. */
+    toleranceForeignPct?: number;
+  };
   offline: {
     price: number;
     /** ГГГГ-ММ-ДД или "" — «дата уточняется». */
@@ -113,6 +120,12 @@ const offerSchema = z.object({
         .int("Допуск вверх: целое число сомони")
         .min(0, "Допуск вверх: не меньше нуля")
         .max(MAX_TOLERANCE_UP, `Допуск вверх: не больше ${MAX_TOLERANCE_UP} сомони`),
+      toleranceForeignPct: z
+        .number({ error: "Допуск для рублей: укажите число" })
+        .int("Допуск для рублей: целое число процентов")
+        .min(0, "Допуск для рублей: не меньше нуля")
+        .max(MAX_TOLERANCE_FOREIGN_PCT, `Допуск для рублей: не больше ${MAX_TOLERANCE_FOREIGN_PCT}% — это уже недоплата`)
+        .optional(),
     })
     .optional(),
   offline: z.object({
@@ -148,6 +161,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "prices.bundle": "Оба курса, цена",
   "payment.toleranceDown": "Чек: допуск вниз (комиссия банка), сомони",
   "payment.toleranceUp": "Чек: допуск вверх (комиссия сверху), сомони",
+  "payment.toleranceForeignPct": "Чек в рублях и другой валюте: допуск вниз, %",
   "offline.price": "Очный курс, цена",
   "offline.startDate": "Очный курс, дата набора",
   "offline.timeFrom": "Очный курс, начало занятий",
@@ -190,7 +204,7 @@ export async function readOffer(): Promise<{ offer: Offer; legacyHours: string |
   return {
     offer: {
       prices: { course50: p.price[COURSE_50], course70: p.price[COURSE_70], bundle: p.bundle },
-      payment: { toleranceDown: tol.down, toleranceUp: tol.up },
+      payment: { toleranceDown: tol.down, toleranceUp: tol.up, toleranceForeignPct: tol.foreignPct },
       offline: {
         price: facts.price,
         startDate: start ? toIsoDay(start) : "",
@@ -214,7 +228,11 @@ export const OFFER_DEFAULTS: Offer = {
     course70: DEFAULT_PRICES.price[COURSE_70],
     bundle: DEFAULT_PRICES.bundle,
   },
-  payment: { toleranceDown: DEFAULT_PAYMENT_TOLERANCE.down, toleranceUp: DEFAULT_PAYMENT_TOLERANCE.up },
+  payment: {
+    toleranceDown: DEFAULT_PAYMENT_TOLERANCE.down,
+    toleranceUp: DEFAULT_PAYMENT_TOLERANCE.up,
+    toleranceForeignPct: DEFAULT_PAYMENT_TOLERANCE.foreignPct,
+  },
   offline: {
     price: DEFAULT_OFFLINE_FACTS.price,
     // Дату набора по умолчанию НЕ придумываем: пусто = «дата уточняется».
@@ -239,6 +257,9 @@ function flatten(offer: Offer): Flat {
       ? {
           "payment.toleranceDown": String(offer.payment.toleranceDown),
           "payment.toleranceUp": String(offer.payment.toleranceUp),
+          ...(offer.payment.toleranceForeignPct != null
+            ? { "payment.toleranceForeignPct": String(offer.payment.toleranceForeignPct) }
+            : {}),
         }
       : {}),
     "offline.price": String(offer.offline.price),
@@ -398,6 +419,9 @@ function settingValues(offer: Offer): Record<string, string> {
       ? {
           receiptToleranceDown: String(offer.payment.toleranceDown),
           receiptToleranceUp: String(offer.payment.toleranceUp),
+          ...(offer.payment.toleranceForeignPct != null
+            ? { receiptToleranceForeignPct: String(offer.payment.toleranceForeignPct) }
+            : {}),
         }
       : {}),
     [OFFLINE_FACT_KEYS.price]: String(offer.offline.price),
@@ -421,6 +445,10 @@ export async function saveOffer(
   if (version !== opts.version) return { status: "stale" };
   // Старый экран без допуска не должен молча сбрасывать сохранённый.
   next.payment ??= before.payment;
+  // Экран без поля «допуск для рублей» тоже не сбрасывает сохранённый процент.
+  if (next.payment && next.payment.toleranceForeignPct == null) {
+    next.payment = { ...next.payment, toleranceForeignPct: before.payment?.toleranceForeignPct };
+  }
 
   const check = checkOffer(before, next, today);
   if (Object.keys(check.errors).length > 0) return { status: "invalid", errors: check.errors };

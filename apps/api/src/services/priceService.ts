@@ -49,11 +49,22 @@ export async function getPrices(): Promise<PriceTable> {
  * рублей по курсу. Недоплата больше down по-прежнему уходит владельцу.
  * Реальные чеки на проде: 70 → 70, 71, 72, 73; из рублей — до 78.
  */
-export type PaymentTolerance = { down: number; up: number };
-export const DEFAULT_PAYMENT_TOLERANCE: PaymentTolerance = { down: 6, up: 30 };
-/** Потолки: допуск вниз шире 15 сомони — уже недоплата, вверх шире 60 — мусор. */
+export type PaymentTolerance = {
+  down: number;
+  up: number;
+  /** ЧЕК В ВАЛЮТЕ (рубли, доллары…), решение владельца Q20, 15.11.2026: после
+   *  перевода в сомони по курсу чек может не добрать до цены не больше этого
+   *  процента от цены (5% от 70 = 3.5 сомони) — вместо фиксированного down.
+   *  Недобор от курса обмена пропорционален сумме, поэтому процент, а не сомони;
+   *  одно правило для любой валюты, кроме сомони. Больше — чек идёт Ширин. */
+  foreignPct: number;
+};
+export const DEFAULT_PAYMENT_TOLERANCE: PaymentTolerance = { down: 6, up: 30, foreignPct: 5 };
+/** Потолки: допуск вниз шире 15 сомони — уже недоплата, вверх шире 60 — мусор,
+ *  для валюты шире 10% — уже недоплата, а не разница курсов. */
 export const MAX_TOLERANCE_DOWN = 15;
 export const MAX_TOLERANCE_UP = 60;
+export const MAX_TOLERANCE_FOREIGN_PCT = 10;
 
 function toleranceOr(raw: string | null, fallback: number, max: number): number {
   const n = Number.parseInt((raw ?? "").trim(), 10);
@@ -61,10 +72,15 @@ function toleranceOr(raw: string | null, fallback: number, max: number): number 
 }
 
 export async function getPaymentTolerance(): Promise<PaymentTolerance> {
-  const [down, up] = await Promise.all([getSetting("receiptToleranceDown"), getSetting("receiptToleranceUp")]);
+  const [down, up, foreignPct] = await Promise.all([
+    getSetting("receiptToleranceDown"),
+    getSetting("receiptToleranceUp"),
+    getSetting("receiptToleranceForeignPct"),
+  ]);
   return {
     down: toleranceOr(down, DEFAULT_PAYMENT_TOLERANCE.down, MAX_TOLERANCE_DOWN),
     up: toleranceOr(up, DEFAULT_PAYMENT_TOLERANCE.up, MAX_TOLERANCE_UP),
+    foreignPct: toleranceOr(foreignPct, DEFAULT_PAYMENT_TOLERANCE.foreignPct, MAX_TOLERANCE_FOREIGN_PCT),
   };
 }
 

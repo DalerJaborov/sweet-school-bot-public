@@ -120,7 +120,10 @@ describe("тот же перевод второй раз", () => {
   it.each([
     { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) }, { receiptAt: new Date(Date.now() + 3600000) },
   ])("дата не мешает автопринятию честного чека: %j", async (overrides) => {
-    await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
+    // Новая клиентка: у покупавшей раньше чек без даты и номера операции идёт
+    // Ширин (решение Q20, 15.11.2026; tests/unit/receiptQ20.test.ts).
+    const newcomer = fakeContact({ askedAltScreenshotAt: null, paid: false }) as Parameters<typeof handleReceiptVerdict>[0];
+    await handleReceiptVerdict(newcomer, { ...valid70(), ...overrides });
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
     expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));

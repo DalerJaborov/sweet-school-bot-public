@@ -10,7 +10,7 @@ import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
 import { sendKind } from "../notify.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
-import { allocate, COURSE_TITLE, coursesForAmount, ownedCourses, planForAmount, type Course } from "../courses.js";
+import { allocate, COURSE_TITLE, coursesForAmount, foreignShortfallOk, planForAmount, splitAmount, type Course } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
 import { type ClientLanguage } from "./clientLanguage.js";
 import { contactLanguage } from "./contactLanguage.js";
@@ -193,6 +193,30 @@ async function tellAlreadyAccepted(contact: Contact, lastText: string | null = n
   return sent;
 }
 
+/** Коды, которые toSomoni() считает сомони: такой чек не «в валюте». */
+const SOMONI_CODES = new Set(["TJS", "SOMONI", "СОМОНИ"]);
+
+/**
+ * УЖЕ ПОКУПАЛА ДО ЭТОГО ЧЕКА (решение владельца Q20, 15.11.2026). Чек без даты
+ * и без номера операции у такой клиентки может быть пересохранённым старым
+ * чеком, поэтому ссылку сам бот не выдаёт - решает Ширин. Считаем любую прежнюю
+ * покупку (и отозванную, и выданную вручную), отметку «оплатила» и принятый
+ * чек: раньше смотрели только на действующие покупки, и клиентка с отозванным
+ * доступом или с ручной выдачей без покупки проходила как новая.
+ * «До» - момент чека: покупка, созданная этим же чеком при прошлом разборе,
+ * не делает клиентку «покупавшей раньше».
+ */
+async function boughtBefore(contact: Contact, before: Date, imageHash: string): Promise<boolean> {
+  if (contact.paid && (!contact.paidAt || contact.paidAt < before)) return true;
+  const [purchases, receipts] = await Promise.all([
+    prisma.purchase.count({ where: { contactId: contact.id, createdAt: { lt: before } } }),
+    prisma.receiptCheck.count({
+      where: { contactId: contact.id, imageHash: { not: imageHash }, createdAt: { lt: before }, OR: ACCEPTED_WHERE },
+    }),
+  ]);
+  return purchases + receipts > 0;
+}
+
 /** Курсы уже реально доставлены человеку (ссылка выдана) — например, соседним
  *  разбором второго скриншота того же перевода. */
 async function coursesAlreadyDelivered(contactId: string, courses: Course[]): Promise<boolean> {
@@ -289,11 +313,14 @@ async function settleManualHandout(
     }
   }
   const created: string[] = [];
-  for (const course of courses) {
+  // Одно деление суммы на все пути (courses.splitAmount): 121 на двоих = 60 + 61,
+  // а не 61 + 61 - иначе отчёт по деньгам показывает больше, чем пришло.
+  const shares = splitAmount(amount, courses.length);
+  for (const [i, course] of courses.entries()) {
     try {
       const row = await prisma.purchase.create({
         data: {
-          contactId: contact.id, course, amount: Math.round(amount / courses.length),
+          contactId: contact.id, course, amount: shares[i],
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", inviteLink: linkFor.get(course) ?? null,
         },
       });
@@ -331,24 +358,53 @@ async function settleManualHandout(
   }
 }
 
-export async function handleReceiptVerdict(
-  contact: Contact,
-  verdict: {
-    kind: "valid" | "suspicious";
-    confidence: number;
-    amount: number | null;
-    receiptAt: Date | null;
-    reason: string;
-    currency?: string | null;
-    tamperingSuspected?: boolean;
-    recipientMatches?: boolean;
-    imageHash: string;
-    imageUrl: string | null;
-    transactionId?: string | null;
-  },
-  existingId?: string
-): Promise<void> {
+type ReceiptVerdictInput = {
+  kind: "valid" | "suspicious";
+  confidence: number;
+  amount: number | null;
+  receiptAt: Date | null;
+  reason: string;
+  currency?: string | null;
+  tamperingSuspected?: boolean;
+  recipientMatches?: boolean;
+  imageHash: string;
+  imageUrl: string | null;
+  transactionId?: string | null;
+};
+
+/**
+ * ЧЕКИ ОДНОГО ЧЕЛОВЕКА - ПО ОДНОМУ (ревью PR 72, гонка из бэклога 08.11).
+ * Тот же скриншот дважды подряд (двойная отправка), два скриншота одного
+ * перевода или живой разбор вместе с очередью перепроверки шли параллельно:
+ * оба не видели строки друг друга, и второй разбор продолжал доставку покупки,
+ * которую первый ещё не отправил, - клиентке уходили ДВЕ одноразовые ссылки.
+ * Деньги защищает уникальность покупки в базе; эта очередь убирает вторую
+ * ссылку и лишнюю карточку. api работает одним процессом (docker-compose), поэтому
+ * замка в памяти достаточно; при нескольких копиях api нужен замок в базе.
+ */
+const receiptQueues = new Map<string, Promise<void>>();
+async function oneReceiptAtATime<T>(contactId: string, run: () => Promise<T>): Promise<T> {
+  const before = receiptQueues.get(contactId) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => (release = resolve));
+  const tail = before.then(() => mine);
+  receiptQueues.set(contactId, tail);
+  try {
+    await before;
+    return await run();
+  } finally {
+    release();
+    if (receiptQueues.get(contactId) === tail) receiptQueues.delete(contactId);
+  }
+}
+
+export function handleReceiptVerdict(contact: Contact, verdict: ReceiptVerdictInput, existingId?: string): Promise<void> {
+  return oneReceiptAtATime(contact.id, () => handleReceiptVerdictNow(contact, verdict, existingId));
+}
+
+async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdictInput, existingId?: string): Promise<void> {
   if (await isBotFrozen()) return;
+  const startedAt = new Date();
   // ОТЛОЖЕННАЯ ПЕРЕПРОВЕРКА ПОСЛЕ РУЧНОЙ ВЫДАЧИ (08.11.2026): чек ждал в очереди,
   // а нужные курсы человеку уже выданы - молчим и закрываем. Если Ширин лишь
   // прислала ссылку вне системы (покупок нет) - оплату молча не закрываем:
@@ -577,8 +633,6 @@ export async function handleReceiptVerdict(
   // за 70, пришёл старый чек на 70: полоса курса за 50 его тоже вмещает, и
   // allocate() открыл бы второй курс бесплатно. Если после вычета купленного
   // у суммы не осталось своих курсов - чек идёт владельцу.
-  let ownedCache: Course[] | null = null;
-  const getOwned = async (): Promise<Course[]> => (ownedCache ??= await ownedCourses(contact.id).catch(() => []));
   const own = amount != null ? await planForAmount(contact.id, amount) : null;
   const wanted = own?.wanted ?? [];
   const safeGrant = plan ? plan.grant.filter((c) => wanted.includes(c)) : [];
@@ -599,8 +653,25 @@ export async function handleReceiptVerdict(
   if (!verdict.currency) causes.push("не определена валюта");
   // Ни даты, ни номера операции: у новой клиентки (первая покупка) это не повод
   // для проверки, а вот у той, кто уже покупала, - да (пересохранённый старый чек).
-  if (kind === "valid" && !sameTransfer && !verdict.receiptAt && !(txn && txn.length >= 6) && (await getOwned()).length > 0) {
-    causes.push("нет ни даты, ни номера операции, а у клиентки уже есть курс");
+  // Решение владельца Q20 (15.11.2026): ссылку сам не выдаём, чек - Ширин с
+  // кнопкой «Подтвердить», клиентке - обычное «передаю на проверку».
+  if (
+    kind === "valid" &&
+    !sameTransfer &&
+    !verdict.receiptAt &&
+    !(txn && txn.length >= 6) &&
+    (await boughtBefore(contact, queuedAt ?? startedAt, verdict.imageHash).catch(() => true))
+  ) {
+    causes.push("нет ни даты, ни номера операции, а клиентка уже покупала раньше");
+  }
+  // ЧЕК В ВАЛЮТЕ: недобор не больше процента от цены (Q20, «Цены и даты»).
+  if (kind === "valid" && !sameTransfer && !conversionFailed && !SOMONI_CODES.has(currency) && amount != null && plan && plan.grant.length > 0) {
+    const fx = await foreignShortfallOk(amount, plan.grant);
+    if (!fx.ok) {
+      causes.push(
+        `чек в ${currency}: по курсу ${Math.round(amount * 100) / 100} сомони, меньше цены ${fx.price} больше чем на ${fx.pct}%`
+      );
+    }
   }
   const isClean = kind === "valid" && causes.length === 0 && !sameTransfer;
   if (kind === "valid" && !sameTransfer) doubts.push(...causes);

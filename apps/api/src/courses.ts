@@ -106,6 +106,31 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
 }
 
 /**
+ * ЧЕК В ВАЛЮТЕ (рубли, доллары…): НЕДОБОР — НЕ БОЛЬШЕ ПРОЦЕНТА ОТ ЦЕНЫ
+ * (решение владельца Q20, 15.11.2026; «Цены и даты» → допуск для рублей).
+ *
+ * Сумму в валюте мы переводим в сомони по СВОЕМУ курсу, а банк клиентки считал
+ * по своему: расхождение пропорционально сумме, а не фиксировано. Раньше для
+ * рублей действовал тот же допуск 6 сомони, что и для сомони, — это ворота
+ * только для АВТОприёма: что открыть, по-прежнему решает allocate(), а кнопка
+ * Ширин в карточке считает по обычному допуску (её решение — глазами).
+ *
+ * Цель — то, что выдаётся: два курса — цена комплекта, один — цена курса.
+ * При ценах 50/70/100 процент (2.5/3.5/5 сомони) уже допуска 6, поэтому
+ * действует именно он; если цены вырастут так, что процент станет шире 6
+ * сомони, внешней границей останется допуск allocate().
+ */
+export async function foreignShortfallOk(
+  amount: number,
+  grant: Course[]
+): Promise<{ ok: boolean; price: number; minimum: number; pct: number }> {
+  const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
+  const price = grant.length >= 2 ? prices.bundle : grant.length === 1 ? prices.price[grant[0]] : 0;
+  const minimum = price - (price * tol.foreignPct) / 100;
+  return { ok: grant.length > 0 && amount >= minimum, price, minimum, pct: tol.foreignPct };
+}
+
+/**
  * Какие курсы даёт сумма чека, НЕ глядя на то, что уже куплено (для проверки
  * "этот платёж уже обслужен"). Те же границы, что у allocate().
  */

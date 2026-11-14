@@ -34,6 +34,7 @@ type Draft = {
   bundle: string;
   tolDown: string;
   tolUp: string;
+  tolForeign: string;
   price: string;
   startDate: string;
   timeFrom: string;
@@ -51,6 +52,7 @@ function toDraft(o: Offer): Draft {
     bundle: String(o.prices.bundle),
     tolDown: o.payment ? String(o.payment.toleranceDown) : "6",
     tolUp: o.payment ? String(o.payment.toleranceUp) : "30",
+    tolForeign: o.payment?.toleranceForeignPct != null ? String(o.payment.toleranceForeignPct) : "5",
     price: String(o.offline.price),
     startDate: o.offline.startDate,
     timeFrom: o.offline.timeFrom,
@@ -68,7 +70,7 @@ const num = (v: string): number | null => (v.trim() === "" ? null : Number(v));
 function toOffer(d: Draft) {
   return {
     prices: { course50: num(d.course50), course70: num(d.course70), bundle: num(d.bundle) },
-    payment: { toleranceDown: num(d.tolDown), toleranceUp: num(d.tolUp) },
+    payment: { toleranceDown: num(d.tolDown), toleranceUp: num(d.tolUp), toleranceForeignPct: num(d.tolForeign) },
     offline: {
       price: num(d.price),
       startDate: d.startDate,
@@ -302,11 +304,19 @@ export function OfferPage() {
             error={fieldErrors["payment.toleranceUp"]}
             placeholder="30"
           />
+          <Count
+            label="Чек в рублях или другой валюте: можно меньше цены на, %"
+            value={draft.tolForeign}
+            onChange={set("tolForeign")}
+            error={fieldErrors["payment.toleranceForeignPct"]}
+            placeholder="5"
+          />
         </div>
         <p className="hint">
           Меньше цены — это комиссия, которая «съела» часть перевода (до 15). Больше — комиссия сверху или пересчёт
           из рублей (до 60). По реальным чекам школы: переплата была от 0 до 3 сомони, из рублей — до 8. Всё,
-          что вне коридора, уходит Ширин на проверку.
+          что вне коридора, уходит Ширин на проверку. Чек в рублях бот переводит в сомони по курсу и пропускает сам,
+          если до цены не хватает не больше указанного процента (например, 5% от 70 — это 3.5 сомони).
         </p>
       </section>
 
