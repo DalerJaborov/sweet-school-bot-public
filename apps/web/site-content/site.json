@@ -4,6 +4,10 @@
   "logo": "/icons/icon-512.png?v=20261109-logo",
   "ogImage": "/img/covers/og-home-ru.jpg",
   "themeColor": "#c9376b",
+  "verification": {
+    "google": "",
+    "yandex": ""
+  },
   "contacts": {
     "phone": "+992905355355",
     "phoneDisplay": "+992 905 355 355",
