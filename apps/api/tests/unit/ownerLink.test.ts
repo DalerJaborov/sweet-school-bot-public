@@ -94,6 +94,12 @@ describe("Ссылка на сайт", () => {
     expect(markWebIssuedByOwner).toHaveBeenCalledWith("c1", "https://shirinsweets.online/l/NEWCODE");
   });
 
+  it("сбой пометки выдачи не теряет новую ссылку (прошлая уже погашена)", async () => {
+    markWebIssuedByOwner.mockRejectedValueOnce(new Error("database is locked"));
+    const r = await issueOwnerLink("c1", "web");
+    expect(r).toMatchObject({ ok: true, kind: "web", url: "https://shirinsweets.online/l/NEWCODE", closedInvite: false });
+  });
+
   it("отобранный доступ или спам — ссылки нет", async () => {
     db.model("contact").findUnique.mockResolvedValue({ ...baseContact, accessRevokedAt: new Date() });
     expect(await issueOwnerLink("c1", "web")).toEqual({ ok: false, reason: "blocked" });

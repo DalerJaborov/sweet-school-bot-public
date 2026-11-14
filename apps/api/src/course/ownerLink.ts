@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { prisma, getSetting } from "../db.js";
+import { prisma, getSetting, logError } from "../db.js";
 import { createOneTimeInviteLink, revokeInviteLink } from "../telegram.js";
 import { rememberInviteLink } from "../groupAccess.js";
 import { issueCourseLink } from "./delivery.js";
@@ -158,7 +158,11 @@ async function issueOwnerLinkLocked(contactId: string, kind: LinkKind): Promise<
   if (kind === "web") {
     const url = await issueCourseLink(contactId, { automatic: false });
     if (!url) return { ok: false, reason: "no-base" };
-    const { closedInvite } = await markWebIssuedByOwner(contactId, url);
+    // Прошлая ссылка уже погашена: сбой пометки не должен потерять новую — владелец её получит.
+    const { closedInvite } = await markWebIssuedByOwner(contactId, url).catch((err) => {
+      logError("ownerLink:markWeb", err);
+      return { closedInvite: false };
+    });
     return { ok: true, kind: "web", url, courses: purchases.map((p) => p.course), closedInvite };
   }
 
