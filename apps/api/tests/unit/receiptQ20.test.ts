@@ -26,7 +26,9 @@ vi.mock("../../src/telegram.js", () => ({
   editCaption: vi.fn(async () => undefined),
 }));
 const grantCourses = vi.fn(async (_c: unknown, plan: { grant: string[] }) => plan.grant);
-vi.mock("../../src/ai.js", () => ({ grantCourses: (...a: unknown[]) => grantCourses(...(a as [unknown, { grant: string[] }])) }));
+vi.mock("../../src/ai.js", () => ({
+  grantCourses: (...a: unknown[]) => grantCourses(...(a as [unknown, { grant: string[] }])),
+}));
 vi.mock("../../src/ai/grantCourses.js", () => ({
   grantCourses: (...a: unknown[]) => grantCourses(...(a as [unknown, { grant: string[] }])),
 }));
@@ -100,7 +102,8 @@ const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
 
 /** Что ушло клиентке текстом (второй аргумент sendToContact). */
 const sentTexts = () => sendToContact.mock.calls.map((c) => String(c[1]));
-const ownerCaption = () => String((sendReceiptForReview.mock.calls[0]?.[2] as { caption?: string } | undefined)?.caption ?? "");
+const ownerCaption = () =>
+  String((sendReceiptForReview.mock.calls[0]?.[2] as { caption?: string } | undefined)?.caption ?? "");
 
 describe("Q20 а: уже покупала + чек без даты и без номера операции", () => {
   it("новая клиентка: такой чек проходит сам (ссылка уходит, Ширин не зовём)", async () => {
@@ -114,7 +117,15 @@ describe("Q20 а: уже покупала + чек без даты и без н�
 
   it("действующий курс 50: ссылку не выдаём, карточка Ширин с «Подтвердить», клиентке «передаю на проверку»", async () => {
     const c = await newContact("r1");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, inviteLink: "https://t.me/+old", createdAt: minutesAgo(60 * 24 * 30) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE50",
+        amount: 50,
+        inviteLink: "https://t.me/+old",
+        createdAt: minutesAgo(60 * 24 * 30),
+      },
+    });
     await handleReceiptVerdict(c, verdict("r1", noDateNoTxn));
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
@@ -133,7 +144,15 @@ describe("Q20 а: уже покупала + чек без даты и без н�
 
   it("курс был, но доступ отозван: тоже «покупала раньше» - к Ширин", async () => {
     const c = await newContact("r2");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, revokedAt: minutesAgo(60), createdAt: minutesAgo(60 * 24 * 10) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE50",
+        amount: 50,
+        revokedAt: minutesAgo(60),
+        createdAt: minutesAgo(60 * 24 * 10),
+      },
+    });
     await handleReceiptVerdict(c, verdict("r2", noDateNoTxn));
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
@@ -149,7 +168,16 @@ describe("Q20 а: уже покупала + чек без даты и без н�
   it("раньше принятый чек (ссылку дала Ширин), покупки нет: к Ширин", async () => {
     const c = await newContact("r4");
     await db.receiptCheck.create({
-      data: { contactId: c.id, kind: "valid", confidence: 90, reason: "ok", imageHash: "old-r4", amount: 50, ownerDecision: "HANDLED", createdAt: minutesAgo(60 * 24 * 20) },
+      data: {
+        contactId: c.id,
+        kind: "valid",
+        confidence: 90,
+        reason: "ok",
+        imageHash: "old-r4",
+        amount: 50,
+        ownerDecision: "HANDLED",
+        createdAt: minutesAgo(60 * 24 * 20),
+      },
     });
     await handleReceiptVerdict(c, verdict("r4", noDateNoTxn));
     expect(grantCourses).not.toHaveBeenCalled();
@@ -158,7 +186,15 @@ describe("Q20 а: уже покупала + чек без даты и без н�
 
   it("покупавшая клиентка, но на чеке есть номер операции: проходит сам", async () => {
     const c = await newContact("r5");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, inviteLink: "https://t.me/+old", createdAt: minutesAgo(60 * 24 * 30) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE50",
+        amount: 50,
+        inviteLink: "https://t.me/+old",
+        createdAt: minutesAgo(60 * 24 * 30),
+      },
+    });
     await handleReceiptVerdict(c, verdict("r5", { receiptAt: null, transactionId: "TXN-778899" }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
@@ -166,7 +202,15 @@ describe("Q20 а: уже покупала + чек без даты и без н�
 
   it("покупавшая клиентка, на чеке есть дата: проходит сам", async () => {
     const c = await newContact("r6");
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, inviteLink: "https://t.me/+old", createdAt: minutesAgo(60 * 24 * 30) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE50",
+        amount: 50,
+        inviteLink: "https://t.me/+old",
+        createdAt: minutesAgo(60 * 24 * 30),
+      },
+    });
     await handleReceiptVerdict(c, verdict("r6", { transactionId: null }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
@@ -175,10 +219,25 @@ describe("Q20 а: уже покупала + чек без даты и без н�
   it("перепроверка из очереди: покупка, созданная ПОСЛЕ этого чека, не делает клиентку «покупавшей раньше»", async () => {
     const c = await newContact("r7");
     const queued = await db.receiptCheck.create({
-      data: { contactId: c.id, kind: "unchecked", confidence: 0, reason: "в очереди", imageHash: "r7", createdAt: minutesAgo(30) },
+      data: {
+        contactId: c.id,
+        kind: "unchecked",
+        confidence: 0,
+        reason: "в очереди",
+        imageHash: "r7",
+        createdAt: minutesAgo(30),
+      },
     });
     // Курс 50 куплен позже, другим путём (не этим чеком) - чек на 70 без даты пришёл раньше.
-    await db.purchase.create({ data: { contactId: c.id, course: "COURSE50", amount: 50, inviteLink: "https://t.me/+x", createdAt: minutesAgo(10) } });
+    await db.purchase.create({
+      data: {
+        contactId: c.id,
+        course: "COURSE50",
+        amount: 50,
+        inviteLink: "https://t.me/+x",
+        createdAt: minutesAgo(10),
+      },
+    });
     await handleReceiptVerdict(c, verdict("r7", noDateNoTxn), queued.id);
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
@@ -216,7 +275,8 @@ describe("ревью PR 72: гонка и деление суммы", () => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);
         if (e.isDirectory()) walk(p);
-        else if (/\.ts$/.test(e.name) && /amount\s*\/\s*[\w.]+\.length/i.test(fs.readFileSync(p, "utf8"))) offenders.push(p);
+        else if (/\.ts$/.test(e.name) && /amount\s*\/\s*[\w.]+\.length/i.test(fs.readFileSync(p, "utf8")))
+          offenders.push(p);
       }
     };
     walk(root);
@@ -305,9 +365,15 @@ describe("Q20 б: чек в рублях - допуск 5% от цены", () =>
   });
 
   it("«Цены и даты»: процент проверяется (0..10, целое), без поля форма валидна", () => {
-    const ok = parseOffer({ ...OFFER_DEFAULTS, payment: { toleranceDown: 6, toleranceUp: 30, toleranceForeignPct: 7 } });
+    const ok = parseOffer({
+      ...OFFER_DEFAULTS,
+      payment: { toleranceDown: 6, toleranceUp: 30, toleranceForeignPct: 7 },
+    });
     expect("offer" in ok && ok.offer.payment?.toleranceForeignPct).toBe(7);
-    const tooBig = parseOffer({ ...OFFER_DEFAULTS, payment: { toleranceDown: 6, toleranceUp: 30, toleranceForeignPct: 11 } });
+    const tooBig = parseOffer({
+      ...OFFER_DEFAULTS,
+      payment: { toleranceDown: 6, toleranceUp: 30, toleranceForeignPct: 11 },
+    });
     expect("errors" in tooBig && tooBig.errors["payment.toleranceForeignPct"]).toMatch(/недоплата/);
     const legacy = parseOffer({ ...OFFER_DEFAULTS, payment: { toleranceDown: 6, toleranceUp: 30 } });
     expect("offer" in legacy).toBe(true);

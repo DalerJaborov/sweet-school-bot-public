@@ -12,7 +12,8 @@ const sendToContact = vi.fn(async () => "mid-1");
 vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[]) => sendToContact(...a) }));
 const sendReceiptForReview = vi.fn(async () => undefined);
 vi.mock("../../src/telegram.js", () => ({
-  techChatIds: vi.fn(async () => ["owner-1"]), summaryChatIds: vi.fn(async () => ["owner-1"]),
+  techChatIds: vi.fn(async () => ["owner-1"]),
+  summaryChatIds: vi.fn(async () => ["owner-1"]),
   sendReceiptForReview: (...a: unknown[]) => sendReceiptForReview(...a),
   sendTelegramMessage: vi.fn(async () => 1),
 }));
@@ -33,13 +34,24 @@ const SETTINGS: Record<string, string> = { telegramBotToken: "t", telegramOwnerC
 const contact = fakeContact({ askedAltScreenshotAt: null, paid: true }) as Parameters<typeof handleReceiptVerdict>[0];
 
 function valid70(hash = "hash-2") {
-  return { kind: "valid" as const, confidence: 98, amount: 70, receiptAt: new Date(), recipientMatches: true, currency: "TJS", tamperingSuspected: false, reason: "чек на 70", imageHash: hash, imageUrl: "/media/r.jpg" };
+  return {
+    kind: "valid" as const,
+    confidence: 98,
+    amount: 70,
+    receiptAt: new Date(),
+    recipientMatches: true,
+    currency: "TJS",
+    tamperingSuspected: false,
+    reason: "чек на 70",
+    imageHash: hash,
+    imageUrl: "/media/r.jpg",
+  };
 }
 
 beforeEach(() => {
   db = mockPrisma();
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null
+    SETTINGS[where.key] ? { key: where.key, value: SETTINGS[where.key] } : null,
   );
   db.model("blockedReceipt").findUnique.mockResolvedValue(null);
   db.model("receiptCheck").findFirst.mockResolvedValue(null);
@@ -86,7 +98,7 @@ describe("несколько фото в одном сообщении", () => {
 describe("тот же перевод второй раз", () => {
   it("та же сумма уже открыла доступ за 48 ч — курс не выдаём, клиентке «уже приняли», владельцу на глаза", async () => {
     db.model("receiptCheck").findFirst.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      Array.isArray(where.OR) && typeof where.amount === "object" ? { createdAt: new Date() } : null
+      Array.isArray(where.OR) && typeof where.amount === "object" ? { createdAt: new Date() } : null,
     );
     await handleReceiptVerdict(contact, valid70());
     expect(grantCourses).not.toHaveBeenCalled();
@@ -101,32 +113,44 @@ describe("тот же перевод второй раз", () => {
     await handleReceiptVerdict(contact, valid70());
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
-    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }),
+    );
   });
   it.each([
     { recipientMatches: false },
-    { recipientMatches: undefined }, { amount: null }, { currency: null },
-    { tamperingSuspected: true }, { confidence: 49 },
+    { recipientMatches: undefined },
+    { amount: null },
+    { currency: null },
+    { tamperingSuspected: true },
+    { confidence: 49 },
     // давнишний чек и дата «из будущего» — мягкий признак, но за пределами окна это стоп
     { receiptAt: new Date(Date.now() - 4 * 24 * 3600000) },
     { receiptAt: new Date(Date.now() + 20 * 3600000) },
   ])("incomplete or suspicious evidence never auto-grants: %j", async (overrides) => {
     await handleReceiptVerdict(contact, { ...valid70(), ...overrides });
     expect(grantCourses).not.toHaveBeenCalled();
-    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: false, ownerDecision: "PENDING" }) }));
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ linkSent: false, ownerDecision: "PENDING" }) }),
+    );
   });
 
   // 08.11.2026: нераспознанная дата сама по себе больше не повод для проверки.
   it.each([
-    { receiptAt: null }, { receiptAt: new Date(Date.now() - 24 * 3600000) }, { receiptAt: new Date(Date.now() + 3600000) },
+    { receiptAt: null },
+    { receiptAt: new Date(Date.now() - 24 * 3600000) },
+    { receiptAt: new Date(Date.now() + 3600000) },
   ])("дата не мешает автопринятию честного чека: %j", async (overrides) => {
     // Новая клиентка: у покупавшей раньше чек без даты и номера операции идёт
     // Ширин (решение Q20, 15.11.2026; tests/unit/receiptQ20.test.ts).
-    const newcomer = fakeContact({ askedAltScreenshotAt: null, paid: false }) as Parameters<typeof handleReceiptVerdict>[0];
+    const newcomer = fakeContact({ askedAltScreenshotAt: null, paid: false }) as Parameters<
+      typeof handleReceiptVerdict
+    >[0];
     await handleReceiptVerdict(newcomer, { ...valid70(), ...overrides });
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
-    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }));
+    expect(db.model("receiptCheck").create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ linkSent: true, ownerDecision: null }) }),
+    );
   });
-
 });
