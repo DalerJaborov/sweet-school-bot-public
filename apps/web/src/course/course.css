@@ -1270,6 +1270,7 @@ button {
   font-weight: 600;
   padding: 0 8px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap; /* «Авто · 720p» не переносится на 3 строки на узком экране */
 }
 .pc-time {
   font-size: 13px;
@@ -1417,6 +1418,11 @@ button {
   border-radius: var(--r-1);
   background: var(--overlay-black-94);
   box-shadow: var(--e-2);
+}
+/* Маленький плеер на телефоне: меню не вылезает за верхний край кадра. */
+@media (max-width: 719px) {
+  .player:not(.is-fullscreen) .pc-menu { max-height: 132px; overflow-y: auto; }
+  .player:not(.is-fullscreen) .pc-menu-item { min-height: 40px; }
 }
 .pc-menu-item {
   min-height: var(--c-tap);
