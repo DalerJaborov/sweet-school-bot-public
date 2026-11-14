@@ -63,9 +63,11 @@ services:
       - whatsapp-data:/data
     expose:
       - "4200"
-    mem_limit: 1536m
-    cpus: 1.5
-    shm_size: 256m
+    # WhatsApp Web Business с тысячами чатов съедает >1.5 ГБ: при 1536m вкладка падала по OOM
+    # (dmesg: Memory cgroup out of memory → «Target crashed») и мост вечно висел в synchronizing.
+    mem_limit: 4g
+    cpus: 2
+    shm_size: 1g
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
