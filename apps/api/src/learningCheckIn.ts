@@ -1,6 +1,8 @@
 import { prisma, getSetting, logError, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
+import { everTalkedWithShirin } from "./messaging/automation.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 
 /**
  * «Зашла в группу» ещё не значит «начала учиться». Telegram не даёт «прочитано»
@@ -17,8 +19,9 @@ const DEFAULT_CHECK_IN_DAYS = 3;
 /** Meta пускает нас писать первым только 24 часа после сообщения человека. */
 const META_WINDOW_HOURS = 24;
 
-const TEXT_TG = "Дарси якум чи хел гузашт? Мушкиле надоред? 🌸";
-const TEXT_RU = "Как первый урок? Всё получилось? 🌸";
+// Без смайлика (владелец 08.11.2026: смайлик только сердечком на «спасибо»).
+const TEXT_TG = "Дарси якум чи хел гузашт? Мушкиле надоред?";
+const TEXT_RU = "Как первый урок? Всё получилось?";
 
 
 export async function runLearningCheckIns(): Promise<void> {
@@ -68,9 +71,11 @@ async function sweep(): Promise<void> {
     const windowOpen =
       lastIn != null && (Date.now() - lastIn.createdAt.getTime()) / 3_600_000 < META_WINDOW_HOURS;
     if (!windowOpen) continue; // окно Meta закрыто — писать первым нельзя
+    // Ширин хоть раз говорила с ней сама — не напоминаем никогда (владелец 09.11.2026).
+    if (await everTalkedWithShirin(contact)) continue;
 
     // Язык берём по последнему сообщению человека, как и в joinReminder.ts.
-    const tajik = /[ҳҷқғӯӣ]|шумо|апа|курс(и|ро)/i.test(lastIn?.text ?? "");
+    const tajik = (await contactLanguage(contact.id, lastIn?.text ?? "")) === "tg";
     const text = tajik ? TEXT_TG : TEXT_RU;
     try {
       const mid = await sendToContact(contact, text);

@@ -62,7 +62,7 @@ describe("priceService", () => {
     const texts = await getSalesTexts();
     const rules = buildAlwaysRules(texts);
     expect(rules).toContain("Арт-десерты — 60 сомони, 21 рецепт — 90 сомони, оба курса вместе — 130 сомони");
-    expect(rules).toContain("«900 000 000 Чаборова Фарангис (Алиф)»");
+    expect(rules).toContain("«900 000 000 Фарангис Чаборова (Алиф)»");
     const instruction = buildInstruction(await getPrices(), {
       phone: texts.paymentPhone,
       banks: texts.paymentBanks,

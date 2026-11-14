@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import type { Request, Response } from "express";
 import { env } from "../env.js";
 import { prisma, getSetting, logError, logInfo } from "../db.js";
-import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { shouldSendAlert } from "../alertGate.js";
 import type { Device, Purchase, Contact } from "@prisma/client";
 
@@ -797,19 +797,15 @@ export function samePhoneVerdict(
 }
 
 async function alertUnsurePhone(contact: Contact, device: Device): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0];
-  if (!botToken || !chatId) return;
-  if (!(await shouldSendAlert(`phone-unsure:${contact.id}`, { cooldownMs: 24 * 3_600_000 }))) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
-  await sendTelegramMessage(
-    botToken,
-    chatId,
-    `Новый вход у ${who} сверх лимита: другое устройство (${describeDevice(device.userAgent)}, ` +
+  await sendKind(
+    "security",
+    `🚫 Новый вход у ${who} сверх лимита: другое устройство (${describeDevice(device.userAgent)}, ` +
       `${device.lastCity ?? "страна неизвестна"}) в той же сети, похоже на её же телефон в другом браузере. ` +
       `Пустили отдельной записью, метку её устройства он не получил; больше таких мест не выдаётся. ` +
-      `Если это не она, заблокируйте именно эту запись в панели.`
-  ).catch((err) => logError("course:unsurePhoneAlert", err));
+      `Если это не она, заблокируйте именно эту запись в панели.`,
+    { dedupeKey: `phone-unsure:${contact.id}`, cooldownMs: 24 * 3_600_000 },
+  );
 }
 
 /**
@@ -824,19 +820,14 @@ async function maybeAlertGeoAnomaly(contact: Contact, device: Device, country: s
   if (!country || !device.lastCity || device.lastCity === country) return;
   if (Date.now() - device.lastSeenAt.getTime() > GEO_WINDOW_MS) return;
 
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatId = (await techChatIds())[0]; // личный чат владельца, иначе чат сводок (telegram.ts)
-  if (!botToken || !chatId) return;
   // Один и тот же покупатель — не чаще раза в сутки (08.11.2026).
-  if (!(await shouldSendAlert(`geo:${contact.id}`, { cooldownMs: 24 * 3_600_000 }))) return;
-
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
-  await sendTelegramMessage(
-    botToken,
-    chatId,
-    `👀 Курс ${who} открыли из ${device.lastCity} и ${country} почти одновременно.\n` +
+  await sendKind(
+    "security",
+    `🚫 Курс ${who} открыли из ${device.lastCity} и ${country} почти одновременно.\n` +
       `Похоже, ссылку передали. Отобрать доступ можно в панели, раздел «Клиенты».`,
-  ).catch((err) => logError("course:geoAlert", err));
+    { dedupeKey: `geo:${contact.id}`, cooldownMs: 24 * 3_600_000 },
+  );
 }
 
 /**

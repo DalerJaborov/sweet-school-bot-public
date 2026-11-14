@@ -174,8 +174,9 @@ describe("Статичные страницы сайта", () => {
     expect(art).not.toMatch(/макарон|Три шоколада|Бот проверяет чек|чек в чат на сайте/i);
     expect(files.get("tg/art-desserty.html")).toContain("10 дарс");
     for (const [, body] of html) {
-      // Адрес сменился 08.11.2026: «Рудаки 156а» и «дом Додо Пицца» больше нигде не звучат.
-      expect(body).not.toMatch(/14:00|17:00|156а|Додо|Dodo|Водонасос|Пример отзыва|Мадина|Нигора|Фарзона/);
+      // Адрес (владелец 08.11.2026, подтверждено вечером: «рудаки 177»): «Рудаки 177, назди Воданасос» (11.11.2026 — одно написание на обоих языках);
+      // старые «156а», «156 / Додо Пицца» и «Водонасос» больше нигде не звучат.
+      expect(body).not.toMatch(/14:00|17:00|156а|Водонасос|Рудаки 156|Додо|Пример отзыва|Мадина|Нигора|Фарзона/);
     }
     expect(files.get("kursy-konditera-dushanbe.html")).toContain("13:40–16:30");
     expect(files.get("ru/index.html")).toContain("Клубника в шоколаде");
@@ -208,13 +209,13 @@ describe("Факты очного курса — из панели через SS
     for (const [file, body] of raw) expect(body, file).not.toMatch(/\{\{\s*offline/);
   });
 
-  it("цена, часы и 21 десерт — в title, тексте и карточке очного курса", () => {
+  it("цена, часы и 22 десерта (владелец 11.11.2026) — в title, тексте и карточке очного курса", () => {
     const body = files.get("kursy-konditera-dushanbe.html")!;
     expect(body).toMatch(/<title>[\s\S]*?offer-fact\?key=offline\.price[\s\S]*?<\/title>/);
     const plain = resolveSsiFallback(body);
     expect(plain).toMatch(/<title>[^<]*700 сомони/);
     expect(plain).toContain("с 13:40 до 16:30");
-    expect(plain).toContain("Программа: 21 десерт за 8 дней");
+    expect(plain).toContain("Программа: 22 десерта за 8 дней");
     expect(resolveSsiFallback(files.get("tg/kursy-konditera-dushanbe.html")!)).toMatch(
       /name="description" content="[^"]*700 сомонӣ/,
     );
@@ -222,7 +223,7 @@ describe("Факты очного курса — из панели через SS
 });
 
 describe("Адрес очного курса — одно поле панели (08.11.2026)", () => {
-  it("подвал, ссылка на карту и JSON-LD каждой страницы — из /_site/offer-fact, с запасным «Воданасос, Рудаки 177»", () => {
+  it("подвал, ссылка на карту и JSON-LD каждой страницы — из /_site/offer-fact, с запасным «Рудаки 177, назди Воданасос»", () => {
     for (const [file, body] of raw) {
       const lang = file === "site.html" || file.startsWith("tg/") ? "tg" : "ru";
       expect(body, file).toContain(`offer-fact?key=contact.address&lang=${lang}`);
@@ -230,14 +231,14 @@ describe("Адрес очного курса — одно поле панели 
       expect(body, file).toContain("offer-fact?key=contact.mapsQuery");
       const plain = resolveSsiFallback(body);
       expect(plain, file).toContain(
-        lang === "tg" ? "Душанбе, назди Воданасос, кӯчаи Рӯдакӣ 177" : "Душанбе, ориентир Воданасос, Рудаки 177",
+        "Душанбе, Рудаки 177, назди Воданасос",
       );
       expect(plain, file).toContain(
-        `https://maps.google.com/?q=${encodeURIComponent("Душанбе, ориентир Воданасос, Рудаки 177")}`,
+        `https://maps.google.com/?q=${encodeURIComponent("Душанбе, Рудаки 177, назди Воданасос")}`,
       );
       const ld = plain.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)![1];
       expect(JSON.stringify(JSON.parse(ld))).toMatch(
-        /"streetAddress":"(ориентир Воданасос, Рудаки 177|назди Воданасос, кӯчаи Рӯдакӣ 177)"/,
+        /"streetAddress":"Рудаки 177, (ориентир|назди) Воданасос"/,
       );
     }
   });

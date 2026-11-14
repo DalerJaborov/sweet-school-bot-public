@@ -4,6 +4,7 @@ import { getSetting, prisma, logWarn } from "./db.js";
 import { stripRepeatGreeting } from "./greeting.js";
 import { toOwnerVoice } from "./voice.js";
 import { assertMessagingAllowed } from "./messaging/automation.js";
+import { instagramViaPage, reportDeadMetaToken } from "./metaTokenAlarm.js";
 
 const GRAPH_VERSION = "v23.0";
 const TIMEOUT_MS = 15_000;
@@ -69,8 +70,12 @@ async function callGraph(
   channel: MetaChannel = "INSTAGRAM",
   timeoutMs: number = TIMEOUT_MS
 ): Promise<Record<string, unknown>> {
+  // Instagram через Страницу (igSendVia=page): тот же /me/messages, но на
+  // graph.facebook.com и ключом Страницы от системного пользователя — он не
+  // зависит от пароля и не истекает (см. metaTokenAlarm.ts, docs/meta-tokens.md).
+  const viaPage = channel === "MESSENGER" || (await instagramViaPage());
   const { url, headers } =
-    channel === "MESSENGER"
+    viaPage
       ? {
           url: `${FB_GRAPH_ORIGIN}${path}?access_token=${encodeURIComponent(await fbPageToken())}`,
           headers: {} as Record<string, string>,
@@ -98,7 +103,14 @@ async function callGraph(
       return {};
     }
   } catch (error) {
-    if (error instanceof MetaDeliveryError) throw error;
+    if (error instanceof MetaDeliveryError) {
+      // Meta отвергла сам ключ (401 / код 190) — владелец узнаёт сразу, а не через
+      // 6–12 часов плановой проверки (metaTokenAlarm.ts).
+      if (error.kind === "TOKEN") {
+        void reportDeadMetaToken(viaPage ? "fbPageToken" : "igToken").catch((err) => logWarn("metaToken", String(err)));
+      }
+      throw error;
+    }
     // No response does not mean no delivery. Never blindly replay this request.
     throw new MetaDeliveryError("AMBIGUOUS", 0);
   } finally {
@@ -243,7 +255,7 @@ export async function deleteComment(commentId: string, channel: MetaChannel = "I
   let url: string;
   let headers: Record<string, string> = {};
 
-  if (channel === "MESSENGER") {
+  if (channel === "MESSENGER" || (await instagramViaPage())) {
     url = `${FB_GRAPH_ORIGIN}${path}?access_token=${encodeURIComponent(await fbPageToken())}`;
   } else {
     const token = await igToken();
@@ -274,6 +286,8 @@ export async function mediaPermalink(mediaId: string, channel: MetaChannel = "IN
 
   if (channel === "MESSENGER") {
     url = `${FB_GRAPH_ORIGIN}${path}?fields=permalink_url&access_token=${encodeURIComponent(await fbPageToken())}`;
+  } else if (await instagramViaPage()) {
+    url = `${FB_GRAPH_ORIGIN}${path}?fields=permalink&access_token=${encodeURIComponent(await fbPageToken())}`;
   } else {
     const token = await igToken();
     url = env.igProxyBase

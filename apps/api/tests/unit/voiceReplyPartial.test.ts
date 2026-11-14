@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 const record = vi.fn(async () => {});
 const send = vi.fn();
 vi.mock("../../src/db.js", () => ({
-  prisma: { message: { findFirst: vi.fn(async () => null) } },
+  prisma: { message: { findFirst: vi.fn(async () => null), findMany: vi.fn(async () => []) } },
   getSetting: vi.fn(async () => "true"),
   logError: vi.fn(),
   recordOutgoingMessage: (...a: unknown[]) => record(...a),

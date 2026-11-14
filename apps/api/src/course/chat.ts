@@ -3,7 +3,7 @@ import { isBudgetExceeded, recordAiCall } from "../ai/dailyBudget.js";
 import { sendTelegramMessage } from "../telegram.js";
 import { findQaAnswer } from "../ai/qaGroupReply.js";
 import { answerFromRecipes } from "./assistant.js";
-import { detectClientLanguage } from "../ai/clientLanguage.js";
+import { contactLanguage } from "../ai/contactLanguage.js";
 import type { CourseChatMessage, Purchase } from "@prisma/client";
 import { isBotFrozen } from "../messaging/automation.js";
 
@@ -109,7 +109,7 @@ async function autoAnswer(purchase: Purchase, text: string, lessonId: string | n
   // ответа нет, — тогда ниже позовём Ширин.
   if (!purchase.courseId) return null;
   try {
-    const answer = await answerFromRecipes(purchase.courseId, text, detectClientLanguage(text), lessonId);
+    const answer = await answerFromRecipes(purchase.courseId, text, await contactLanguage(purchase.contactId, text), lessonId);
     await recordAiCall(purchase.contactId);
     return answer.text;
   } catch (err) {
@@ -205,7 +205,7 @@ export async function draftFromPanel(questionId: string): Promise<PanelDraft> {
   if (await isBudgetExceeded(question.purchase.contactId)) return { draft: null, reason: "budget" };
 
   const text = question.text;
-  const answer = await answerFromRecipes(question.purchase.courseId, text, detectClientLanguage(text), question.lessonId);
+  const answer = await answerFromRecipes(question.purchase.courseId, text, await contactLanguage(question.purchase.contactId, text), question.lessonId);
   if (answer.text === null) return { draft: null, reason: answer.reason };
   await recordAiCall(question.purchase.contactId);
   const source = question.lesson

@@ -65,6 +65,7 @@ const FIELDS = defineFields([
   { key: "igToken", label: "Маркер доступа Instagram", secret: true, hint: "Получим при подключении аккаунта Ширин" },
   { key: "verifyToken", label: "Проверочное слово вебхука", hint: "Любая строка — её же вбиваем в настройках приложения Meta" },
   { key: "appSecret", label: "Секрет приложения Meta", secret: true, hint: "Нужен для проверки подлинности вебхуков. Возьмите App Secret из настроек подключённого приложения Meta" },
+  { key: "fbAppSecret", label: "Секрет приложения Meta №2 (Messenger / страница)", secret: true, hint: "Второй секрет: события со страницы Facebook подписывает приложение Messenger, у него свой App Secret (Meta → Приложение → Настройки → Основное). Без него такие сообщения отклоняются." },
   { key: "geminiKey", label: "Ключ Gemini", secret: true, hint: "Для ИИ-консультанта" },
   {
     key: "geminiKeysExtra",
@@ -93,6 +94,16 @@ const FIELDS = defineFields([
     hint: "Чтобы бот отвечал и в Messenger страницы Ширин. Пусто — работает только Instagram",
   },
   { key: "fbPageId", label: "ID страницы Facebook", hint: "Нужен для проверки, что вебхук пришёл от нашей страницы" },
+  {
+    key: "igSendVia",
+    label: "Как бот отвечает в Instagram",
+    hint: "«Через Страницу» — ключом Страницы от системного пользователя shirin-bot: не истекает и не ломается при смене пароля. Включайте, когда в поле выше вставлен такой ключ с правом instagram_manage_messages, и проверьте одним сообщением в директ",
+    kind: "radio",
+    options: [
+      { value: "instagram", label: "Через ключ Instagram (как раньше)" },
+      { value: "page", label: "Через Страницу Facebook (вечный ключ)" },
+    ],
+  },
   {
     key: "telegramBotToken",
     label: "Токен Telegram-бота",

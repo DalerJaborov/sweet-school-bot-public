@@ -1,10 +1,12 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { aiReply, rescueImage, type RescuedImage } from "../ai.js";
+import { aiReply, rescueImage, verifyReceiptsNow, type RescuedImage } from "../ai.js";
+import { whatsappReceiptsOnly } from "../messaging/automation.js";
 import { bridgeRequest, bridgeEventSchema, whatsappConfigured, whatsappMessageId, type BridgeEvent, type ContactStatus } from "./client.js";
 import { withWhatsAppTurn } from "./context.js";
 import type { Attachment } from "../ai/media.js";
 import { saveOwnerMedia } from "../upload.js";
 import { attentionError, classifyAttention } from "./attention.js";
+import { rememberOwnerReply } from "../ai/styleLearning.js";
 import { recordAdReferral } from "../metaConversions.js";
 
 let ingesting = false;
@@ -35,6 +37,10 @@ export async function ingestWhatsAppEvents(): Promise<void> {
           humanTakenOverAt: new Date(e.timestamp), humanTakeoverMid: whatsappMessageId(e.accountId, e.messageId),
         } });
       });
+      if (e.type === "human" && e.text.trim() && !contact.personal && !contact.whatsappSavedContact && !contact.spamBlockedAt) {
+        // Не ждём: проверка идёт через паузу (см. learnFromOwner), а приём событий стоять не должен.
+        scheduleLearnFromOwner(contact.id, whatsappMessageId(e.accountId, e.messageId), e.text, new Date(e.timestamp));
+      }
       if (e.type === "incoming" && e.ad) {
         await recordAdReferral(contact.id, { adId: e.ad.sourceId, ctwaClid: e.ad.ctwaClid, source: e.ad.sourceType ?? "whatsapp_ad" })
           .catch((err) => logError("whatsapp:adReferral", err));
@@ -42,6 +48,45 @@ export async function ingestWhatsAppEvents(): Promise<void> {
       await bridgeRequest(`/events/${encodeURIComponent(e.id)}/ack`, {});
     }
   } finally { ingesting = false; }
+}
+
+/** Пауза перед проверкой «это правда Ширин»: событие моста может прийти раньше, чем
+ *  бот запишет mid своего же сообщения (recordOutgoingMessage снимет ложную пометку
+ *  byHuman). Тот же приём, что в Instagram (webhook.ts::handleEcho, 20 секунд). */
+export const OWNER_LEARN_DELAY_MS = 20_000;
+/** Вопрос клиента старше суток — уже не тот разговор: в пару его не берём. */
+const OWNER_LEARN_WINDOW_MS = 24 * 3_600_000;
+
+function scheduleLearnFromOwner(contactId: string, mid: string, ownerText: string, ownerAt: Date): void {
+  setTimeout(() => void learnFromOwner(contactId, mid, ownerText, ownerAt), OWNER_LEARN_DELAY_MS);
+}
+
+/**
+ * ЖИВОЕ ОБУЧЕНИЕ НА WHATSAPP. Ширин ответила сама со своего телефона — её фраза
+ * становится образцом манеры (ai/styleLearning.ts), как в Instagram (webhook.ts).
+ * До 08.11.2026 WhatsApp-ответы хозяйки в образцы не попадали вовсе, и бот учился
+ * только на старой переписке Instagram. Строка должна остаться «человеческой»:
+ * если это эхо ответа самого бота (строка уже записана как его), не учимся.
+ */
+async function learnFromOwner(contactId: string, mid: string, ownerText: string, ownerAt: Date): Promise<void> {
+  try {
+    const row = await prisma.message.findUnique({ where: { mid }, select: { byHuman: true } });
+    if (!row?.byHuman) return;
+    const lastIn = await prisma.message.findFirst({
+      where: {
+        contactId, direction: "IN", text: { not: null }, payload: null,
+        createdAt: { lte: ownerAt, gte: new Date(ownerAt.getTime() - OWNER_LEARN_WINDOW_MS) },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { text: true },
+    });
+    // Чат, где пишет только Ширин (родным, знакомым — её личный номер), — не
+    // разговор с клиентом: такие фразы в образцы манеры не берём.
+    if (!lastIn?.text) return;
+    await rememberOwnerReply(lastIn.text, ownerText, "TAKEOVER", undefined, contactId);
+  } catch (err) {
+    logError("whatsapp:learnFromOwner", err);
+  }
 }
 
 export async function processInbox(id: string): Promise<void> {
@@ -74,6 +119,13 @@ export async function processInbox(id: string): Promise<void> {
   if (check.takenOver && !contact.humanTakenOverAt) {
     await prisma.contact.update({ where: { id: contact.id }, data: { humanTakenOverAt: new Date() } });
   }
+  // «Только чеки»: всё, кроме картинки, просто записано в историю — без ответа и без
+  // задачи «нужен ответ» (Ширин видит переписку у себя в телефоне).
+  const receiptsOnly = await whatsappReceiptsOnly();
+  if (receiptsOnly && !event.media?.mimeType.startsWith("image/")) {
+    await prisma.whatsAppInbox.updateMany({ where: { id, status: "processing" }, data: { status: "done", payload: JSON.stringify({ ...payload, media: undefined }) } });
+    return;
+  }
   if (event.mediaUnavailable) throw attentionError("media_unavailable", `Вложение WhatsApp недоступно: ${event.mediaUnavailable}; нужен ответ хозяйки`);
   if (!event.text.trim() && !event.media) throw attentionError("empty", "Пустое сообщение WhatsApp не передаётся ИИ");
   await withWhatsAppTurn({ inboxId: id, contactId: contact.id, accountId: row.accountId, chatId: row.chatId, messageId: event.messageId }, async () => {
@@ -94,7 +146,14 @@ export async function processInbox(id: string): Promise<void> {
     // Owner takeover suppresses ordinary conversation but image intake remains
     // durable: the existing verified receipt worker can deliver paid access.
     const fresh = await prisma.contact.findUnique({ where: { id: contact.id } });
-    if (!fresh || fresh.humanTakenOverAt || check.takenOver) return;
+    if (!fresh) return;
+    // Бот молчит (рубильник «только чеки» или Ширин ведёт чат сама), но чек
+    // разбирается сразу: настоящий — ссылка уходит сама, сомнительный — карточка
+    // владельцу. Не вышло — картинка уже в очереди фоновой перепроверки.
+    if (receiptsOnly || fresh.humanTakenOverAt || check.takenOver) {
+      if (images.length) await verifyReceiptsNow(fresh, images);
+      return;
+    }
     if (event.media && !event.media.mimeType.startsWith("image/")) {
       if (!event.media.mimeType.startsWith("audio/")) throw attentionError("attachment", "Вложение требует ответа хозяйки");
       const buffer = Buffer.from(event.media.data, "base64");

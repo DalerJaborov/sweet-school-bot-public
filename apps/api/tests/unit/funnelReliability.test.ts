@@ -31,7 +31,8 @@ describe("funnel reliability", () => {
     vi.mocked(sendToContact).mockRejectedValueOnce(new Error("network unavailable"));
     await handleQuickReply(contact, "step:funnel-1:2");
     expect(db.model("delivery").updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ nextOrder: 2, nextRunAt: expect.any(Date) }) }));
-    expect(db.model("delivery").update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ state: "ACTIVE", failCount: 1, nextRunAt: expect.any(Date) }) }));
+    // Условная запись (ревью 11.11.2026): отменённую за время отправки цепочку повтор не воскрешает.
+    expect(db.model("delivery").updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "delivery", state: "ACTIVE" }, data: expect.objectContaining({ state: "ACTIVE", failCount: 1, nextRunAt: expect.any(Date) }) }));
   });
   it("sends a clear response to an old completed button", async () => {
     db.model("delivery").findUnique.mockResolvedValue({ id: "delivery", state: "DONE", contact });
@@ -42,7 +43,7 @@ describe("funnel reliability", () => {
   it("does not retry a closed messaging window", async () => {
     vi.mocked(sendToContact).mockRejectedValueOnce(new MetaDeliveryError("WINDOW", 400));
     await handleQuickReply(contact, "step:funnel-1:2");
-    expect(db.model("delivery").update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ state: "FAILED", nextRunAt: null }) }));
+    expect(db.model("delivery").updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ state: "ACTIVE" }), data: expect.objectContaining({ state: "FAILED", nextRunAt: null }) }));
     expect(notifyFunnelGaveUp).toHaveBeenCalled();
   });
   it("does not mark a failed comment as seen and processes the redelivery", async () => {

@@ -53,6 +53,23 @@ afterEach(() => {
  * записать ученице выдуманный «ответ учительницы», а при включённом автоответе
  * разослать выдумку дальше.
  */
+describe("Вебхук Telegram: chat_member с неверным секретом", () => {
+  it("не доходит до обработчика входа, но пишется в ЖУРНАЛ ошибок (источник telegram:webhook), а не только в консоль", async () => {
+    settings.telegramWebhookSecret = "right-secret";
+    db.model("errorLog").findFirst.mockResolvedValue(null);
+    db.model("errorLog").create.mockResolvedValue({});
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await handleTelegramUpdate({ chat_member: { chat: { id: -100500 } } }, "wrong");
+    expect(handleChatMember).not.toHaveBeenCalled();
+    expect(err.mock.calls.some((c) => String(c[0]).startsWith("[telegram:webhook]"))).toBe(true);
+    await vi.waitFor(() =>
+      expect(db.model("errorLog").create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ source: "telegram:webhook" }) }),
+      ),
+    );
+  });
+});
+
 describe("Вебхук Telegram: чужой чат дальше не пускаем", () => {
   it("ГЛАВНОЕ: поддельное сообщение из постороннего чата не доходит ни до кого", async () => {
     await handleTelegramUpdate(forged(999), undefined);

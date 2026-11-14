@@ -101,8 +101,8 @@ async function fetchStories(): Promise<OwnMedia[] | null> {
   return fetchEdge(`/${GRAPH_VERSION}/me/stories`, "ownMedia:stories", false);
 }
 
-async function feed(): Promise<OwnMedia[] | null> {
-  if (cache && Date.now() - cache.at < FEED_MAX_AGE_MS) return cache.items;
+async function feed(force = false): Promise<OwnMedia[] | null> {
+  if (!force && cache && Date.now() - cache.at < FEED_MAX_AGE_MS) return cache.items;
   const [posts, stories] = await Promise.all([fetchFeed(), fetchStories()]);
   // Свежую ленту не получили — отдаём прошлую, если она есть: устаревшая лента
   // лучше, чем «не узнал свой же ролик» из-за секундного сбоя сети.
@@ -112,11 +112,10 @@ async function feed(): Promise<OwnMedia[] | null> {
   return items;
 }
 
-/** Наша ли это публикация — ищем по короткому коду из ссылки или по её id. */
-export async function findOwnMedia(input: { url?: string | null; mediaId?: string | null }): Promise<OwnMedia | null> {
-  const items = await feed();
-  if (!items) return null;
+/** Не нашли в ленте, которой больше полуминуты, — один раз берём свежую. */
+const STALE_MISS_REFETCH_MS = 30_000;
 
+function matchIn(items: OwnMedia[], input: { url?: string | null; mediaId?: string | null }): OwnMedia | null {
   if (input.mediaId) {
     const byId = items.find((m) => m.id === input.mediaId);
     if (byId) return byId;
@@ -124,6 +123,22 @@ export async function findOwnMedia(input: { url?: string | null; mediaId?: strin
   const code = instagramShortcode(input.url);
   if (!code) return null;
   return items.find((m) => instagramShortcode(m.permalink) === code) ?? null;
+}
+
+/** Наша ли это публикация — ищем по короткому коду из ссылки или по её id.
+ *
+ *  СВЕЖАЯ ПУБЛИКАЦИЯ (разбор 09.11.2026): лента живёт в памяти три минуты, и
+ *  рилс или история, выложенные минуту назад, в ней ещё нет — первые же ответы
+ *  на них бот принимал за «чужой ролик». Промах по старой ленте теперь
+ *  перепроверяется один раз по свежей. */
+export async function findOwnMedia(input: { url?: string | null; mediaId?: string | null }): Promise<OwnMedia | null> {
+  const items = await feed();
+  if (!items) return null;
+  const hit = matchIn(items, input);
+  if (hit) return hit;
+  if (!cache || Date.now() - cache.at < STALE_MISS_REFETCH_MS) return null;
+  const fresh = await feed(true);
+  return fresh ? matchIn(fresh, input) : null;
 }
 
 /**

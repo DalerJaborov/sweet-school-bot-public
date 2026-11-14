@@ -31,11 +31,25 @@ describe("sendToContact — маршрутизация по каналу", () =>
   });
   afterEach(restorePrisma);
 
-  it("INSTAGRAM — тот же sendText, с теми же аргументами, базу не трогает", async () => {
+  it("INSTAGRAM — тот же sendText, с теми же аргументами; в историю — то, что ушло", async () => {
     const contact = fakeContact() as Recipient;
     const mid = await sendToContact(contact, "Привет", [{ title: "Да", payload: "YES" }]);
     expect(mid).toBe("mid-meta");
     expect(sendText).toHaveBeenCalledWith("ig-1", "Привет", [{ title: "Да", payload: "YES" }], "INSTAGRAM");
+    expect(db.model("message").create).toHaveBeenCalledWith({ data: { contactId: contact.id, direction: "OUT", text: "Привет", mid: "mid-meta" } });
+  });
+
+  it("история = отправленному: тире и особые буквы в записи те же, что ушли клиенту", async () => {
+    const contact = fakeContact() as Recipient;
+    await sendToContact(contact, "Курс — 70 сомони, ҳамин ҷо");
+    expect(sendText).toHaveBeenCalledWith("ig-1", "Курс, 70 сомони, хамин чо", [], "INSTAGRAM");
+    expect(db.model("message").create).toHaveBeenCalledWith({ data: { contactId: contact.id, direction: "OUT", text: "Курс, 70 сомони, хамин чо", mid: "mid-meta" } });
+  });
+
+  it("после фильтра пусто (одно «Апачон!») — не шлём и не пишем", async () => {
+    const contact = fakeContact() as Recipient;
+    expect(await sendToContact(contact, "Апачон!")).toBeNull();
+    expect(sendText).not.toHaveBeenCalled();
     expect(db.model("message").create).not.toHaveBeenCalled();
   });
 

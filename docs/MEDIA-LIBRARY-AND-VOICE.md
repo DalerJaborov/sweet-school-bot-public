@@ -32,7 +32,10 @@ Voice only for a short warm single-part reply on WhatsApp (<=160 chars, <=240 af
 3. Delete cached synthesis on the server: files `tts-*.ogg` / `tts-*.mp3` in `/data/uploads`, and library rows with `audio` that came from synthesis (panel "Медиа на повтор" -> delete).
 4. Delete her original sample files wherever they were kept (not in git).
 
-Revocation also: purge the /media cache at the CDN (files are served `immutable` for a year) and delete approved library audio rows (the reuse path does not check `voiceCloneEnabled`).
+Revocation also: purge the /media cache at the CDN (files are served `immutable` for a year) and delete approved library audio rows (the reuse path does not check `voiceCloneEnabled`: approved synthesised audio still goes out while `voiceReplyEnabled=true`).
+
+## Голос из библиотеки — тоже голосовой ответ (10.11.2026)
+Раньше путь повторного использования архива (`ai/mediaReuse.ts`) рубильник НЕ проверял: панель обещала «бот не отвечает голосом», а одобренное живое аудио Ширин всё равно уходило клиенту. Теперь `voiceReplyEnabled=false` (или строки нет) означает «голоса нет вообще» для всех автоответов — правило в `apps/api/src/ai/voiceSwitch.ts`: синтез, аудио-примеры из библиотеки (в поиск не попадают; подпись без аудио тоже не шлём, вопрос уходит модели: `sendReusedMedia` → false) и голосовое Ширин в автоответе учебной группы (`qaGroup.ts`). Тумблер «Бот отправляет голосовые» в «Медиа на повтор» виден и без ElevenLabs. `voiceCloneEnabled=false` по-прежнему глушит только синтез. Регрессия и сторож: `voiceOffNoLibraryAudio.test.ts`, `qaGroupVoiceOff.test.ts`.
 
 ## Chunked, humanised voice (08.11.2026)
 - A voice reply is split on sentence boundaries into chunks of <= 150 chars (~9 s each), max 4 chunks (more -> text; in practice 2-3 because the voice rule caps text at 160/240 chars). Chunks are synthesised in parallel, each cached by its own hash, then sent one by one; the bridge keeps its 4-9 s anti-ban gap and shows "recording audio".

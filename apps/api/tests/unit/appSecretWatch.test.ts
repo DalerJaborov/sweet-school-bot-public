@@ -9,6 +9,7 @@ const owners = vi.fn(async () => ["owner-1"]);
 const send = vi.fn(async () => 1);
 vi.mock("../../src/telegram.js", () => ({
   techChatIds: () => owners(),
+  chatsForKind: () => owners(),
   sendTelegramMessage: (...a: unknown[]) => send(...a),
 }));
 

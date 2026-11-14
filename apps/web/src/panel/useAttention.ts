@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type QueueItem, type Today } from "../api";
+import { api, type MainSummary, type QueueItem, type Today } from "../api";
 
 /** Клиент, который ждёт живого ответа (GET /admin/v1/waiting, apps/api/src/waiting.ts). */
 export type WaitingClient = {
@@ -21,6 +21,8 @@ export type Attention = {
   /** Первые в очереди — для подписи под числом («первый: @madina, 70 с.»). */
   queue: QueueItem[];
   problems: string[];
+  /** Деньги, оплаты, записи на офлайн и состояние бота — верх экрана «Сегодня». */
+  main?: MainSummary;
 };
 
 /**
@@ -67,6 +69,7 @@ export function useAttention(
           waiting: waiting ? waiting.clients : (prev?.waiting ?? []),
           queue: today.queue,
           problems: today.system.problems,
+          main: today.main,
         }));
       })
       .catch((e: unknown) => {

@@ -1,5 +1,5 @@
 import { formatCourseDate, upcomingOfflineStartDate } from "./ai/courseDate.js";
-import { hoursValue, parseHours } from "./ai/offlineFacts.js";
+import { hoursValue, offlineAddress, parseHours } from "./ai/offlineFacts.js";
 import { getOfflineFacts } from "./services/salesTextsService.js";
 import { detectClientLanguage } from "./ai/clientLanguage.js";
 
@@ -14,11 +14,18 @@ import { detectClientLanguage } from "./ai/clientLanguage.js";
  * и карточки бота (раздел «Цены и даты»): дата — только будущая, иначе
  * «дата следующего набора уточняется». Перенесли курс — воронка обновилась сама.
  *
+ * С 11.11.2026 ещё `{адрес}` и `{десерты}`: адрес и число видов десертов в
+ * шаге воронки тоже были вписаны текстом («Рудаки 156, доми Додо Пицца», «20
+ * намуд»), и бот говорил одно, а воронка другое. Теперь шаг берёт их из того же
+ * места, что карточка бота и сайт (getOfflineFacts).
+ *
  * Язык даты («20 ноябр» / «20 ноября») определяется по самому тексту шага.
  * Тексты без подстановок возвращаются как есть, без обращений к базе.
  */
 const DATE_TOKEN = /\{\s*(дата|date)\s*\}/giu;
 const TIME_TOKEN = /\{\s*(время|time)\s*\}/giu;
+const ADDRESS_TOKEN = /\{\s*(адрес|address)\s*\}/giu;
+const DESSERTS_TOKEN = /\{\s*(десерты|desserts)\s*\}/giu;
 
 export const FUNNEL_DATE_TBD = { ru: "(дата уточняется)", tg: "(сана ҳоло аниқ нест)" } as const;
 
@@ -27,7 +34,11 @@ export async function renderFunnelText(text: string): Promise<string> {
   DATE_TOKEN.lastIndex = 0;
   const needsTime = TIME_TOKEN.test(text);
   TIME_TOKEN.lastIndex = 0;
-  if (!needsDate && !needsTime) return text;
+  const needsAddress = ADDRESS_TOKEN.test(text);
+  ADDRESS_TOKEN.lastIndex = 0;
+  const needsDesserts = DESSERTS_TOKEN.test(text);
+  DESSERTS_TOKEN.lastIndex = 0;
+  if (!needsDate && !needsTime && !needsAddress && !needsDesserts) return text;
 
   let out = text;
   if (needsDate) {
@@ -44,6 +55,12 @@ export async function renderFunnelText(text: string): Promise<string> {
     const facts = await getOfflineFacts();
     const range = parseHours(facts.hours);
     out = out.replace(TIME_TOKEN, range ? hoursValue(range) : facts.hours.trim() || "время уточняется");
+  }
+  if (needsAddress || needsDesserts) {
+    const facts = await getOfflineFacts();
+    const lang = detectClientLanguage(text) === "tg" ? "tg" : "ru";
+    if (needsAddress) out = out.replace(ADDRESS_TOKEN, offlineAddress(facts, lang));
+    if (needsDesserts) out = out.replace(DESSERTS_TOKEN, String(facts.desserts));
   }
   return out;
 }

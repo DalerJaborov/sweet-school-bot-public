@@ -37,7 +37,8 @@ describe("Карточка очного курса — раз в НАБОР, а 
   it("не слали — шлём", async () => {
     const sent = await maybeSendOfflineCard(fakeContact({ offlineInfoSentAt: null }), "хочу записаться");
     expect(sent).toBe(true);
-    expect(sendText).toHaveBeenCalledTimes(1);
+    // Карточка — три коротких сообщения, а не одна простыня (владелец 08.11.2026).
+    expect(sendText).toHaveBeenCalledTimes(3);
   });
 
   it("слали в этом наборе — повторно не шлём", async () => {

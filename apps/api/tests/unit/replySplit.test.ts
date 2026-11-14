@@ -7,13 +7,23 @@ describe("ответ несколькими короткими сообщени�
   it("короткий ответ остаётся одним сообщением", () => {
     expect(splitHumanLike("Хорошо, ждём вас", ON)).toEqual(["Хорошо, ждём вас"]);
   });
-  it("длинный текст режется по предложениям, слова не рвутся", () => {
+  it("ответ до 280 знаков не делится вовсе — как короткая реплика человека", () => {
     const text =
-      "У нас два онлайн курса. Первый — 21 рецепт, там базовые десерты и кремы. Второй — арт-десерты, девять современных десертов. " +
-      "Оба курса идут в записи, смотреть можно в любое время. Сертификат выдаётся в конце обучения.";
+      "У нас два онлайн курса. Первый 21 рецепт, там базовые десерты и кремы. Второй арт-десерты, девять современных десертов. " +
+      "Оба курса идут в записи, смотреть можно в любое время.";
+    expect(text.length).toBeLessThanOrEqual(280);
+    expect(splitHumanLike(text, ON)).toEqual([text]);
+  });
+  it("длинный текст делится по предложению ближе к середине, а не каждые 130 знаков", () => {
+    const text =
+      "У нас два онлайн курса. Первый 21 рецепт, там базовые десерты и кремы, бисквиты и муссы. Второй арт-десерты, девять современных десертов. " +
+      "Оба курса идут в записи, смотреть можно в любое время, с телефона. Сертификат приходит сам, когда все уроки просмотрены. " +
+      "Уроки на таджикском языке, рецепты можно скачать.";
+    expect(text.length).toBeGreaterThan(280);
     const parts = splitHumanLike(text, ON);
-    expect(parts.length).toBeGreaterThanOrEqual(2);
-    expect(parts.length).toBeLessThanOrEqual(4);
+    expect(parts).toHaveLength(2);
+    const [a, b] = parts.map((p) => p.length);
+    expect(Math.abs(a - b)).toBeLessThan(text.length / 3);
     expect(parts.join(" ").replace(/\s+/g, " ")).toBe(text.replace(/\s+/g, " "));
     for (const p of parts) expect(p).toMatch(/[.!?…]$/);
   });
@@ -39,7 +49,9 @@ describe("ответ несколькими короткими сообщени�
   });
   it("настройки: WhatsApp не больше двух частей, рубильник по каналам", () => {
     expect(splitOptionsFor("WHATSAPP", { maxParts: "6" })).toEqual({ enabled: true, maxParts: 2 });
-    expect(splitOptionsFor("INSTAGRAM", {})).toEqual({ enabled: true, maxParts: 4 });
+    // Как человек: по умолчанию не больше двух сообщений на всех каналах (08.11.2026).
+    expect(splitOptionsFor("INSTAGRAM", {})).toEqual({ enabled: true, maxParts: 2 });
+    expect(splitOptionsFor("INSTAGRAM", { maxParts: "4" })).toEqual({ enabled: true, maxParts: 4 });
     expect(splitOptionsFor("WEB", { web: "false" }).enabled).toBe(false);
     expect(splitOptionsFor("INSTAGRAM", { web: "false" }).enabled).toBe(true);
   });

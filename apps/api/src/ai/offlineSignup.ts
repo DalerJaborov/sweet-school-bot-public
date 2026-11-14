@@ -1,5 +1,5 @@
 import { prisma, getSetting, logError } from "../db.js";
-import { techChatIds, sendTelegramMessage } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { courseDateLabel } from "./courseDate.js";
 
 /**
@@ -89,10 +89,6 @@ export async function registerOfflineSignup(
 }
 
 async function notifySister(signupId: string, name: string, phone: string, username: string | null): Promise<void> {
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const chatIds = await techChatIds();
-  if (!botToken || chatIds.length === 0) return;
-
   const who = username ? `@${username}` : "";
   // Дату берём из настройки, а не зашиваем в код: набор меняется каждый месяц,
   // и зашитая строка уже разъехалась с действительностью — сестре приходили
@@ -106,8 +102,9 @@ async function notifySister(signupId: string, name: string, phone: string, usern
     `\nПросит записать. Предоплаты нет — позвонить за день до курса.`;
 
   try {
-    for (const chatId of chatIds) await sendTelegramMessage(botToken, chatId, text);
-    await prisma.offlineSignup.update({ where: { id: signupId }, data: { notified: true } });
+    // «Главное»: владельцу и Ширин (notify.ts, вид offline).
+    const sent = await sendKind("offline", text, { quietErrors: true });
+    if (sent > 0) await prisma.offlineSignup.update({ where: { id: signupId }, data: { notified: true } });
   } catch (err) {
     logError("offlineSignup:notify", err);
   }

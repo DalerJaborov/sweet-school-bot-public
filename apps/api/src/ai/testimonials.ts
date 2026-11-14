@@ -1,5 +1,6 @@
-import { prisma, recordOutgoingMessage } from "../db.js";
-import { sendToContact, sendImageToContact } from "../messaging/send.js";
+import { prisma, recordOutgoingMessage, getSetting } from "../db.js";
+import { sendToContact, sendImageToContact, mediaAlreadySent } from "../messaging/send.js";
+import { contactLanguage } from "./contactLanguage.js";
 import { rx } from "./offTopicGuard.js";
 import type { Contact } from "@prisma/client";
 
@@ -43,58 +44,116 @@ export function hasDoubtSignal(text: string): boolean {
   return DOUBT_HINT.test(text.trim());
 }
 
-/** Если подписи у отзыва нет — уходит нейтральная фраза, а не голая картинка. */
-const FALLBACK_CAPTION = "вот отзыв одной из наших учениц";
+/**
+ * «ПОКАЖИТЕ ОТЗЫВЫ» / «РОСТ?» / «НАТИҶА?» — прямая просьба доказать (владелец
+ * 11.11.2026). Это не сомнение по словам, но ответ на неё тот же: отзывы учениц.
+ */
+const PROOF_ASK = rx([
+  "отзыв|отзывы|отзывов",
+  String.raw`(?<!\p{L})(натиҷа|натича|натиҷаҳо|натичахо)\p{L}*`,
+  String.raw`(?<!\p{L})рост(\s*(ми|ай|аст|мегу\p{L}*))?\s*\?`,
+  String.raw`результат\p{L}*\s+(учениц|ваших|у\s+кого)|кто\s+(уже\s+)?(учился|училась|проходил)`,
+  String.raw`(шогирд|хонанда)\p{L}*\s+(чи|чӣ)\s+(мегу|гуфт)`,
+  String.raw`фикр\p{L}*\s+(шогирд|хонанда)`,
+]);
 
+export function asksForProof(text: string): boolean {
+  return PROOF_ASK.test((text ?? "").trim());
+}
+
+export const TESTIMONIALS_SETTING = "testimonialsEnabled";
+export const TESTIMONIAL_BATCH_SETTING = "testimonialBatchSize";
+export const TESTIMONIALS_LINK_SETTING = "testimonialsLinkUrl";
+/** «Одна пачка на разговор»: следующая — не раньше чем через неделю тишины. */
+export const TESTIMONIAL_AGAIN_AFTER_MS = 7 * 86_400_000;
+const DEFAULT_BATCH = 3;
+const MAX_BATCH = 5;
+
+/** Если подписи у отзыва нет — уходит нейтральная фраза, а не голая картинка. */
+const INTRO: Record<"ru" | "tg", string> = {
+  ru: "Вот отзывы наших учениц",
+  tg: "Ана фикри шогирдони мо",
+};
+const LINK_LINE: Record<"ru" | "tg", string> = {
+  ru: "Ещё отзывы здесь:",
+  tg: "Боз фикрхо ин чо:",
+};
+
+async function batchSize(): Promise<number> {
+  const n = Number.parseInt((await getSetting(TESTIMONIAL_BATCH_SETTING))?.trim() ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_BATCH) : DEFAULT_BATCH;
+}
 
 /**
- * Побочный эффект: увидев сомнение в СВЕЖЕМ входящем тексте, кладёт в директ
- * один скриншот отзыва — если ещё не присылали и человек ещё не оплатил.
+ * Побочный эффект: увидев сомнение или просьбу показать отзывы в СВЕЖЕМ входящем
+ * тексте, кладёт в директ ПАЧКУ скриншотов отзывов (3 по умолчанию, не больше 5;
+ * владелец 11.11.2026: «можно пачкой») и, если владелец задал, ссылку на
+ * актуальные Instagram (настройка testimonialsLinkUrl; пусто — ссылки нет).
  *
- * ЗАПУСКАЕТСЯ НЕЗАВИСИМО ОТ ОСНОВНОГО ОТВЕТА БОТА (см. вызов в ai.ts, тот же
- * fire-and-forget `.catch(...)`, что у notifyIfStuck/markStartedLearningIfReplied) —
- * это НЕ довесок к ответу модели, а своё отдельное сообщение, и падение здесь
- * не должно ни задержать, ни оборвать обычный ответ.
- *
- * Пул активных отзывов пуст — тихий no-op: ни ошибки, ни строки в журнале, это
- * штатное состояние, пока хозяйка не залила ни одного скриншота.
+ * Одна пачка на разговор (Contact.testimonialSentAt, повтор — через неделю);
+ * купившему не шлём; ротация по lastShownAt, только active; картинку, которая уже
+ * уходила этому человеку, не повторяем. Рубильник testimonialsEnabled ("false"
+ * выключает). Сбой не трогает основной ответ (вызов fire-and-forget в ai.ts).
  */
 export async function maybeSendTestimonial(contact: Contact, text: string): Promise<void> {
-  if (!text || !hasDoubtSignal(text)) return;
-  if (contact.testimonialSentAt) return; // уже присылали этому человеку — второй раз не давим
+  if (!text || !(hasDoubtSignal(text) || asksForProof(text))) return;
+  if ((await getSetting(TESTIMONIALS_SETTING)) === "false") return;
+  if (contact.testimonialSentAt && Date.now() - contact.testimonialSentAt.getTime() < TESTIMONIAL_AGAIN_AFTER_MS)
+    return;
   if (contact.paid) return; // уже купил — убеждать больше не в чем
 
-  // Круговая ротация: следующим всегда уходит отзыв, которого не показывали
-  // дольше остальных (null — ещё ни разу), чтобы пул изнашивался равномерно.
-  // Кандидатов берём НЕСКОЛЬКО: findFirst+update отдельными запросами — гонка
-  // (два почти одновременных сомневающихся клиента читают один и тот же
-  // "самый старый" отзыв ДО того, как кто-то из них его пометит показанным) —
-  // оба получали бы один и тот же отзыв вместо ротации. Атомарно "забираем"
-  // кандидата условным UPDATE (проверка lastShownAt не изменился с чтения);
-  // если конкурентный запрос уже забрал самого старого — пробуем следующего.
+  // Пачку «забираем» отметкой в контакте ДО отправки: два сообщения подряд с
+  // сомнением не должны прислать две пачки.
+  const claimed = await prisma.contact.updateMany({
+    where: {
+      id: contact.id,
+      OR: [
+        { testimonialSentAt: null },
+        { testimonialSentAt: { lt: new Date(Date.now() - TESTIMONIAL_AGAIN_AFTER_MS) } },
+      ],
+    },
+    data: { testimonialSentAt: new Date() },
+  });
+  if (claimed.count === 0) return;
+
+  const want = await batchSize();
+  // Круговая ротация: следующими уходят отзывы, которых не показывали дольше
+  // остальных (null — ещё ни разу). Каждого кандидата забираем условным UPDATE
+  // (lastShownAt не изменился с чтения) — два одновременных клиента не получат
+  // одни и те же картинки.
   const candidates = await prisma.testimonial.findMany({
     where: { active: true },
     orderBy: [{ lastShownAt: "asc" }, { createdAt: "asc" }],
-    take: 5,
+    take: want * 3,
   });
-  if (candidates.length === 0) return;
-
-  let testimonial: (typeof candidates)[number] | null = null;
+  const picked: (typeof candidates)[number][] = [];
   for (const c of candidates) {
-    const claimed = await prisma.testimonial.updateMany({
+    if (picked.length >= want) break;
+    if (await mediaAlreadySent(contact.id, c.imageUrl)) continue;
+    const ok = await prisma.testimonial.updateMany({
       where: { id: c.id, lastShownAt: c.lastShownAt },
       data: { lastShownAt: new Date() },
     });
-    if (claimed.count === 1) {
-      testimonial = c;
-      break;
-    }
+    if (ok.count === 1) picked.push(c);
   }
-  if (!testimonial) return; // редкий случай: все 5 кандидатов только что забрали конкурентные запросы
+  if (picked.length === 0) {
+    // Показывать нечего — отметку снимаем, пачка не потрачена.
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { testimonialSentAt: contact.testimonialSentAt ?? null },
+    });
+    return;
+  }
 
-  const caption = testimonial.caption?.trim() || FALLBACK_CAPTION;
-  const mid = await sendToContact(contact, caption);
-  await recordOutgoingMessage(contact.id, caption, mid);
-  await sendImageToContact(contact, testimonial.imageUrl);
-  await prisma.contact.update({ where: { id: contact.id }, data: { testimonialSentAt: new Date() } });
+  const lang = (await contactLanguage(contact.id, text)) === "tg" ? "tg" : "ru";
+  const intro = picked.length === 1 ? picked[0].caption?.trim() || INTRO[lang] : INTRO[lang];
+  const mid = await sendToContact(contact, intro);
+  await recordOutgoingMessage(contact.id, intro, mid);
+  for (const t of picked) await sendImageToContact(contact, t.imageUrl);
+  const link = (await getSetting(TESTIMONIALS_LINK_SETTING))?.trim();
+  if (link && /^https:\/\/\S+$/u.test(link)) {
+    const line = `${LINK_LINE[lang]} ${link}`;
+    const linkMid = await sendToContact(contact, line);
+    await recordOutgoingMessage(contact.id, line, linkMid);
+  }
 }

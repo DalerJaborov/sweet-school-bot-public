@@ -9,6 +9,7 @@ import { handleReceiptVerdict } from "./ai.js";
 import { confirmRequisitesToCustomer } from "./ai/receiptVerdict.js";
 import { MEDIA_DIR } from "./upload.js";
 import { isBotFrozen } from "./messaging/automation.js";
+import { sendKind } from "./notify.js";
 
 /**
  * Очередь недосмотренных чеков.
@@ -202,21 +203,10 @@ async function giveUp(id: string, contactId: string, why: string): Promise<void>
     where: { id },
     data: { kind: "suspicious", reason: `${why} — посмотрите сами`, ownerDecision: "PENDING" },
   });
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  if (!botToken) return;
-  // Та же пара получателей, что и у обычной карточки сомнительного чека
-  // (ai.ts::askOwner) — сестра могла пропустить сообщение, владелец теперь
-  // видит его тоже.
   // Чек остаётся в панели («Чеки»), а это сообщение техническое: только владельцу.
-  const { techChatIds } = await import("./telegram.js");
-  const recipients = await techChatIds();
-  if (recipients.length === 0) return;
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  const { sendTelegramMessage } = await import("./telegram.js");
   const text = `Чек не удалось проверить (${why}).\nЧеловек: ${contact?.username ? "@" + contact.username : contact?.igUserId}\nПосмотрите во вкладке «Чеки».`;
-  for (const chatId of recipients) {
-    await sendTelegramMessage(botToken, chatId, text).catch((err) => logError("receiptRetry:notify", err));
-  }
+  await sendKind("failure", text);
   // Это тоже эскалация к владельцу — клиентка должна знать, что чек не
   // потерян, а ждёт Ширин (см. receiptVerdict.ts::notifyCustomerReceiptForwarded).
   if (contact) {

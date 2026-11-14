@@ -45,12 +45,13 @@ describe("Отказ по чеку — на языке клиентки", () => 
   it("по-таджикски — как и раньше, по-таджикски", async () => {
     db.model("message").findFirst.mockResolvedValue({ text: "Ман пардохт кардам, апачон" });
     await decideReceipt("r1", "reject");
-    expect(String(sendText.mock.calls[0][1])).toContain("пардохт ҳоло тасдиқ нашуд");
+    expect(String(sendText.mock.calls[0][1])).toContain("пардохт хозир тасдик нашуд");
   });
 
-  it("истории нет — язык школы по умолчанию, таджикский", async () => {
+  // Владелец 08.11.2026: пустой текст не считается таджикским по умолчанию.
+  it("истории нет — русский (язык неизвестен, не «таджикский по умолчанию»)", async () => {
     db.model("message").findFirst.mockResolvedValue(null);
     await decideReceipt("r1", "reject");
-    expect(String(sendText.mock.calls[0][1])).toContain("пардохт ҳоло тасдиқ нашуд");
+    expect(String(sendText.mock.calls[0][1])).toContain("оплату пока не удалось подтвердить");
   });
 });

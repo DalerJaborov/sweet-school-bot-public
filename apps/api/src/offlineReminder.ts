@@ -1,9 +1,10 @@
 import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "./db.js";
 import { singleFlight } from "./services/singleFlight.js";
 import { sendToContact } from "./messaging/send.js";
-import { techChatIds, sendTelegramMessage } from "./telegram.js";
+import { everTalkedWithShirin } from "./messaging/automation.js";
+import { sendKind } from "./notify.js";
 import { offsetMs } from "./dailyReport.js";
-import { detectClientLanguage } from "./ai/clientLanguage.js";
+import { contactLanguage } from "./ai/contactLanguage.js";
 import { offlineStartDate } from "./ai/courseDate.js";
 import { offlineAddress, parseHours, type OfflineFacts } from "./ai/offlineFacts.js";
 import { getOfflineFacts } from "./services/salesTextsService.js";
@@ -47,16 +48,16 @@ export function reminderText(language: "ru" | "tg", name: string, facts: Offline
   const at = parseHours(facts.hours)?.from;
   if (language === "tg") {
     return (
-      `${name ? `${name}, ` : ""}Пагоҳ курси мо оғоз мешавад 🌸\n\n` +
-      (at ? `⏰ Соати ${at} интизоратонем\n` : "") +
-      `📍 ${offlineAddress(facts, "tg")}\n\n` +
-      `Маҳсулот овардан лозим нест, ҳама аз мо. То дидор!`
+      `${name ? `${name}, п` : "П"}агох курсамон сар мешавад.\n` +
+      (at ? `Соати ${at} интизоратонем. ` : "") +
+      `Сурога: ${offlineAddress(facts, "tg")}.\n` +
+      `Продукты овардан лозим нест, хамааш аз мо. То дидор!`
     );
   }
   return (
-    `${name ? `${name}, ` : ""}Завтра начинается наш курс 🌸\n\n` +
-    (at ? `⏰ Ждём вас к ${at}\n` : "") +
-    `📍 ${offlineAddress(facts, "ru")}\n\n` +
+    `${name ? `${name}, з` : "З"}автра начинается наш курс.\n` +
+    (at ? `Ждём вас к ${at}. ` : "") +
+    `Адрес: ${offlineAddress(facts, "ru")}.\n` +
     `Продукты приносить не нужно, всё наше. До встречи!`
   );
 }
@@ -104,8 +105,6 @@ async function sweep(): Promise<void> {
   });
   if (signups.length === 0) return;
 
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  const ownerChat = (await techChatIds())[0];
   const forOwner: string[] = [];
   let reachedInInstagram = 0;
 
@@ -124,8 +123,10 @@ async function sweep(): Promise<void> {
     });
     const windowOpen = lastIn != null && Date.now() - lastIn.createdAt.getTime() < 24 * 3_600_000;
 
-    if (windowOpen) {
-      const language = detectClientLanguage(lastIn?.text ?? "");
+    // Ширин хоть раз говорила с ней сама — клиентке не напоминаем никогда
+    // (владелец 09.11.2026); владельцу строка ниже уходит как раньше.
+    if (windowOpen && !(await everTalkedWithShirin(signup.contact))) {
+      const language = await contactLanguage(signup.contactId, lastIn?.text ?? "");
       const text = reminderText(language === "tg" ? "tg" : "ru", signup.name, facts);
       try {
         const mid = await sendToContact(signup.contact, text);
@@ -154,15 +155,15 @@ async function sweep(): Promise<void> {
     );
   }
 
-  if (botToken && ownerChat && forOwner.length > 0) {
-    await sendTelegramMessage(
-      botToken,
-      ownerChat,
+  if (forOwner.length > 0) {
+    // «Главное»: владельцу и Ширин (она обзванивает записавшихся).
+    await sendKind(
+      "offline",
       `📣 Завтра начинается очный курс. Записалось: ${forOwner.length}\n` +
         `Боту удалось написать в Instagram: ${reachedInInstagram}\n\n` +
         `${forOwner.join("\n")}\n\n` +
         `Нажмите на ссылку под нужным человеком — откроется WhatsApp с уже написанным сообщением.`,
-    ).catch((err) => logError("offlineReminder:notifyOwner", err));
+    );
   }
 
   logInfo("offlineReminder", `напомнили ${forOwner.length}, из них в Instagram ${reachedInInstagram}`);

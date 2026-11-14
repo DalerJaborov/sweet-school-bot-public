@@ -198,7 +198,8 @@ describe("вход по ссылке из панели (chat_member)", () => {
 
   it("автоматическая ссылка бота после входа ученицы тоже гасится (тот же класс ошибки)", async () => {
     db.model("telegramInvite").findUnique.mockResolvedValue(null);
-    db.model("contact").findFirst.mockResolvedValue({ id: "c-9", joinedGroupAt: null });
+    db.model("contact").findMany.mockResolvedValue([{ id: "c-9" }]);
+    db.model("contact").findUnique.mockResolvedValue({ id: "c-9", joinedGroupAt: null });
     await handleChatMember(update("https://t.me/+Auto"));
     expect(telegramCalls).toContain("revokeChatInviteLink");
     expect(telegramCalls).not.toContain("sendMessage");
@@ -206,18 +207,29 @@ describe("вход по ссылке из панели (chat_member)", () => {
 
   it("ссылка на первый из двух курсов (есть только на покупке) — узнаём ученицу, без тревоги", async () => {
     db.model("telegramInvite").findUnique.mockResolvedValue(null);
-    db.model("contact").findFirst.mockResolvedValue(null);
-    db.model("purchase").findFirst.mockResolvedValue({ contactId: "c-9" });
+    db.model("contact").findMany.mockResolvedValue([]);
+    db.model("purchase").findMany.mockResolvedValue([{ contactId: "c-9" }]);
     db.model("contact").findUnique.mockResolvedValue({ id: "c-9", joinedGroupAt: null });
     await handleChatMember(update("https://t.me/+FirstCourse"));
     expect(telegramCalls).not.toContain("sendMessage");
     expect(db.model("contact").update).toHaveBeenCalled();
   });
 
+  it("ревью 11.11: одна ссылка записана у двух людей (общая) — вошедшего ни к кому не привязываем, ссылку не гасим", async () => {
+    db.model("telegramInvite").findUnique.mockResolvedValue(null);
+    db.model("contact").findMany.mockResolvedValue([{ id: "c-1" }]);
+    db.model("purchase").findMany.mockResolvedValue([{ contactId: "c-2" }]);
+    await handleChatMember(update("https://t.me/+SharedByHand"));
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+    expect(db.model("purchase").updateMany).not.toHaveBeenCalled();
+    expect(telegramCalls).not.toContain("revokeChatInviteLink");
+    expect(telegramCalls).not.toContain("sendMessage");
+  });
+
   it("незнакомая ботовая ссылка по-прежнему поднимает тревогу", async () => {
     db.model("telegramInvite").findUnique.mockResolvedValue(null);
-    db.model("contact").findFirst.mockResolvedValue(null);
-    db.model("purchase").findFirst.mockResolvedValue(null);
+    db.model("contact").findMany.mockResolvedValue([]);
+    db.model("purchase").findMany.mockResolvedValue([]);
     await handleChatMember(update("https://t.me/+Leaked"));
     expect(telegramCalls).toContain("sendMessage");
   });

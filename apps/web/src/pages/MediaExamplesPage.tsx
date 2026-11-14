@@ -122,6 +122,16 @@ function LibraryAdd({ onAdded }: { onAdded: () => void }) {
       <button className="btn wide" style={{ marginTop: 8 }} disabled={!file || busy} onClick={add}>
         {busy ? "Загружаю…" : "Добавить"}
       </button>
+      {/* Вне блока озвучки: рубильник глушит и живые одобренные голосовые из
+          библиотеки, поэтому нужен и без настроенного ElevenLabs (12.11.2026). */}
+      {voice && (
+        <label style={{ display: "block", marginTop: 16 }}>
+          <input type="checkbox" checked={voice.voiceReplySwitch} onChange={(e) => void flipSwitch("voiceReplyEnabled", e.target.checked)} /> Бот отправляет голосовые
+          <span className="hint" style={{ display: "block" }}>
+            Выключено — бот не шлёт голосовые совсем: ни озвучку, ни одобренные записи Ширин из библиотеки. Отвечает текстом.
+          </span>
+        </label>
+      )}
       {voice?.voiceConfigured && (
         <div style={{ marginTop: 16 }}>
           <h3>Озвучить голосом Ширин</h3>
@@ -132,9 +142,6 @@ function LibraryAdd({ onAdded }: { onAdded: () => void }) {
           </p>
           <label style={{ display: "block", marginBottom: 6 }}>
             <input type="checkbox" checked={voice.voiceSwitch} onChange={(e) => void flipSwitch("voiceCloneEnabled", e.target.checked)} /> Озвучка голосом Ширин включена
-          </label>
-          <label style={{ display: "block", marginBottom: 8 }}>
-            <input type="checkbox" checked={voice.voiceReplySwitch} onChange={(e) => void flipSwitch("voiceReplyEnabled", e.target.checked)} /> Бот сам отвечает голосом на короткие тёплые сообщения
           </label>
           <textarea className="input" rows={3} value={speech} maxLength={voice.maxVoiceText} onChange={(e) => setSpeech(e.target.value)} placeholder="Что должна сказать Ширин" />
           <button className="btn wide" style={{ marginTop: 8 }} disabled={!speech.trim() || busy || !voice.voiceEnabled} onClick={speak}>

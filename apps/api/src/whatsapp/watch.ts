@@ -1,18 +1,18 @@
-import { getSetting, setSetting, logError } from "../db.js";
-import { shouldSendAlert } from "../alertGate.js";
-import { sendTelegramMessage, techChatIds } from "../telegram.js";
+import { getSetting, setSetting } from "../db.js";
 import { bridgeRequest, whatsappConfigured } from "./client.js";
 
 /**
- * СТОРОЖ СВЯЗИ С WHATSAPP (08.11.2026).
+ * СТОРОЖ СВЯЗИ С WHATSAPP (08.11.2026; без Telegram с 11.11.2026).
  *
  * Сессия WhatsApp живёт в мосте (services/whatsapp-bridge). Если вход слетел
  * (state pairing / disconnected / auth_failure), мост не отвечает или контакты не
  * загрузились — бот молча перестаёт отвечать в WhatsApp. Раз в минуту спрашиваем
- * статус моста; если плохо ДОЛЬШЕ 10 минут подряд:
- *   • в панели («Сегодня» → «Что-то работает не так») появляется строка с подсказкой;
- *   • владельцу (и только ему — techChatIds) уходит одно сообщение, не чаще раза в 6 ч
- *     (alertGate). Короткие перезапуски моста никого не будят.
+ * статус моста; если плохо ДОЛЬШЕ 10 минут подряд, в панели («Сегодня» → «Что-то
+ * работает не так») появляется строка с подсказкой.
+ *
+ * В Telegram больше НЕ пишем: «📵 WhatsApp отключился» приходило каждые 6 часов,
+ * пока мост на паузе (владелец 11.11.2026: «мне такой мусор не нужен»). Строка в
+ * панели и статус в «Настройках → WhatsApp» остаются.
  *
  * Пока WhatsApp ни разу не был подключён (`whatsappEverReady` пуст), молчим: нечему
  * «отключаться». /health сюда НЕ подмешиваем: перезапуск api WhatsApp не лечит, а сторож
@@ -67,12 +67,4 @@ export async function checkWhatsappConnection(now = Date.now()): Promise<void> {
   }
   const kind: Kind = status ? "unlinked" : "down";
   if (!problem || problem.kind !== kind) problem = { since: problem?.since ?? now, kind };
-  if (now - problem.since < WHATSAPP_SUSTAINED_MS) return;
-
-  if (!(await shouldSendAlert(`whatsapp:${kind}`))) return;
-  const botToken = (await getSetting("telegramBotToken"))?.trim();
-  if (!botToken) return;
-  for (const chatId of await techChatIds()) {
-    await sendTelegramMessage(botToken, chatId, `📵 ${textFor(kind)}`).catch((err) => logError("whatsappWatch:send", err));
-  }
 }

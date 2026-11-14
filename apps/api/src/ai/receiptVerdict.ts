@@ -3,18 +3,22 @@ import { Prisma } from "@prisma/client";
 import type { Contact } from "@prisma/client";
 import { prisma, getSetting, logError, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
-import { isBotFrozen, withVerifiedReceiptDelivery } from "../messaging/automation.js";
-import { sendReceiptForReview, sendTelegramMessage, summaryChatIds } from "../telegram.js";
+import { isBotFrozen, withVerifiedReceiptDelivery, contactAutomationBlocked } from "../messaging/automation.js";
+import { enqueuePurchaseConversion } from "../metaConversions.js";
+import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
+import { sendKind } from "../notify.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
 import { allocate, COURSE_TITLE, coursesForAmount, ownedCourses, planForAmount, type Course } from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
-import { detectClientLanguage, type ClientLanguage } from "./clientLanguage.js";
+import { type ClientLanguage } from "./clientLanguage.js";
+import { contactLanguage } from "./contactLanguage.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import { paymentLine } from "./prompts.js";
 import { rememberAlert } from "../receiptAlerts.js";
 import { ACCEPTED_WHERE, receiptAccepted } from "../receiptAccepted.js";
-import { manualLinkSince, receiptServedState } from "../course/handedOut.js";
+import { manualLinkServesCourse, manualLinksSince, manualLinkSince, receiptServedState } from "../course/handedOut.js";
+import { notifyOwnerDirect } from "../systemAlerts.js";
 
 const RECEIPT_CONFIDENCE_THRESHOLD = 50;
 
@@ -24,9 +28,9 @@ export { receiptAccepted };
  *  решение владельца 25.08.2026 веч.: сначала дать клиенту шанс самому
  *  разобраться, а не сразу звать владельца на каждый нечёткий чек. */
 const ALT_SCREENSHOT_TEXT: Record<ClientLanguage, string> = {
-  ru: "Чек не совсем понятно читается. Пришлите, пожалуйста, ещё один — можно из истории банка или под другим углом, так быстрее разберёмся.",
-  tg: "Чек чандон возеҳ дида намешавад. Лутфан сурати дигар фиристед — метавонед аз таърихи бонк гиред ё аз кунҷи дигар суратгирӣ кунед.",
-  en: "Hi! The receipt isn't fully readable — could you send another one? From your bank history or a different angle works too.",
+  ru: "Чек плохо читается. Пришлите ещё один скрин, можно из истории банка",
+  tg: "Чек хуб маълум нест. Боз як скриншот фиристен, аз истории банк хам мешавад",
+  en: "The receipt isn't readable. Could you send another screenshot? One from your bank history works too",
 };
 
 /**
@@ -51,9 +55,9 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
   const texts = await getSalesTexts();
   const line = paymentLine(texts);
   const byLang: Record<ClientLanguage, string> = {
-    ru: `Да, всё верно: ${line} — это наш номер, получатель ${texts.paymentRecipient}. Переводите и пришлите сюда чек — открою доступ.`,
-    tg: `Ҳа, ҳамааш дуруст: ${line} — рақами мо, қабулкунанда ${texts.paymentRecipient}. Интиқол кунед ва чекро ҳамин ҷо фиристед — дастрасиро мекушоям.`,
-    en: `Yes, that's correct: ${line} — our number, recipient ${texts.paymentRecipient}. Send the transfer and the receipt here, and I'll open access.`,
+    ru: `Да, всё верно, это наш номер: ${line}. Переводите и пришлите сюда чек, открою уроки`,
+    tg: `Ха, дуруст, раками мо: ${line}. Пулро гузаронен, чекро хамин чо фиристен, дарсхоя мекушоям`,
+    en: `Yes, that's correct, it's our number: ${line}. Send the transfer and the receipt here, and I'll open the lessons`,
   };
   const lastIn = lastText?.trim()
     ? { text: lastText }
@@ -62,7 +66,7 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
         orderBy: { createdAt: "desc" },
         select: { text: true },
       });
-  const text = byLang[detectClientLanguage(lastIn?.text ?? "")];
+  const text = byLang[await contactLanguage(contact.id, lastIn?.text ?? "")];
   const mid = await sendToContact(contact, text);
   if (mid) await recordOutgoingMessage(contact.id, text, mid);
 }
@@ -71,9 +75,9 @@ export async function confirmRequisitesToCustomer(contact: Contact, lastText: st
  *  открыла доступ). Раньше 70 сомони дважды открывали ВТОРОЙ курс как новую покупку. */
 const DUPLICATE_WINDOW_MS = 48 * 3_600_000;
 const DUPLICATE_PAYMENT_TEXT: Record<ClientLanguage, string> = {
-  ru: "Этот перевод мы уже приняли — ссылка на уроки выше в этом чате. Если это другая оплата, напишите, разберёмся.",
-  tg: "Ин интиқолро аллакай қабул кардем — ссылка ба дарсҳо болотар дар ҳамин чат аст. Агар ин пардохти дигар бошад, нависед, мефаҳмем.",
-  en: "We've already accepted this transfer — the lesson link is above in this chat. If this is a different payment, let us know.",
+  ru: "Этот перевод уже приняли, ссылка на уроки выше в этом чате. Если это другая оплата, напишите",
+  tg: "Ин пулро гирифтем, ссылкаи дарсхо болотар хаст. Агар дигар пардохт бошад, нависен",
+  en: "We've already accepted this transfer, the lesson link is above in this chat. If it's a different payment, let us know",
 };
 
 /**
@@ -89,9 +93,9 @@ const DUPLICATE_PAYMENT_TEXT: Record<ClientLanguage, string> = {
  * разбор и сразу, и из очереди перепроверки.
  */
 const FORWARDED_TO_OWNER_TEXT: Record<ClientLanguage, string> = {
-  ru: "Чек получила, передаю Ширин на проверку. Ссылка на уроки придёт сюда же — обычно в течение часа, ночью — утром.",
-  tg: "Чекро гирифтам, ба Ширин барои тафтиш медиҳам. Ссылка ба дарсҳо ҳамин ҷо меояд — одатан дар давоми як соат, шабона — пагоҳӣ.",
-  en: "Got your receipt, passing it to Shirin to check. The lesson link will arrive right here — usually within an hour, overnight — in the morning.",
+  ru: "Чек получила, передаю Ширин на проверку. Ссылка на уроки придёт сюда, обычно в течение часа, а ночью утром",
+  tg: "Чекро гирифтам, ба Ширин барои тафтиш медихам. Ссылкаи дарсхо хамин чо меояд, одатан дар як соат, шаб бошад пагох",
+  en: "Got your receipt, passing it to Shirin to check. The lesson link will arrive right here, usually within an hour, overnight in the morning",
 };
 
 export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: { id: string }): Promise<void> {
@@ -110,7 +114,7 @@ export async function notifyCustomerReceiptForwarded(contact: Contact, receipt: 
     orderBy: { createdAt: "desc" },
     select: { text: true },
   });
-  const text = FORWARDED_TO_OWNER_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  const text = FORWARDED_TO_OWNER_TEXT[await contactLanguage(contact.id, lastIn?.text ?? "")];
   if (await isBotFrozen()) return;
   await sendToContact(contact, text)
     .then((mid) => {
@@ -138,10 +142,8 @@ const SAME_TRANSFER_AMOUNT_GAP = 5;
  *  (без кнопок: решать по чужой строке нельзя). */
 async function notifyOwnerText(contact: Contact, text: string): Promise<void> {
   try {
-    const botToken = (await getSetting("telegramBotToken"))?.trim();
-    if (!botToken) return;
     const who = contact.username ? `@${contact.username}` : contact.igUserId;
-    for (const chatId of await summaryChatIds()) await sendTelegramMessage(botToken, chatId, `${who}: ${text}`);
+    await sendKind("review", `${who}: ${text}`);
   } catch (err) {
     logError("receiptVerdict:ownerText", err);
   }
@@ -149,15 +151,13 @@ async function notifyOwnerText(contact: Contact, text: string): Promise<void> {
 
 async function notifyHashTaken(contact: Contact, otherContactId: string, amount: number | null, imageUrl: string | null): Promise<void> {
   try {
-    const botToken = (await getSetting("telegramBotToken"))?.trim();
-    if (!botToken) return;
     const other = await prisma.contact.findUnique({ where: { id: otherContactId }, select: { username: true, igUserId: true } });
     const name = (c: { username: string | null; igUserId: string } | null) => (c ? (c.username ? `@${c.username}` : c.igUserId) : "?");
     const text =
       `Чек требует проверки: этот же скриншот уже присылал другой человек (${name(other)}).\n` +
       `Сейчас прислал: ${name(contact)}\nСумма: ${amount != null ? `${Math.round(amount * 100) / 100} сомони` : "не разобрана"}\n` +
       `Доступ не выдан.${imageUrl ? `\nКартинка: ${imageUrl}` : ""}`;
-    for (const chatId of await summaryChatIds()) await sendTelegramMessage(botToken, chatId, text);
+    await sendKind("review", text);
   } catch (err) {
     logError("receiptVerdict:hashTaken", err);
   }
@@ -176,7 +176,7 @@ async function tellAlreadyAccepted(contact: Contact, lastText: string | null = n
         orderBy: { createdAt: "desc" },
         select: { text: true },
       });
-  const text = DUPLICATE_PAYMENT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+  const text = DUPLICATE_PAYMENT_TEXT[await contactLanguage(contact.id, lastIn?.text ?? "")];
   if (await isBotFrozen()) return false;
   let sent = false;
   await sendToContact(contact, text)
@@ -219,7 +219,7 @@ async function askOwner(
   const botToken = (await getSetting("telegramBotToken"))?.trim();
   if (!botToken || !verdict.imageUrl) return;
 
-  // Карточки сомнительных чеков — владельцу и сестре (telegramSummaryChatIds).
+  // Карточки сомнительных чеков — только владельцу и невыключаемые (вид «decision», telegram.ts).
   const recipients = await summaryChatIds();
   if (recipients.length === 0) return;
 
@@ -237,6 +237,90 @@ async function askOwner(
     if (await isBotFrozen()) return;
     const sent = await sendReceiptForReview(botToken, chatId, { imageUrl: verdict.imageUrl, caption, receiptId, needsCourseChoice, closeAsDuplicate });
     if (sent) await rememberAlert(receiptId, sent);
+  }
+}
+
+/**
+ * Ширин выдала ссылку руками, а чек настоящий: записываем покупку и оплату без
+ * второй ссылки и без карточки владельцу (владелец 11.11.2026).
+ *
+ * ДЕНЬГИ — СВЕРКА ССЫЛКИ (ревью 11.11.2026). Раньше в покупку писалась любая
+ * последняя ссылка Ширин за всё время (since = 0), а без ссылки — строка
+ * «выдано вручную»: оплата закрывалась молча, даже если ссылка вела в другую
+ * группу или была общей, а вход по общей ссылке потом привязывался к этому
+ * человеку. Теперь:
+ *  - ссылки берутся только присланные ПОСЛЕ чека (since = момент чека);
+ *  - каждая сверяется с курсом (course/handedOut.ts::manualLinkServesCourse);
+ *  - совпала — покупка помнит ссылку, закрываем молча;
+ *  - не совпала или ссылка неизвестна — оплату всё равно отмечаем (деньги пришли),
+ *    но ссылку в покупку НЕ пишем и Далеру уходит одна строка «сверьте группу».
+ */
+async function settleManualHandout(
+  contact: Contact,
+  courses: Course[],
+  amount: number,
+  verdict: { amount: number | null; currency?: string | null; confidence: number; imageHash: string; imageUrl: string | null; receiptAt: Date | null; transactionId?: string | null },
+  receiptId: string,
+  reason: string,
+  receiptAt: Date,
+): Promise<void> {
+  const links = await manualLinksSince(contact.id, receiptAt).catch((err) => {
+    logError("receiptVerdict:manualLinks", err);
+    return [] as string[];
+  });
+  const linkFor = new Map<Course, string>();
+  for (const course of courses) {
+    for (const link of links) {
+      const ok = await manualLinkServesCourse(contact.id, link, course).catch((err) => {
+        logError("receiptVerdict:manualLinkCheck", err);
+        return false;
+      });
+      if (ok) {
+        linkFor.set(course, link);
+        break;
+      }
+    }
+  }
+  const created: string[] = [];
+  for (const course of courses) {
+    try {
+      const row = await prisma.purchase.create({
+        data: {
+          contactId: contact.id, course, amount: Math.round(amount / courses.length),
+          rawAmount: verdict.amount, currency: verdict.currency ?? "TJS", inviteLink: linkFor.get(course) ?? null,
+        },
+      });
+      if (row?.id) created.push(row.id);
+    } catch (err) {
+      if ((err as { code?: string })?.code !== "P2002") logError("receiptVerdict:manualHandout", err);
+    }
+  }
+  const unverified = courses.filter((c) => !linkFor.has(c));
+  await prisma.contact.updateMany({ where: { id: contact.id, paid: false }, data: { paid: true, paidAt: new Date() } });
+  await prisma.receiptCheck.update({
+    where: { id: receiptId },
+    data: {
+      kind: "valid",
+      confidence: verdict.confidence,
+      amount: Math.round(amount),
+      receiptAt: verdict.receiptAt,
+      transactionId: verdict.transactionId?.trim() && verdict.transactionId.trim().length >= 6 ? verdict.transactionId.trim() : null,
+      linkSent: true,
+      ownerDecision: "HANDLED",
+      decidedAt: new Date(),
+      reason:
+        `${reason} (ссылку отправила Ширин сама, оплата отмечена автоматически` +
+        (unverified.length > 0 ? `; группа не сверена: ${unverified.map((c) => COURSE_TITLE[c]).join(", ")})` : ", группа сверена)"),
+    },
+  });
+  if (created.length > 0) await enqueuePurchaseConversion(contact.id, created);
+  if (unverified.length > 0) {
+    // Тех-чат Далера (systemAlerts.ts::notifyOwnerDirect), не Ширин: она эту ссылку и выдала.
+    const who = contact.username ? `@${contact.username}` : contact.igUserId;
+    await notifyOwnerDirect(
+      `${who}: оплата ${Math.round(amount)} сомони (${unverified.map((c) => COURSE_TITLE[c]).join(", ")}) отмечена, ` +
+        "ссылку дала Ширин сама — сверьте группу.",
+    ).catch((err) => logError("receiptVerdict:manualHandoutNotify", err));
   }
 }
 
@@ -263,8 +347,11 @@ export async function handleReceiptVerdict(
   // прислала ссылку вне системы (покупок нет) - оплату молча не закрываем:
   // карточка владельцу с пометкой, клиентке ничего не пишем.
   let maybeServed = false;
+  // Момент чека: ссылки Ширин считаются только присланные после него (settleManualHandout).
+  let queuedAt: Date | null = null;
   if (existingId) {
     const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
+    queuedAt = queued?.createdAt ?? null;
     if (queued) {
       const tjs = verdict.amount != null && (verdict.currency ?? "TJS").toUpperCase() === "TJS";
       // Другой чек этого человека уже открыл доступ после этого: покупки могли
@@ -464,11 +551,6 @@ export async function handleReceiptVerdict(
     }
   }
 
-  if (maybeServed) {
-    if (kind === "valid") kind = "suspicious";
-    hard = true;
-    doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
-  }
   const plan = amount != null ? await allocate(contact.id, Math.round(amount)) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
@@ -509,6 +591,21 @@ export async function handleReceiptVerdict(
   const isClean = kind === "valid" && causes.length === 0 && !sameTransfer;
   if (kind === "valid" && !sameTransfer) doubts.push(...causes);
   if (await isBotFrozen()) return;
+
+  // ЧЕК ПРИ ШИРИН: ССЫЛКУ ОНА УЖЕ ОТПРАВИЛА САМА (владелец 11.11.2026). Чек
+  // настоящий — на наш номер, сумма совпадает с курсом, повторов нет, — а ссылку
+  // Ширин успела выслать руками. Дублировать ссылку не надо, но и карточка
+  // «Чек требует проверки» владельцу не нужна: оплату отмечаем сами.
+  // Сомнительный чек (не тот номер, сумма, повтор, подделка) по-прежнему идёт
+  // владельцу — уже с пометкой, что ссылку, похоже, выдали.
+  if (maybeServed && isClean && plan && plan.grant.length > 0 && queuedAt) {
+    await settleManualHandout(contact, plan.grant, amount as number, verdict, existingId as string, reason, queuedAt);
+    return;
+  }
+  if (maybeServed) {
+    hard = true;
+    doubts.push("похоже, Ширин уже отправила ссылку вне системы - проверьте и нажмите нужную кнопку");
+  }
 
   let linkSent = false;
   let closedAsDuplicate: "settled" | "pending" | null = sameTransfer;
@@ -607,6 +704,17 @@ export async function handleReceiptVerdict(
   }
 
   if (await isBotFrozen()) return;
+  // Ширин сейчас ведёт разговор сама: служебные фразы клиентке («передаю Ширин»,
+  // «пришлите другой скрин», «уже приняли») не шлём — дверь отправки их всё равно
+  // не пропустит, а владельцу нужна только карточка. Ссылку на уроки выдаёт
+  // grantCourses выше через проверенный чек — это единственное исключение.
+  const humanTalking = contactAutomationBlocked(contact);
+  if (humanTalking) {
+    if (saved && (needsOwner || duplicatePayment) && !closedAsDuplicate) {
+      await askOwner(contact, saved.id, { ...verdict, amount }, doubts, verdict.reason, willOpenText, closeAsDuplicate);
+    }
+    return;
+  }
   if (saved && closedAsDuplicate === "settled") {
     await tellAlreadyAccepted(contact);
     if (!sameTransferProven) {
@@ -620,7 +728,7 @@ export async function handleReceiptVerdict(
       orderBy: { createdAt: "desc" },
       select: { text: true },
     });
-    const text = ALT_SCREENSHOT_TEXT[detectClientLanguage(lastIn?.text ?? "")];
+    const text = ALT_SCREENSHOT_TEXT[await contactLanguage(contact.id, lastIn?.text ?? "")];
     if (await isBotFrozen()) return;
     await sendToContact(contact, text)
       .then((mid) => {

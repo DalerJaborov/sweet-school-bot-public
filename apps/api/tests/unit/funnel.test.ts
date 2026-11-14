@@ -99,8 +99,8 @@ describe("handleIncomingDm", () => {
       expect.objectContaining({ data: { tags: JSON.stringify(["kurs_started"]) } })
     );
     // Шагов больше нет — доставка закрыта.
-    expect(db.model("delivery").update).toHaveBeenLastCalledWith(
-      expect.objectContaining({ data: { state: "DONE", nextRunAt: null } })
+    expect(db.model("delivery").updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { id: "delivery-1", state: "ACTIVE" }, data: { state: "DONE", nextRunAt: null } })
     );
   });
 

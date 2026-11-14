@@ -14,7 +14,7 @@ describe("generated reply boundaries", () => {
   });
   it("does not apply sales-number filtering to lesson material or human sends", () => {
     expect(source("course/assistant.ts")).not.toContain("replyPolicyIssues(");
-    expect(source("messaging/send.ts")).toContain("if (!opts.byHuman) text = cleanKeepingWarmTail(text)");
+    expect(source("messaging/send.ts")).toContain("if (!opts.byHuman) text = await humanizeForContact(contact.id, cleanKeepingWarmTail(text))");
   });
   it("uses explicit structured Meta failures at the transport boundary", () => {
     expect(source("instagram.ts")).toContain("throw metaResponseError(res.status, text)");

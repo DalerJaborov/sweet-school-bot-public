@@ -10,8 +10,9 @@ const state = vi.hoisted(() => ({
 vi.mock("../../src/db.js", () => ({
   prisma: {
     message: {
-      findMany: vi.fn(async (args: { where: { text: { in: string[] } } }) =>
-        state.sentOut.filter((t) => args.where.text.in.includes(t)).map((text) => ({ text })),
+      // Исходящие клиенту (alreadyShown сравнивает их после фильтра); входящие для языка — пусто.
+      findMany: vi.fn(async (args: { where: { direction?: string } }) =>
+        args.where.direction === "OUT" ? [...state.sentOut].reverse().map((text) => ({ text })) : [],
       ),
       count: vi.fn(async () => state.recentOut),
     },
