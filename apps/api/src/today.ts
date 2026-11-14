@@ -6,6 +6,7 @@ import { countNotOpened } from "./notOpened.js";
 import { deliveryMode } from "./course/delivery.js";
 import { unansweredCount } from "./course/chat.js";
 import { healthReport } from "./health.js";
+import { whatsappProblem } from "./whatsapp/watch.js";
 import { storageConfig } from "./storage/s3.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { getPrices } from "./services/priceService.js";
@@ -356,8 +357,10 @@ async function buildToday(): Promise<TodayResponse> {
       storage: Boolean(storage),
       diskFreePct: health?.diskFreePct ?? null,
       gemini,
-      // WhatsApp-мост владелец выключил сам (11.11.2026) — его состояние на «Сегодня» не показываем.
-      problems: [...(health?.problems ?? [])],
+      // WhatsApp (15.11.2026): мост снова работает («Только чеки»). Строка появляется, только если
+      // обрыв дольше 10 мин или пауза дольше whatsappPauseAlertHours (whatsapp/watch.ts);
+      // 09–13.11 пауза 4 дня глотала чеки, а строка в панель не была подключена.
+      problems: [...(health?.problems ?? []), ...[whatsappProblem(now)].filter((p): p is string => !!p)],
     },
   };
 }
