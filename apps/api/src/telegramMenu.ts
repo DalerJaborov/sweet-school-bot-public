@@ -1,4 +1,5 @@
 import { approveTransferByOwner } from "./course/phoneChange.js";
+import { approveSwitchByOwner } from "./course/channelSwitch.js";
 import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { answerCallback, chatRole, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds, type ChatRole } from "./telegram.js";
 import { buildTodayText, handleOwnerWords, sendControlMenu, sendNotifyMenu } from "./telegramControl.js";
@@ -526,6 +527,15 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
       failed: "Не получилось отправить ссылку. Новая карточка придёт, когда она напишет снова",
     }[done];
     await answerCallback(botToken, query.id, answer);
+    return;
+  }
+  const switchCard = /^mn:sw:([0-9a-f-]{36}):([wt])$/.exec(query.data ?? "");
+  if (switchCard && query.id && chatId) {
+    const done = await approveSwitchByOwner(switchCard[1], switchCard[2] === "w" ? "web" : "telegram").catch((err) => {
+      logError("telegramMenu:approveSwitch", err);
+      return false;
+    });
+    await answerCallback(botToken, query.id, done ? "Готово, переведена" : "Не получилось");
     return;
   }
   const match = /^mn:inv:(50|70|qa)$/.exec(query.data ?? "");
