@@ -12,7 +12,9 @@ import { Sheet } from "./Sheet";
  * и объяснит почему (GET/POST /admin/access-link/*, course/ownerLink.ts).
  */
 type Person = { id: string; handle: string; name: string | null; courses: string[] };
-type Issued = { kind: "web"; url: string } | { kind: "telegram"; links: { course: string; url: string }[] };
+type Issued =
+  | { kind: "web"; url: string; closedInvite?: boolean }
+  | { kind: "telegram"; links: { course: string; url: string }[] };
 
 const COURSE_NAME: Record<string, string> = { COURSE50: "Арт-десерты", COURSE70: "21 рецепт" };
 const courseName = (c: string) => COURSE_NAME[c] ?? c;
@@ -166,7 +168,7 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
           >
             Ссылка на сайт (без Telegram)
           </button>
-          <p className="hint">«Ссылка на сайт» — прошлая ссылка на сайт перестанет работать, новая откроется на первом телефоне, где её нажмут. «Ссылка в Telegram-группу» сайтовую ссылку не трогает.</p>
+          <p className="hint">«Ссылка на сайт» — прошлая ссылка на сайт перестанет работать, новая откроется на первом телефоне, где её нажмут; неиспользованное приглашение в группу закроется. «Ссылка в Telegram-группу» сайтовую ссылку не трогает.</p>
           <button type="button" className="btn ghost small" onClick={() => setPerson(null)}>
             Выбрать другого человека
           </button>
@@ -196,6 +198,9 @@ export function AccessLinkSheet(props: { open: boolean; onClose: () => void }) {
               </div>
             </div>
           ))}
+          {issued.kind === "web" && issued.closedInvite && (
+            <p className="hint">Приглашение в группу Telegram закрыто — у неё один способ входа, сайт. Из самой группы её не убирали.</p>
+          )}
           <p className="hint">Перешлите ссылку только этой ученице. Закроете окно — ссылку можно выдать заново.</p>
           <button type="button" className="btn ghost wide" onClick={close}>
             Готово

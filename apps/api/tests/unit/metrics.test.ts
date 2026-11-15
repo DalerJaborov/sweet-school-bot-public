@@ -3,8 +3,18 @@ import express from "express";
 import type { Server } from "node:http";
 import { mockPrisma, restorePrisma, type PrismaMock } from "../helpers.js";
 
-const issueCourseLink = vi.fn(async () => "https://school.tj/course?t=new");
-vi.mock("../../src/course/delivery.js", () => ({ issueCourseLink: (...a: unknown[]) => issueCourseLink(...a) }));
+// «Новая ссылка» идёт общей дверью ручной выдачи (ownerLink.ts): она помечает выдачу и говорит, закрыто ли приглашение.
+const issueOwnerLink = vi.fn(async (..._a: unknown[]) => ({
+  ok: true as const,
+  kind: "web" as const,
+  url: "https://school.tj/course?t=new",
+  courses: ["COURSE50"],
+  closedInvite: true,
+}));
+vi.mock("../../src/course/ownerLink.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/course/ownerLink.js")>()),
+  issueOwnerLink: (...a: unknown[]) => issueOwnerLink(...a),
+}));
 
 import {
   metricsRouter,
@@ -82,7 +92,7 @@ describe("metrics: воронка и выручка на моке базы", () 
     db = mockPrisma();
     vi.useFakeTimers();
     vi.setSystemTime(now);
-    issueCourseLink.mockClear();
+    issueOwnerLink.mockClear();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -184,7 +194,7 @@ describe("metrics: карточка ученицы", () => {
   let db: PrismaMock;
   beforeEach(() => {
     db = mockPrisma();
-    issueCourseLink.mockClear();
+    issueOwnerLink.mockClear();
   });
   afterEach(restorePrisma);
 
@@ -288,16 +298,16 @@ describe("metrics: карточка ученицы", () => {
     expect(res.status).toBe(404);
   });
 
-  it("POST .../link — новая ссылка через issueCourseLink; без действующих покупок 409", async () => {
+  it("POST .../link — новая ссылка через дверь issueOwnerLink (и «приглашение закрыто»); без действующих покупок 409", async () => {
     db.model("purchase").count.mockResolvedValue(1);
     const ok = await fetch(`${base}/admin/metrics/student/c1/link`, { method: "POST" });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ url: "https://school.tj/course?t=new" });
-    expect(issueCourseLink).toHaveBeenCalledWith("c1", { automatic: false });
+    expect(await ok.json()).toEqual({ url: "https://school.tj/course?t=new", closedInvite: true });
+    expect(issueOwnerLink).toHaveBeenCalledWith("c1", "web");
 
     db.model("purchase").count.mockResolvedValue(0);
     const no = await fetch(`${base}/admin/metrics/student/c1/link`, { method: "POST" });
     expect(no.status).toBe(409);
-    expect(issueCourseLink).toHaveBeenCalledTimes(1);
+    expect(issueOwnerLink).toHaveBeenCalledTimes(1);
   });
 });

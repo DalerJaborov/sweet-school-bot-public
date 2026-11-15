@@ -95,3 +95,23 @@ describe("ErrorScreen: публичный код покупательницы", 
     expect(decodeURIComponent(String(wa.getAttribute("href")))).not.toContain("Ab3kQ9xZpm");
   });
 });
+
+describe("ErrorScreen: нет кнопки «в Telegram» (ревью PR 64: ученица только на сайте теряла уроки)", () => {
+  afterEach(() => localStorage.clear());
+
+  for (const reason of ["not_found", "no_session", "revoked", "network"] as const) {
+    it(`отказ «${reason}»: ни кнопки, ни ссылки с просьбой перевести в Telegram`, async () => {
+      localStorage.setItem("course.recoveryCode", "7F3A-91C2");
+      render(<ErrorScreen t={t} error={{ message: "x", reason }} onRetry={() => undefined} school={contacts} />);
+      // Прежние подписи кнопки (ru/tg) — их нет ни в каком виде.
+      expect(screen.queryByText(/Открыть уроки в Telegram|Дарсҳоро дар Telegram/i)).toBeNull();
+      // Ни одна ссылка не несёт готовую просьбу «хочу в Telegram» боту.
+      for (const link of screen.queryAllByRole("link")) {
+        expect(decodeURIComponent(String(link.getAttribute("href")))).not.toMatch(/хочу в telegram|дар telegram мехоҳам/i);
+      }
+      expect("switchToTelegram" in t).toBe(false);
+      expect("switchToTelegram" in dict("tg")).toBe(false);
+    });
+  }
+});
+

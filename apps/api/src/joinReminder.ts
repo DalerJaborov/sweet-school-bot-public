@@ -26,6 +26,8 @@ import { deliveryMode, deliveryModeFor, issueCourseLink, type DeliveryMode } fro
  */
 
 const AFTER_HOURS = 20;
+/** Личная ссылка на сайт (course/access.ts issueMagicLink: <адрес>/l/<код>). */
+const SITE_LINK = /\/l\/[A-Za-z0-9_-]{10,}$/;
 /** Meta пускает нас писать первым только 24 часа после сообщения человека.
  *  Напоминание в 20 часов укладывается, но проверяем окно по последнему
  *  входящему: если он написал раньше, писать уже нельзя. */
@@ -150,7 +152,27 @@ async function sweep(): Promise<void> {
       (contact.channel === "WEB" || (lastIn != null && (Date.now() - lastIn.createdAt.getTime()) / 3_600_000 < META_WINDOW_HOURS));
 
     // Пришедшая с сайта получает платформу при любом режиме (deliveryModeFor).
-    const contactMode = await deliveryModeFor(contact);
+    let contactMode = await deliveryModeFor(contact);
+    // Владелец сам выдал ей сайт (Purchase.inviteLink — ссылка на сайт, course/ownerLink.ts):
+    // выбор человека при этом не меняется, но звать её в группу поверх сайта нельзя — одна ссылка.
+    if (contactMode !== "web") {
+      const open = await prisma.purchase.findMany({
+        where: { contactId: contact.id, revokedAt: null, joinedAt: null },
+        select: { inviteLink: true },
+      });
+      if (open.length > 0 && open.every((p) => SITE_LINK.test(p.inviteLink ?? ""))) contactMode = "web";
+    }
+    // Режим «Telegram» отбирает «не вошла в группу», но она учится на сайте и уроки
+    // уже открывала: напоминать «вы ещё не открыли уроки» неправда. Отметка ставится — один раз.
+    if (mode === "telegram" && contactMode === "web") {
+      const unopened = await prisma.purchase.count({
+        where: { contactId: contact.id, revokedAt: null, firstOpenedAt: null },
+      });
+      if (unopened === 0) {
+        await prisma.contact.update({ where: { id: contact.id }, data: { joinReminderAt: new Date() } });
+        continue;
+      }
+    }
     const deliveredUpdates: { id: string; link: string }[] = [];
     const links = windowOpen ? await reissueLinks(contact.id, botToken, contactMode, deliveredUpdates) : [];
     let uncertain = pendingUncertain;

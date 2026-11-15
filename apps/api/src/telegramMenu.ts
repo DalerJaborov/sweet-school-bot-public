@@ -1,4 +1,5 @@
 import { approveTransferByOwner } from "./course/phoneChange.js";
+import { approveSwitchByOwner } from "./course/channelSwitch.js";
 import { prisma, getSetting, setSetting, logError } from "./db.js";
 import { answerCallback, chatRole, createOneTimeInviteLink, sendTelegramMessage, sendWithMarkup, trustedChatIds, type ChatRole } from "./telegram.js";
 import { buildTodayText, handleOwnerWords, sendControlMenu, sendNotifyMenu } from "./telegramControl.js";
@@ -342,7 +343,8 @@ ${result.url}
 
 ` +
       "Она личная: откроется на первом телефоне, где её нажмут, пересылать дальше нельзя. " +
-      "Прошлая ссылка с этой минуты не работает.";
+      "Прошлая ссылка с этой минуты не работает." +
+      (result.closedInvite ? " Приглашение в группу Telegram закрыто (из самой группы её не убирали)." : "");
     // Прошлая ссылка уже погашена: если сообщение не ушло, повторяем без кнопки, а не теряем ссылку.
     if (!(await sendWithMarkup(botToken, chatId, body, shareButton(result.url)))) {
       await sendTelegramMessage(botToken, chatId, body);
@@ -524,6 +526,23 @@ export async function handleMenuCallback(botToken: string, query: MenuQuery): Pr
       expired: "Карточка устарела или уже использована: пусть напишет боту снова",
       blocked: "Устройство заблокировано: сначала разблокируйте его в панели",
       failed: "Не получилось отправить ссылку. Новая карточка придёт, когда она напишет снова",
+    }[done];
+    await answerCallback(botToken, query.id, answer);
+    return;
+  }
+  const switchCard = /^mn:sw:([0-9a-f-]{36}):([wt])$/.exec(query.data ?? "");
+  if (switchCard && query.id && chatId) {
+    // Карточка одноразовая и живёт сутки (channelSwitch.ts): второе и позднее нажатие ничего не меняют.
+    const done = await approveSwitchByOwner(switchCard[1], switchCard[2] === "w" ? "web" : "telegram").catch((err) => {
+      logError("telegramMenu:approveSwitch", err);
+      return "failed" as const;
+    });
+    const answer = {
+      ok: "Готово, переведена, ей написали",
+      already: "Ничего не меняла: у неё уже этот способ входа",
+      expired: "Карточка устарела или уже использована. Если нужно — «Выдать ссылку» в меню",
+      banned: "В группе она заблокирована: разблокируйте её в самой группе",
+      failed: "Не получилось. Если доступ у неё не отобран, попробуйте через минуту",
     }[done];
     await answerCallback(botToken, query.id, answer);
     return;

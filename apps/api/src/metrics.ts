@@ -2,7 +2,7 @@ import { Router } from "express";
 import { prisma } from "./db.js";
 import { autoCatch } from "./asyncRoute.js";
 import { describeDevice } from "./course/access.js";
-import { issueCourseLink } from "./course/delivery.js";
+import { issueOwnerLink, REASON_TEXT } from "./course/ownerLink.js";
 
 /**
  * ЦИФРЫ ДЛЯ «ДЕНЕГ» И КАРТОЧКА УЧЕНИЦЫ — волна 2 предложения «Утро Ширин»
@@ -513,9 +513,10 @@ metricsRouter.get("/admin/metrics/student/:contactId", async (req, res) => {
 
 /**
  * НОВАЯ ССЫЛКА ИЗ ПАНЕЛИ — то же, что команда /ссылка в Telegram
- * (course/manualLink.ts): issueCourseLink выпускает свежую ссылку, прошлая
- * с этой минуты не работает. Только для действующих покупок: отозванный
- * доступ так не оживить — для этого есть «Вернуть доступ».
+ * (course/manualLink.ts): общая дверь ручной выдачи ownerLink.ts выпускает
+ * свежую ссылку (прошлая с этой минуты не работает), помечает выдачу и
+ * закрывает неиспользованное приглашение в группу. Только для действующих
+ * покупок: отозванный доступ так не оживить — для этого есть «Вернуть доступ».
  */
 metricsRouter.post("/admin/metrics/student/:contactId/link", async (req, res) => {
   const active = await prisma.purchase.count({ where: { contactId: req.params.contactId, revokedAt: null } });
@@ -523,10 +524,10 @@ metricsRouter.post("/admin/metrics/student/:contactId/link", async (req, res) =>
     res.status(409).json({ error: "У неё нет действующего курса — ссылку выдавать не за что" });
     return;
   }
-  const url = await issueCourseLink(req.params.contactId, { automatic: false });
-  if (!url) {
-    res.status(409).json({ error: "Адрес платформы не задан в настройках — ссылку собрать не из чего" });
+  const issued = await issueOwnerLink(req.params.contactId, "web");
+  if (!issued.ok || issued.kind !== "web") {
+    res.status(409).json({ error: issued.ok ? "Не получилось выдать ссылку" : REASON_TEXT[issued.reason] });
     return;
   }
-  res.json({ url });
+  res.json({ url: issued.url, closedInvite: issued.closedInvite });
 });
