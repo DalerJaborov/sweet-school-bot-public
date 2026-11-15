@@ -10,7 +10,17 @@ import { sendReceiptForReview, summaryChatIds } from "../telegram.js";
 import { sendKind } from "../notify.js";
 import { grantCourses } from "./grantCourses.js";
 import { markExamplesAsSuccessful } from "./styleLearning.js";
-import { allocate, COURSE_TITLE, coursesForAmount, foreignShortfallOk, planForAmount, splitAmount, type Course } from "../courses.js";
+import {
+  allocate,
+  COURSE_TITLE,
+  coursesForAmount,
+  currencyCode,
+  foreignShortfallOk,
+  isForeignCurrency,
+  planForAmount,
+  splitAmount,
+  type Course,
+} from "../courses.js";
 import { toSomoni } from "../exchangeRates.js";
 import { type ClientLanguage } from "./clientLanguage.js";
 import { contactLanguage } from "./contactLanguage.js";
@@ -194,12 +204,6 @@ async function tellAlreadyAccepted(contact: Contact, lastText: string | null = n
   return sent;
 }
 
-/** Коды, которые toSomoni() считает сомони: такой чек не «в валюте». */
-const SOMONI_CODES = new Set(["TJS", "SOMONI", "СОМОНИ"]);
-/** Код валюты чека одним способом на весь разбор: « tjs » - это сомони, пусто - сомони. */
-function currencyCode(raw: string | null | undefined): string {
-  return (raw ?? "").trim().toUpperCase() || "TJS";
-}
 
 /**
  * УЖЕ ПОКУПАЛА ДО ЭТОГО ЧЕКА (решение владельца Q20, 15.11.2026). Чек без даты
@@ -400,7 +404,7 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
     const queued = await prisma.receiptCheck.findUnique({ where: { id: existingId }, select: { createdAt: true } });
     queuedAt = queued?.createdAt ?? null;
     if (queued) {
-      const tjs = verdict.amount != null && SOMONI_CODES.has(currencyCode(verdict.currency));
+      const tjs = verdict.amount != null && !isForeignCurrency(verdict.currency);
       // Другой чек этого человека уже открыл доступ после этого: покупки могли
       // появиться от него, а не от ручной выдачи - решают обычные проверки
       // повтора и второго платежа ниже, молча не закрываем.
@@ -466,7 +470,7 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
   // ЧЕК ИЗ-ЗА ГРАНИЦЫ. Переводим по текущему курсу и дальше работаем уже с сомони.
   let amount = verdict.amount;
   const currency = currencyCode(verdict.currency);
-  if (amount != null && !SOMONI_CODES.has(currency)) {
+  if (amount != null && isForeignCurrency(currency)) {
     const converted = await toSomoni(amount, currency);
     if (converted == null) {
       kind = "suspicious";
@@ -605,7 +609,8 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
     }
   }
 
-  const plan = amount != null ? await allocate(contact.id, Math.round(amount)) : null;
+  // Чек в валюте - со своим допуском недобора (courses.shortfallAllowed, Q20).
+  const plan = amount != null ? await allocate(contact.id, Math.round(amount), currency) : null;
   if (kind === "valid" && plan && plan.grant.length === 0 && !sameTransfer) {
     kind = "suspicious";
     hard = true;
@@ -617,8 +622,12 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
   // за 70, пришёл старый чек на 70: полоса курса за 50 его тоже вмещает, и
   // allocate() открыл бы второй курс бесплатно. Если после вычета купленного
   // у суммы не осталось своих курсов - чек идёт владельцу.
+  // own - как посчитает кнопка Ширин (сумма в сомони, обычный допуск): по нему
+  // строка «Подтвердить откроет». Сверка автоматики - с тем же допуском, что у
+  // allocate выше (для валюты он шире при дорогих курсах, Q20).
   const own = amount != null ? await planForAmount(contact.id, amount) : null;
-  const wanted = own?.wanted ?? [];
+  const ownAuto = amount != null && isForeignCurrency(currency) ? await planForAmount(contact.id, amount, currency) : own;
+  const wanted = ownAuto?.wanted ?? [];
   const safeGrant = plan ? plan.grant.filter((c) => wanted.includes(c)) : [];
   if (kind === "valid" && plan && plan.grant.length > 0 && !sameTransfer && safeGrant.length !== plan.grant.length) {
     kind = "suspicious";
@@ -649,11 +658,11 @@ async function handleReceiptVerdictNow(contact: Contact, verdict: ReceiptVerdict
     causes.push("нет ни даты, ни номера операции, а клиентка уже покупала раньше");
   }
   // ЧЕК В ВАЛЮТЕ: недобор не больше процента от цены (Q20, «Цены и даты»).
-  if (kind === "valid" && !sameTransfer && !conversionFailed && !SOMONI_CODES.has(currency) && amount != null && plan && plan.grant.length > 0) {
-    const fx = await foreignShortfallOk(amount, plan.grant);
+  if (kind === "valid" && !sameTransfer && !conversionFailed && isForeignCurrency(currency) && amount != null && plan && plan.grant.length > 0) {
+    const fx = await foreignShortfallOk(amount, plan.grant, currency);
     if (!fx.ok) {
       causes.push(
-        `чек в ${currency}: по курсу ${Math.round(amount * 100) / 100} сомони, меньше цены ${fx.price} больше чем на ${fx.pct}%`
+        `чек в ${currency}: по курсу ${Math.round(amount * 100) / 100} сомони, меньше цены ${fx.price} больше чем на ${Math.round(fx.allowed * 10) / 10}`
       );
     }
   }

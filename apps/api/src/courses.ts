@@ -1,5 +1,5 @@
 import { prisma, getSetting } from "./db.js";
-import { getPaymentTolerance, getPrices } from "./services/priceService.js";
+import { getPaymentTolerance, getPrices, type PaymentTolerance } from "./services/priceService.js";
 
 /**
  * ДВА КУРСА И ЧТО ЗА КАКИЕ ДЕНЬГИ ВЫДАВАТЬ.
@@ -38,6 +38,33 @@ function near(amount: number, price: number, down: number, up: number): boolean 
   return amount >= price - down && amount <= price + up;
 }
 
+/** Коды, которые считаются сомони (как в exchangeRates.toSomoni). */
+const SOMONI_CODES = new Set(["TJS", "SOMONI", "СОМОНИ"]);
+
+/** Код валюты одним способом: « tjs » - сомони, пусто - сомони. */
+export function currencyCode(raw: string | null | undefined): string {
+  return (raw ?? "").trim().toUpperCase() || "TJS";
+}
+
+/** Чек не в сомони (рубли, доллары…). */
+export function isForeignCurrency(raw: string | null | undefined): boolean {
+  return !SOMONI_CODES.has(currencyCode(raw));
+}
+
+/**
+ * НА СКОЛЬКО СОМОНИ ЧЕК МОЖЕТ НЕ ДОБРАТЬ ДО ЦЕНЫ - ОДНО МЕСТО.
+ *  - сомони: допуск вниз из «Цены и даты» (6 по умолчанию, комиссия банка);
+ *  - валюта (решение владельца Q20, 15.11.2026: «5%, но не меньше 6 сомони»):
+ *    max(процент от цены, допуск в сомони). Сумму в валюте мы переводим по
+ *    СВОЕМУ курсу, а банк клиентки - по своему: разница растёт с ценой. При
+ *    ценах 50/70/100 это те же 6 сомони, при цене 200 - уже 10.
+ * Оба слагаемых ограничены потолками настроек (15 сомони, 10%).
+ */
+export function shortfallAllowed(price: number, tol: PaymentTolerance, currency?: string | null): number {
+  if (!isForeignCurrency(currency)) return tol.down;
+  return Math.max((price * tol.foreignPct) / 100, tol.down);
+}
+
 /** Настройка chat_id группы для курса. */
 export function chatKeyFor(course: Course): string {
   return course === COURSE_50 ? "telegramChatId50" : "telegramChatId70";
@@ -69,9 +96,9 @@ export type Allocation = {
  * Возвращает ПУСТОЙ список, если сумма ни на что не похожа — тогда чек уходит
  * владельцу на глаза, а не отвергается молча и не открывает доступ наугад.
  */
-export async function allocate(contactId: string, amount: number): Promise<Allocation> {
+export async function allocate(contactId: string, amount: number, currency?: string | null): Promise<Allocation> {
   const [owned, prices, tol] = await Promise.all([ownedCourses(contactId), getPrices(), getPaymentTolerance()]);
-  const DOWN = tol.down;
+  const downFor = (target: number) => shortfallAllowed(target, tol, currency);
   const { price: PRICE, bundle: BUNDLE_PRICE, bundleFull: BUNDLE_FULL_PRICE } = prices;
   const missing = ([COURSE_50, COURSE_70] as Course[]).filter((c) => !owned.includes(c));
 
@@ -85,7 +112,7 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   // запасом сверху. Проверяется ПЕРЕД одиночными курсами: полоса курса за 70
   // с допуском вверх дотягивается до 100, и без этого порядка комплект за 100
   // открывал бы один курс.
-  if (missing.length === 2 && amount >= BUNDLE_PRICE - DOWN && amount <= BUNDLE_FULL_PRICE + tol.up + 10) {
+  if (missing.length === 2 && amount >= BUNDLE_PRICE - downFor(BUNDLE_PRICE) && amount <= BUNDLE_FULL_PRICE + tol.up + 10) {
     return { grant: missing, note: `оплата за оба курса (${Math.round(amount)} сомони)` };
   }
 
@@ -94,7 +121,7 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   // формально попадает и в полосу пятидесятого курса — и без выбора ближайшего
   // код выдавал за 70 сомони курс за 50.
   const fits = missing
-    .filter((course) => near(amount, PRICE[course], DOWN, tol.up))
+    .filter((course) => near(amount, PRICE[course], downFor(PRICE[course]), tol.up))
     .sort((a, b) => Math.abs(amount - PRICE[a]) - Math.abs(amount - PRICE[b]));
   if (fits.length > 0) {
     const course = fits[0];
@@ -106,40 +133,35 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
 }
 
 /**
- * ЧЕК В ВАЛЮТЕ (рубли, доллары…): НЕДОБОР — НЕ БОЛЬШЕ ПРОЦЕНТА ОТ ЦЕНЫ
- * (решение владельца Q20, 15.11.2026; «Цены и даты» → допуск для рублей).
- *
- * Сумму в валюте мы переводим в сомони по СВОЕМУ курсу, а банк клиентки считал
- * по своему: расхождение пропорционально сумме, а не фиксировано. Раньше для
- * рублей действовал тот же допуск 6 сомони, что и для сомони, — это ворота
- * только для АВТОприёма: что открыть, по-прежнему решает allocate(), а кнопка
- * Ширин в карточке считает по обычному допуску (её решение — глазами).
- *
- * Цель — то, что выдаётся: два курса — цена комплекта, один — цена курса.
- * При ценах 50/70/100 процент (2.5/3.5/5 сомони) уже допуска 6, поэтому
- * действует именно он; если цены вырастут так, что процент станет шире 6
- * сомони, внешней границей останется допуск allocate().
+ * ЧЕК В ВАЛЮТЕ: ВОРОТА АВТОПРИЁМА ПО НЕОКРУГЛЁННОЙ СУММЕ (Q20, 15.11.2026).
+ * allocate() решает по округлённой сумме (63.5 -> 64), а недобор считается от
+ * настоящей суммы после перевода: 63.5 за курс 70 - это 6.5, больше допуска 6,
+ * значит к Ширин. Цель - то, что выдаётся: два курса - цена комплекта, один -
+ * цена курса. Допуск - shortfallAllowed (тот же, что у allocate).
  */
 export async function foreignShortfallOk(
   amount: number,
-  grant: Course[]
-): Promise<{ ok: boolean; price: number; minimum: number; pct: number }> {
+  grant: Course[],
+  currency: string | null = "RUB"
+): Promise<{ ok: boolean; price: number; minimum: number; allowed: number }> {
   const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
   const price = grant.length >= 2 ? prices.bundle : grant.length === 1 ? prices.price[grant[0]] : 0;
-  const minimum = price - (price * tol.foreignPct) / 100;
-  return { ok: grant.length > 0 && amount >= minimum, price, minimum, pct: tol.foreignPct };
+  const allowed = shortfallAllowed(price, tol, currency);
+  const minimum = price - allowed;
+  return { ok: grant.length > 0 && amount >= minimum, price, minimum, allowed };
 }
 
 /**
  * Какие курсы даёт сумма чека, НЕ глядя на то, что уже куплено (для проверки
  * "этот платёж уже обслужен"). Те же границы, что у allocate().
  */
-export async function coursesForAmount(amount: number): Promise<Course[]> {
+export async function coursesForAmount(amount: number, currency?: string | null): Promise<Course[]> {
   const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
   const { price, bundle, bundleFull } = prices;
-  if (amount >= bundle - tol.down && amount <= bundleFull + tol.up + 10) return [COURSE_50, COURSE_70];
+  const downFor = (target: number) => shortfallAllowed(target, tol, currency);
+  if (amount >= bundle - downFor(bundle) && amount <= bundleFull + tol.up + 10) return [COURSE_50, COURSE_70];
   const fits = ([COURSE_50, COURSE_70] as Course[])
-    .filter((course) => near(amount, price[course], tol.down, tol.up))
+    .filter((course) => near(amount, price[course], downFor(price[course]), tol.up))
     .sort((a, b) => Math.abs(amount - price[a]) - Math.abs(amount - price[b]));
   return fits.length > 0 ? [fits[0]] : [];
 }
@@ -173,10 +195,11 @@ export function awaitsBotDelivery(p: {
  */
 export async function planForAmount(
   contactId: string,
-  rawAmount: number
+  rawAmount: number,
+  currency?: string | null
 ): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; revoked: Course[]; retry: Course[]; amount: number }> {
   const amount = Math.round(rawAmount);
-  const wanted = await coursesForAmount(amount);
+  const wanted = await coursesForAmount(amount, currency);
   const rows = await prisma.purchase
     .findMany({
       where: { contactId, course: { in: wanted } },

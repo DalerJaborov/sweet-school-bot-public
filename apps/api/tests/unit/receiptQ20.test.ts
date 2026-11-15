@@ -40,7 +40,7 @@ vi.mock("../../src/exchangeRates.js", () => ({
 
 import { handleReceiptVerdict } from "../../src/ai/receiptVerdict.js";
 import { resetPriceCache, getPaymentTolerance } from "../../src/services/priceService.js";
-import { foreignShortfallOk } from "../../src/courses.js";
+import { foreignShortfallOk, shortfallAllowed } from "../../src/courses.js";
 import { parseOffer, OFFER_DEFAULTS } from "../../src/services/offerService.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -284,19 +284,30 @@ describe("ревью PR 72: гонка и деление суммы", () => {
   });
 });
 
-describe("Q20 б: чек в рублях - допуск 5% от цены", () => {
-  it("640 ₽ ≈ 67 сомони за курс 70 (меньше на 4.3%): проходит сам", async () => {
+describe("Q20 б: чек в валюте - «5%, но не меньше 6 сомони»", () => {
+  async function setPrices(c50: number, c70: number, bundle: number) {
+    await db.setting.createMany({
+      data: [
+        { key: "priceCourse50", value: String(c50) },
+        { key: "priceCourse70", value: String(c70) },
+        { key: "priceBundle", value: String(bundle) },
+      ],
+    });
+    resetPriceCache();
+  }
+
+  it("цены 50/70/100: рубли, недобор 6 за курс 70 (64 сомони) - проходит сам", async () => {
     const c = await newContact("f1");
-    toSomoni.mockResolvedValue(67);
-    await handleReceiptVerdict(c, verdict("f1", { amount: 640, currency: "RUB" }));
+    toSomoni.mockResolvedValue(64);
+    await handleReceiptVerdict(c, verdict("f1", { amount: 585, currency: "RUB" }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect(sendReceiptForReview).not.toHaveBeenCalled();
   });
 
-  it("≈ 66 сомони за курс 70 (меньше на 5.7%): к Ширин, хотя для сомони 66 прошло бы (допуск 6)", async () => {
+  it("цены 50/70/100: рубли, недобор 6.5 (63.5 сомони) - к Ширин, хотя округлённые 64 попали бы в полосу", async () => {
     const c = await newContact("f2");
-    toSomoni.mockResolvedValue(66);
-    await handleReceiptVerdict(c, verdict("f2", { amount: 600, currency: "RUB" }));
+    toSomoni.mockResolvedValue(63.5);
+    await handleReceiptVerdict(c, verdict("f2", { amount: 580, currency: "RUB" }));
     expect(grantCourses).not.toHaveBeenCalled();
     expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
     expect(ownerCaption()).toMatch(/чек в RUB/);
@@ -305,48 +316,76 @@ describe("Q20 б: чек в рублях - допуск 5% от цены", () =>
     expect(sentTexts().some((t) => /передаю Ширин/.test(t))).toBe(true);
   });
 
-  it("сомони: 66 за курс 70 по-прежнему проходит сам (допуск 6 сомони не тронут)", async () => {
-    const c = await newContact("f3");
-    await handleReceiptVerdict(c, verdict("f3", { amount: 66, currency: "TJS" }));
-    expect(grantCourses).toHaveBeenCalledTimes(1);
-    expect(toSomoni).not.toHaveBeenCalled();
-  });
-
-  it("ровно 66.5 сомони (5%) за курс 70: граница включительно, проходит", async () => {
-    const c = await newContact("f4");
-    toSomoni.mockResolvedValue(66.5);
-    await handleReceiptVerdict(c, verdict("f4", { amount: 605, currency: "RUB" }));
-    expect(grantCourses).toHaveBeenCalledTimes(1);
-  });
-
-  it("комплект: 94.5 сомони за 100 - к Ширин (а не тихо один курс), 96 - оба курса сами", async () => {
-    const a = await newContact("f5a");
-    toSomoni.mockResolvedValue(94.5);
-    await handleReceiptVerdict(a, verdict("f5a", { amount: 860, currency: "RUB" }));
-    expect(grantCourses).not.toHaveBeenCalled();
-    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
-
-    const b = await newContact("f5b");
-    toSomoni.mockResolvedValue(96);
-    await handleReceiptVerdict(b, verdict("f5b", { amount: 875, currency: "RUB" }));
+  it("цены 50/70/100: комплект - недобор 6 (94) сам, 6.5 (93.5) к Ширин", async () => {
+    const a = await newContact("f3a");
+    toSomoni.mockResolvedValue(94);
+    await handleReceiptVerdict(a, verdict("f3a", { amount: 860, currency: "RUB" }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
     expect((grantCourses.mock.calls[0][1] as { grant: string[] }).grant.sort()).toEqual(["COURSE50", "COURSE70"]);
+
+    grantCourses.mockClear();
+    const b = await newContact("f3b");
+    toSomoni.mockResolvedValue(93.5);
+    await handleReceiptVerdict(b, verdict("f3b", { amount: 855, currency: "RUB" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+    expect(sendReceiptForReview).toHaveBeenCalledTimes(1);
   });
 
-  it("доллары и другая валюта - то же правило процента", async () => {
+  it("курс за 200: рубли, недобор 10 (5%) проходит сам, 10.5 - к Ширин; в сомони тот же недобор 10 - к Ширин", async () => {
+    await setPrices(50, 200, 230);
+    const ok = await newContact("f4a");
+    toSomoni.mockResolvedValue(190);
+    await handleReceiptVerdict(ok, verdict("f4a", { amount: 1730, currency: "RUB" }));
+    expect(grantCourses).toHaveBeenCalledTimes(1);
+    expect((grantCourses.mock.calls[0][1] as { grant: string[] }).grant).toEqual(["COURSE70"]);
+
+    grantCourses.mockClear();
+    const short = await newContact("f4b");
+    toSomoni.mockResolvedValue(189.5);
+    await handleReceiptVerdict(short, verdict("f4b", { amount: 1725, currency: "RUB" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+
+    const tjs = await newContact("f4c");
+    await handleReceiptVerdict(tjs, verdict("f4c", { amount: 190, currency: "TJS" }));
+    expect(grantCourses).not.toHaveBeenCalled();
+  });
+
+  it("сомони: допуск 6 не тронут - 64 открывает курс 70, 63 курс 70 уже не открывает", async () => {
+    const a = await newContact("f5a");
+    await handleReceiptVerdict(a, verdict("f5a", { amount: 64, currency: "TJS" }));
+    expect((grantCourses.mock.calls[0][1] as { grant: string[] }).grant).toEqual(["COURSE70"]);
+    expect(toSomoni).not.toHaveBeenCalled();
+    grantCourses.mockClear();
+    const b = await newContact("f5b");
+    await handleReceiptVerdict(b, verdict("f5b", { amount: 63, currency: "TJS" }));
+    // 63 попадает в полосу курса 50 с допуском вверх - так было и раньше; курс 70 не открыт.
+    expect(grantCourses.mock.calls.every((call) => !(call[1] as { grant: string[] }).grant.includes("COURSE70"))).toBe(true);
+  });
+
+  it("доллары и другая валюта - то же правило", async () => {
     const c = await newContact("f6");
-    toSomoni.mockResolvedValue(66);
+    toSomoni.mockResolvedValue(63.5);
     await handleReceiptVerdict(c, verdict("f6", { amount: 6.2, currency: "USD" }));
     expect(grantCourses).not.toHaveBeenCalled();
     expect(ownerCaption()).toMatch(/чек в USD/);
   });
 
-  it("процент из настроек: 10% пропускает 64 сомони за курс 70", async () => {
+  it("процент из настроек: 10% при цене 70 даёт 7 - пропускает 63 сомони", async () => {
     await db.setting.create({ data: { key: "receiptToleranceForeignPct", value: "10" } });
     const c = await newContact("f7");
-    toSomoni.mockResolvedValue(64);
-    await handleReceiptVerdict(c, verdict("f7", { amount: 580, currency: "RUB" }));
+    toSomoni.mockResolvedValue(63);
+    await handleReceiptVerdict(c, verdict("f7", { amount: 575, currency: "RUB" }));
     expect(grantCourses).toHaveBeenCalledTimes(1);
+  });
+
+  it("одно правило допуска: max(процент от цены, допуск в сомони), только для валюты", () => {
+    const tol = { down: 6, up: 30, foreignPct: 5 };
+    expect(shortfallAllowed(70, tol, "RUB")).toBe(6);
+    expect(shortfallAllowed(100, tol, "RUB")).toBe(6);
+    expect(shortfallAllowed(200, tol, "RUB")).toBe(10);
+    expect(shortfallAllowed(200, tol, "TJS")).toBe(6);
+    expect(shortfallAllowed(200, tol, " tjs ")).toBe(6);
+    expect(shortfallAllowed(200, tol, null)).toBe(6);
   });
 
   it("мусор и значения за пределом в настройке - берётся 5%", async () => {
@@ -358,9 +397,9 @@ describe("Q20 б: чек в рублях - допуск 5% от цены", () =>
   });
 
   it("ворота считают цель выдачи: один курс - его цена, два - цена комплекта", async () => {
-    expect(await foreignShortfallOk(47.5, ["COURSE50"])).toMatchObject({ ok: true, price: 50, minimum: 47.5 });
-    expect(await foreignShortfallOk(47.4, ["COURSE50"])).toMatchObject({ ok: false });
-    expect(await foreignShortfallOk(95, ["COURSE50", "COURSE70"])).toMatchObject({ ok: true, price: 100 });
+    expect(await foreignShortfallOk(44, ["COURSE50"])).toMatchObject({ ok: true, price: 50, minimum: 44 });
+    expect(await foreignShortfallOk(43.9, ["COURSE50"])).toMatchObject({ ok: false });
+    expect(await foreignShortfallOk(94, ["COURSE50", "COURSE70"])).toMatchObject({ ok: true, price: 100 });
     expect(await foreignShortfallOk(100, [])).toMatchObject({ ok: false });
   });
 
