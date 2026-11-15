@@ -13,12 +13,11 @@ beforeEach(() => {
 });
 
 describe("Знакомство перед входом", () => {
-  it("таджикский по умолчанию, оба языка доступны сразу", () => {
+  it("русский по умолчанию, оба языка доступны сразу", () => {
     render(<Onboarding onDone={() => undefined} />);
     expect(screen.getByRole("button", { name: "Тоҷикӣ" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Русский" })).toBeTruthy();
-    expect(screen.getByText("Номи шумо чист?")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Тоҷикӣ" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Русский" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("после выбора таджикского вопрос про имя уже на таджикском", () => {

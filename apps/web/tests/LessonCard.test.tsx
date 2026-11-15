@@ -105,107 +105,32 @@ describe("LessonCard", () => {
     expect(screen.getByText(t.savedChip)).toBeTruthy();
   });
 
-  it("номер урока печатается в углу обложки с ведущим нулём", () => {
+  it("номер урока — в круге слева с ведущим нулём", () => {
     const { container } = render(
       <ul>
         <LessonCard t={t} lesson={lesson()} number={3} online onOpen={() => undefined} />
       </ul>,
     );
-    expect(container.querySelector(".lesson-number")?.textContent).toBe("03");
+    expect(container.querySelector(".lesson-num")?.textContent).toBe("03");
+    expect(container.querySelector("img")).toBeNull();
   });
 
-  it("пройденный урок: лента с галочкой и приглушённая обложка", () => {
+  it("пройденный урок: в круге галочка вместо номера", () => {
     const { container } = render(
       <ul>
-        <LessonCard
-          t={t}
-          lesson={lesson({ completed: true, percent: 100, posterUrl: "https://x/poster.jpg" })}
-          number={1}
-          online
-          onOpen={() => undefined}
-        />
+        <LessonCard t={t} lesson={lesson({ completed: true, percent: 100 })} number={1} online onOpen={() => undefined} />
       </ul>,
     );
-    expect(container.querySelector(".lesson-ribbon")).toBeTruthy();
-    expect(container.querySelector(".lesson-cover.is-done")).toBeTruthy();
+    expect(container.querySelector(".lesson-num.is-done svg")).toBeTruthy();
   });
 
-  it("начатый, но не пройденный урок — прогресс-бар по низу обложки", () => {
+  it("начатый, но не пройденный урок — тонкая полоска прогресса", () => {
     const { container } = render(
       <ul>
         <LessonCard t={t} lesson={lesson({ percent: 40, positionSec: 300 })} number={1} online onOpen={() => undefined} />
       </ul>,
     );
-    const bar = container.querySelector(".lesson-progress") as HTMLElement | null;
-    expect(bar).toBeTruthy();
+    const bar = container.querySelector(".lesson-progress-line > span") as HTMLElement | null;
     expect(bar?.style.width).toBe("40%");
-    expect(container.querySelector(".lesson-ribbon")).toBeNull();
-  });
-
-  it("следующий урок — карточка на всю ширину; без тизера показывает метку «Следующий»", () => {
-    const { container } = render(
-      <ul>
-        <LessonCard t={t} lesson={lesson()} number={1} isNext online onOpen={() => undefined} />
-      </ul>,
-    );
-    expect(container.querySelector("li")?.className).toContain("is-next");
-    expect(screen.getByText(t.nextLesson)).toBeTruthy();
-    expect(container.querySelector("video")).toBeNull();
-  });
-
-  it("следующий урок с тизером — вместо обложки автоплей-видео, без метки", () => {
-    const { container } = render(
-      <ul>
-        <LessonCard
-          t={t}
-          lesson={lesson({ teaserUrl: "https://x/teaser.mp4" })}
-          number={1}
-          isNext
-          online
-          onOpen={() => undefined}
-        />
-      </ul>,
-    );
-    const video = container.querySelector("video") as HTMLVideoElement | null;
-    expect(video).toBeTruthy();
-    // React выставляет muted как DOM-свойство, а не HTML-атрибут — без этого
-    // браузеры блокируют автоплей со звуком, поэтому проверяем свойство.
-    expect(video?.muted).toBe(true);
-    expect(video?.hasAttribute("loop")).toBe(true);
-    expect(screen.queryByText(t.nextLesson)).toBeNull();
-  });
-
-  it("coverUrl предпочтён posterUrl онлайн, но офлайн-постер побеждает без сети", () => {
-    const withCover = lesson({ coverUrl: "https://x/cover.jpg", posterUrl: "https://x/poster.jpg" });
-    const { container, rerender } = render(
-      <ul>
-        <LessonCard t={t} lesson={withCover} number={1} online onOpen={() => undefined} />
-      </ul>,
-    );
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("https://x/cover.jpg");
-
-    rerender(
-      <ul>
-        <LessonCard
-          t={t}
-          lesson={withCover}
-          number={1}
-          online={false}
-          saved={{ lessonId: "l1", title: "Наполеон", segments: 3, bytes: 1, savedAt: 1, lastUsedAt: 1, completed: false, poster: true } as never}
-          onOpen={() => undefined}
-        />
-      </ul>,
-    );
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/offline/poster/l1");
-  });
-
-  it("без обложки и постера — плейсхолдер, а не сломанная картинка", () => {
-    const { container } = render(
-      <ul>
-        <LessonCard t={t} lesson={lesson()} number={1} online onOpen={() => undefined} />
-      </ul>,
-    );
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector(".lesson-cover-ph")).toBeTruthy();
   });
 });
