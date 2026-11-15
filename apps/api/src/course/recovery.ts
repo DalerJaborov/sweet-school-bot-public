@@ -16,7 +16,7 @@ import {
   askSwitchConfirmation,
   clearPendingSwitch,
   handleSwitchRequest,
-  isYes,
+  isSwitchConfirmation,
   parseSwitchRequest,
   pendingSwitchTarget,
 } from "./channelSwitch.js";
@@ -127,7 +127,7 @@ export async function maybeRestoreAccess(
   // Бот уже просил доказательство смены телефона: код, картинка или имя с номером — продолжение.
   // Ответ «да» на вопрос «перевести вас?» — продолжение просьбы о переключении; любое другое сообщение вопрос снимает.
   const confirmTarget = pendingSwitchTarget(contact.id);
-  const confirming = confirmTarget !== null && isYes(text);
+  const confirming = confirmTarget !== null && isSwitchConfirmation(text, confirmTarget);
   // Ожидание снимаем СРАЗУ (до любых await): «да» его расходует, другой ответ отменяет; второе «да» ничего не повторит.
   if (confirmTarget) clearPendingSwitch(contact.id);
   const waiting =

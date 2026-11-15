@@ -8,7 +8,8 @@ import { getChatMemberStatus } from "../telegram.js";
  * Новое приглашение тому, кто уже в группе, — лишняя дверь: его можно переслать
  * подруге. Раньше эта проверка жила только в «Выдать ссылку» (ownerLink.ts), а
  * переход «хочу в Telegram» (channelSwitch.ts) выдавал приглашение всем подряд.
- * Теперь оба пути спрашивают здесь; обход ловит тест groupInviteDoor.test.ts.
+ * Теперь оба пути спрашивают здесь; обход ловит сторож oneLinkDoors.test.ts,
+ * разбор ответов Telegram — groupInvite.test.ts.
  *
  * Как решаем:
  *  - Telegram человека известен — решает сам Telegram (getChatMember): вышла из
@@ -33,7 +34,8 @@ export interface InviteCheck {
   withoutGroup: Purchase[];
 }
 
-/** Статусы, при которых новое приглашение не выдаём. kicked — отдельно (см. banned). */
+/** Статусы, при которых новое приглашение не выдаём. kicked — отдельно (см. banned).
+ *  restricted без is_member telegram.ts getChatMemberStatus уже отдаёт как "left". */
 const MEMBER = new Set(["member", "administrator", "creator", "restricted"]);
 
 export async function checkInviteTargets(

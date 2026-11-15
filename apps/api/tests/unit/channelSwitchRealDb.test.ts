@@ -96,7 +96,7 @@ beforeEach(async () => {
   getChatMemberStatus.mockReset().mockResolvedValue("left");
   sendTelegramMessage.mockClear();
   platformReady.mockReset().mockResolvedValue(true);
-  resetSwitchApprovals();
+  await resetSwitchApprovals();
   for (const t of ["accessEvent", "device", "receiptCheck", "purchase", "message", "contact", "setting"] as const) {
     await (db[t] as unknown as { deleteMany: () => Promise<unknown> }).deleteMany();
   }
@@ -256,6 +256,42 @@ describe("БЛОКЕР 3: карточка владельца «Перевест
     await askOwner(c, "telegram", "просит", true);
     expect(await approveSwitchByOwner("c-1", "web")).toBe("expired");
   });
+
+  it("ревью #95: разрешение карточки лежит в базе, а не в памяти процесса (переживает перезапуск api)", async () => {
+    const c = await setup();
+    await askOwner(c, "web", "просит", true);
+    const rows = await db.setting.findMany({ where: { key: { startsWith: "switchApproval:" } } });
+    expect(rows).toHaveLength(1);
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("ok");
+    expect(await db.setting.count({ where: { key: { startsWith: "switchApproval:" } } })).toBe(0);
+  });
+
+  it("ревью #95: повтор просьбы, пока карточка жива, — новой карточки нет, старая работает", async () => {
+    const c = await setup();
+    await askOwner(c, "web", "просит", true);
+    await askOwner(c, "web", "просит снова", true);
+    expect(sendTelegramMessage.mock.calls.filter((x) => JSON.stringify(x).includes("mn:sw"))).toHaveLength(1);
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("ok");
+  });
+
+  it("ревью #95: карточка использована или истекла — повтор просьбы в те же 12 часов даёт НОВУЮ карточку", async () => {
+    const c = await setup();
+    await askOwner(c, "web", "просит", true);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + DAY + 60_000); // старая истекла
+    await askOwner(c, "web", "просит снова", true);
+    expect(sendTelegramMessage.mock.calls.filter((x) => JSON.stringify(x).includes("mn:sw"))).toHaveLength(2);
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("ok");
+  });
+
+  it("ревью #95: человек уже на этом способе — кнопка честно говорит «ничего не меняла»", async () => {
+    await person({ courseDeliveryChoice: "web" });
+    await bought("COURSE50");
+    const c = (await db.contact.findUnique({ where: { id: "c-1" } }))!;
+    await askOwner(c, "web", "просит", true);
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("already");
+    expect(sendToContact).not.toHaveBeenCalled();
+  });
 });
 
 describe("БЛОКЕР 4: общий выпуск ссылки не закрывает Telegram незаметно", () => {
@@ -392,7 +428,7 @@ describe("БЛОКЕР 6: пометка «в группе» верна и по�
 });
 
 describe("ДЫРА ИЗ #78: выданная кнопкой ссылка на сайт помечена", () => {
-  it("покупка без ссылки получает её, вопрос «куда прислать» снят, выбор «сайт», приглашение закрыто", async () => {
+  it("покупка без ссылки получает её, вопрос «куда прислать» снят, приглашение закрыто, выбор человека НЕ меняется", async () => {
     await person({ inviteLink: OLD_INVITE });
     const waiting = await bought("COURSE50", { inviteLink: null, deliveryAwaitingChoice: true, createdAt: new Date() });
     await db.receiptCheck.create({
@@ -414,7 +450,8 @@ describe("ДЫРА ИЗ #78: выданная кнопкой ссылка на �
     expect(p.inviteLink).toBe(url);
     expect(p.deliveryAwaitingChoice).toBe(false);
     const after = (await db.contact.findUnique({ where: { id: "c-1" } }))!;
-    expect(after.courseDeliveryChoice).toBe("web");
+    // Ревью #95, п.2: ручная выдача не меняет выбор навсегда — следующая покупка идёт по каналу и режиму.
+    expect(after.courseDeliveryChoice).toBeNull();
     expect(after.inviteLink).toBeNull();
     expect(revokeInviteLink).toHaveBeenCalledWith("tok", CHAT50, OLD_INVITE);
     // Проверка «уже выдано» для повторного чека теперь её видит.
@@ -476,6 +513,20 @@ describe("соседнее: напоминание «не зашли в груп
 
     expect(sendToContact).not.toHaveBeenCalled();
     expect((await db.contact.findUnique({ where: { id: "c-1" } }))!.joinReminderAt).toBeInstanceOf(Date);
+  });
+
+  it("ревью #95: выбор не менялся, но покупке владелец выдал сайт — напоминание шлёт сайт, а не приглашение", async () => {
+    const { runJoinReminders } = await import("../../src/joinReminder.js");
+    await person({ paid: true, paidAt: new Date(Date.now() - 2 * DAY) });
+    await bought("COURSE50", { firstOpenedAt: null, inviteLink: null });
+    await db.message.create({ data: { contactId: "c-1", direction: "IN", text: "спасибо" } });
+    expect(await issueOwnerLink("c-1", "web")).toMatchObject({ ok: true });
+    sendToContact.mockClear();
+
+    await runJoinReminders();
+
+    expect(sentText()).toContain("/l/");
+    expect(createOneTimeInviteLink).not.toHaveBeenCalled();
   });
 
   it("выбор «сайт», уроки НЕ открывала — напоминание со ссылкой на сайт уходит, как раньше", async () => {

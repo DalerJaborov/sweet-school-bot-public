@@ -38,7 +38,7 @@ import {
   approveSwitchByOwner,
   parseSwitchRequest,
   isFreeSwitch,
-  resetSwitchApprovals,
+  isSwitchConfirmation,
   askOwner,
 } from "../../src/course/channelSwitch.js";
 import { recoveryCodeFor } from "../../src/course/linkCode.js";
@@ -150,8 +150,30 @@ function wireDb(db: PrismaMock) {
   db.model("telegramInvite").findMany.mockResolvedValue([]);
   db.model("device").deleteMany.mockResolvedValue({ count: 2 });
   db.model("device").findMany.mockResolvedValue([{ id: "d-1", contactId: "c-1", userAgent: "Android" }, { id: "d-2", contactId: "c-1", userAgent: "Android" }]);
+  // Настройки — маленькое хранилище: разрешение карточки «Перевести» живёт в базе (ревью #95).
+  const settings = new Map<string, string>([["telegramBotToken", "token"]]);
   db.model("setting").findUnique.mockImplementation(async ({ where }: { where: { key: string } }) =>
-    where.key === "telegramBotToken" ? { value: "token" } : null,
+    settings.has(where.key) ? { key: where.key, value: settings.get(where.key) } : null,
+  );
+  // Храним только разрешения карточек; состояние тревог (alertGate) по-прежнему не копится между проверками.
+  db.model("setting").upsert.mockImplementation(
+    async ({ where, update }: { where: { key: string }; update: { value: string } }) => {
+      if (where.key.startsWith("switchApproval:")) settings.set(where.key, update.value);
+      return {};
+    },
+  );
+  db.model("setting").deleteMany.mockImplementation(
+    async ({ where }: { where: { key: string | { startsWith: string }; value?: string } }) => {
+      let count = 0;
+      for (const [k, v] of [...settings]) {
+        const keyOk = typeof where.key === "string" ? k === where.key : k.startsWith(where.key.startsWith);
+        if (keyOk && (where.value === undefined || where.value === v)) {
+          settings.delete(k);
+          count++;
+        }
+      }
+      return { count };
+    },
   );
 }
 
@@ -160,7 +182,6 @@ describe("parseSwitchRequest", () => {
     for (const t of [
       "у меня нет телеграма",
       "Телеграм нет, дайте ссылку",
-      "не могу зайти в группу",
       "хочу на сайте смотреть",
       "пришлите ссылку на сайт",
       "телеграм надорам",
@@ -183,6 +204,26 @@ describe("parseSwitchRequest", () => {
     for (const t of ["сколько стоит курс", "видела ваш телеграм канал", "на сайте цена другая", "добрый день", ""]) {
       expect(parseSwitchRequest(t), t).toBeNull();
     }
+  });
+  it("ревью #95: «не могу зайти в группу» и «в телеграм нет ссылки» — не просьба уйти на сайт (это сломанная ссылка)", () => {
+    for (const t of [
+      "не могу зайти в группу",
+      "в телеграм нет ссылки",
+      "телеграм нет ссылки на урок",
+      "ба гурӯҳ даромада наметавонам",
+    ]) {
+      expect(parseSwitchRequest(t), t).not.toBe("web");
+    }
+  });
+});
+
+describe("isSwitchConfirmation (ревью #95: перевод убирает из групп — нужен явный ответ)", () => {
+  it("«да» и «да, на сайт» подтверждают; «ок», «хорошо», «ага» — нет", () => {
+    for (const t of ["да", "Да!", "да, на сайт", "ҳа", "бале", "согласна"]) expect(isSwitchConfirmation(t, "web"), t).toBe(true);
+    for (const t of ["ок", "хорошо", "ага", "ok", "спасибо", "да, в телеграм"]) {
+      expect(isSwitchConfirmation(t, "web"), t).toBe(false);
+    }
+    expect(isSwitchConfirmation("да, в телеграм", "telegram")).toBe(true);
   });
 });
 
@@ -218,7 +259,7 @@ describe("одна действующая ссылка на человека", (
     createOneTimeInviteLink.mockReset().mockResolvedValue("https://t.me/+NEWINVITE");
     revokeInviteLink.mockReset().mockResolvedValue(true);
     getChatMemberStatus.mockReset().mockResolvedValue("left");
-    resetSwitchApprovals();
+    // Разрешения карточек живут в хранилище настроек wireDb — оно новое в каждом тесте.
     contactRow = baseContact();
     purchaseRows = [purchase()];
     otherPurchaseRows = [];
@@ -581,9 +622,9 @@ describe("одна действующая ссылка на человека", (
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("БЛОКЕР 3: карточка одноразовая — первое нажатие «готово» (уже на сайте), второе — «устарела»", async () => {
+  it("БЛОКЕР 3: карточка одноразовая — первое нажатие «ничего не меняла» (уже на сайте), второе — «устарела»", async () => {
     await arm("web");
-    expect(await approveSwitchByOwner("c-1", "web")).toBe("ok"); // уже на сайте -> already
+    expect(await approveSwitchByOwner("c-1", "web")).toBe("already"); // ревью #95: не «переведена»
     expect(await approveSwitchByOwner("c-1", "web")).toBe("expired");
   });
 
@@ -602,6 +643,24 @@ describe("одна действующая ссылка на человека", (
     expect(handled).toHaveLength(1);
     expect(sendText.mock.calls.filter((c) => String(c[1]).includes("Передала Ширин"))).toHaveLength(0);
     expect(JSON.stringify(sendTelegramMessage.mock.calls)).not.toContain("mn:sw");
+  });
+
+  it("ревью #95: на вопрос «перевести на сайт?» ответ «ок» — не согласие, из группы никто не уходит", async () => {
+    contactRow = baseContact({ courseDeliveryChoice: "telegram", inviteLink: TG_LINK, accessTokenId: null, accessIssuedAt: null });
+    purchaseRows = [purchase({ inviteLink: TG_LINK, firstOpenedAt: null })];
+    db.model("receiptCheck").count.mockResolvedValue(1);
+    const { calls } = stubTelegram();
+    await maybeRestoreAccess(asContact(), "у меня нет телеграма, хочу на сайте");
+    sendText.mockClear();
+
+    await maybeRestoreAccess(asContact(), "ок");
+
+    expect(contactRow.courseDeliveryChoice).toBe("telegram");
+    expect(calls("banChatMember")).toHaveLength(0);
+    expect(revokeInviteLink).not.toHaveBeenCalled();
+    // Вопрос снят: следующее «да» уже ничего не переводит.
+    await maybeRestoreAccess(asContact(), "да");
+    expect(contactRow.courseDeliveryChoice).toBe("telegram");
   });
 
   it("две покупки: вопрос «перевести на сайт?» говорит о группах во множественном числе", async () => {

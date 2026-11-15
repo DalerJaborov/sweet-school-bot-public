@@ -1,5 +1,5 @@
 import type { Contact, Purchase } from "@prisma/client";
-import { prisma, getSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
+import { prisma, getSetting, setSetting, logError, logInfo, recordOutgoingMessage } from "../db.js";
 import { sendToContact } from "../messaging/send.js";
 import { createOneTimeInviteLink, revokeInviteLink } from "../telegram.js";
 import { sendKind } from "../notify.js";
@@ -72,14 +72,13 @@ const TG = "(?:telegram|телеграм\\p{L}*|тг)";
 const WEB_REQUEST = new RegExp(
   [
     `(?:нет|нету|без)\\s+${TG}`,
-    `${TG}\\s+(?:нет|нету|надорам|нест)`,
+    // «в телеграм нет ссылки» — это сломанная ссылка, а не «у меня нет Telegram» (ревью #95)
+    `${TG}\\s+(?:нет|нету|надорам|нест)(?![\\s,]*(?:ссылк|линк|приглаш|доступ|урок|групп|сообщ))`,
     `${TG}\\s+не\\s+(?:установлен\\p{L}*|ставится)`,
-    `не\\s+(?:могу|получается|выходит)\\s+(?:зайти|войти|вступить)\\s+(?:в|во)\\s+(?:группу|чат|${TG})`,
     `(?:пришлите|дайте|нужна|нужно)\\s+ссылк\\p{L}*\\s+(?:на|через)\\s+сайт\\p{L}*`,
     `(?:хочу|переведите|перенесите)\\s+(?:на|через)\\s+сайт\\p{L}*`,
     `(?:дар|ба)\\s+сайт\\s+(?:мехоҳам|диҳед|гузаронед)`,
     `линк\\p{L}*\\s+(?:ба|дар)\\s+сайт`,
-    `ба\\s+гурӯҳ\\s+даромада\\s+наметавонам`,
   ].join("|"),
   "iu",
 );
@@ -158,8 +157,21 @@ export function pendingSwitchTarget(contactId: string): SwitchTarget | null {
 export function clearPendingSwitch(contactId: string): void {
   pending.delete(contactId);
 }
-export function isYes(text: string): boolean {
-  return /^(?:да|ага|хорошо|ок|согласна|согласен|ҳа|ха|бале|розӣ|розиям|yes)[\s.!]*$/iu.test(text.trim());
+/**
+ * Ответ на вопрос «перевести вас?». Перевод на сайт убирает из групп, поэтому
+ * нужен ЯВНЫЙ ответ (ревью #95): «да» (по-таджикски «ҳа», «бале»), можно с
+ * направлением — «да, на сайт». «Ок», «хорошо», «ага» — вежливость, не согласие;
+ * «да, в Telegram» на вопрос про сайт — не согласие.
+ */
+export function isSwitchConfirmation(text: string, target: SwitchTarget): boolean {
+  const m =
+    /^(?:да|ҳа|ха|бале|yes|согласна|согласен|розӣ|розиям)(?:[\s,—-]+(.+?))?[\s.!]*$/iu.exec(text.trim());
+  if (!m) return false;
+  if (!m[1]) return true;
+  const rest = m[1].trim();
+  const web = /^(?:на|ба|дар)\s+сайт\p{L}*$/iu.test(rest);
+  const telegram = /^(?:в|на|ба|дар)\s+(?:telegram|телеграм\p{L}*|группу|гурӯҳ)$/iu.test(rest);
+  return target === "web" ? web : telegram;
 }
 
 /** Спросить подтверждение. Ничего не меняется, пока человек не ответит «да». */
@@ -609,12 +621,38 @@ function who(contact: Contact): string {
     .join(", ");
 }
 
-/** Карточка «Перевести» живёт сутки и нажимается один раз (как «Разрешить перенос»). */
+/**
+ * Карточка «Перевести» живёт сутки и нажимается один раз (как «Разрешить перенос»).
+ * Разрешение хранится в БАЗЕ (Setting), а не в памяти процесса (ревью #95): после
+ * перезапуска api старая карточка работает, а новая просьба не теряется за
+ * 12-часовым «не повторять». Пока карточка жива — второй не шлём.
+ */
 const APPROVAL_TTL_MS = 24 * 3_600_000;
-const approvals = new Map<string, { target: SwitchTarget; until: number }>();
+const APPROVAL_PREFIX = "switchApproval:";
+type Approval = { target: SwitchTarget; until: number };
+
+function parseApproval(raw: string | null): Approval | null {
+  if (!raw) return null;
+  try {
+    const a = JSON.parse(raw) as Approval;
+    return (a.target === "web" || a.target === "telegram") && typeof a.until === "number" ? a : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Забрать разрешение ровно один раз: удаление по точному значению — второе одновременное нажатие получит 0. */
+async function takeApproval(contactId: string): Promise<Approval | null> {
+  const key = APPROVAL_PREFIX + contactId;
+  const raw = await getSetting(key);
+  if (!raw) return null;
+  const taken = await prisma.setting.deleteMany({ where: { key, value: raw } });
+  return taken.count === 1 ? parseApproval(raw) : null;
+}
+
 /** Только для тестов. */
-export function resetSwitchApprovals(): void {
-  approvals.clear();
+export async function resetSwitchApprovals(): Promise<void> {
+  await prisma.setting.deleteMany({ where: { key: { startsWith: APPROVAL_PREFIX } } });
 }
 
 export async function askOwner(
@@ -626,32 +664,32 @@ export async function askOwner(
   const to = target === "web" ? "сайт" : "Telegram";
   const button =
     target === "web" && contact.joinedGroupAt ? "Перевести на сайт и убрать из группы" : `Перевести на ${to}`;
-  // Разрешение ставим до отправки (нажатие может прийти раньше ответа Telegram);
-  // карточка не ушла (повтор за 12 часов) — возвращаем прежнее как было.
-  const prior = approvals.get(contact.id);
-  if (withButton) approvals.set(contact.id, { target, until: Date.now() + APPROVAL_TTL_MS });
-  const sent = await sendKind(
-    // «decision» — невыключаемый вид: карточка с кнопкой не пропадёт, даже если «безопасность» выключена.
-    withButton ? "decision" : "security",
-    `🔓 ${who(contact)}: ${what}. Хочет: ${to}.` +
-      (withButton
-        ? " Если это она, нажмите кнопку: прежний способ входа перестанет работать, новая ссылка уйдёт ей в чат."
-        : ""),
-    {
-      dedupeKey: `channel-switch:${target}:${contact.id}`,
-      cooldownMs: 12 * 3_600_000,
-      ...(withButton
-        ? { buttons: [[{ text: button, callback_data: `mn:sw:${contact.id}:${target === "web" ? "w" : "t"}` }]] }
-        : {}),
-    },
-  ).catch((err) => {
+  const text = `🔓 ${who(contact)}: ${what}. Хочет: ${to}.`;
+  const failed = (err: unknown) => {
     logError("channelSwitch:askOwner", err);
     return 0;
-  });
-  if (withButton && sent === 0) {
-    if (prior) approvals.set(contact.id, prior);
-    else approvals.delete(contact.id);
+  };
+  if (!withButton) {
+    await sendKind("security", text, { dedupeKey: `channel-switch:${target}:${contact.id}`, cooldownMs: 12 * 3_600_000 }).catch(
+      failed,
+    );
+    return;
   }
+  const key = APPROVAL_PREFIX + contact.id;
+  const live = parseApproval(await getSetting(key));
+  // Живая карточка на то же уже у владельца — вторую не шлём (она и есть «не повторять»).
+  if (live && live.target === target && live.until > Date.now()) return;
+  // Разрешение ставим до отправки (нажатие может прийти раньше ответа Telegram).
+  const value = JSON.stringify({ target, until: Date.now() + APPROVAL_TTL_MS } satisfies Approval);
+  await setSetting(key, value);
+  // «decision» — невыключаемый вид: карточка с кнопкой не пропадёт, даже если «безопасность» выключена.
+  const sent = await sendKind(
+    "decision",
+    text + " Если это она, нажмите кнопку: прежний способ входа перестанет работать, новая ссылка уйдёт ей в чат.",
+    { buttons: [[{ text: button, callback_data: `mn:sw:${contact.id}:${target === "web" ? "w" : "t"}` }]] },
+  ).catch(failed);
+  // Не ушла (некому слать) — разрешение без карточки не держим.
+  if (sent === 0) await prisma.setting.deleteMany({ where: { key, value } });
 }
 
 /** Хозяйке пишем только когда что-то не вышло; свой ключ, не общий часовой «готово». */
@@ -663,7 +701,7 @@ async function reportProblems(contact: Contact, what: string, problems: string[]
   );
 }
 
-export type ApproveResult = "ok" | "expired" | "banned" | "failed";
+export type ApproveResult = "ok" | "already" | "expired" | "banned" | "failed";
 
 /**
  * Владелец нажал кнопку «Перевести»: месячный лимит его решением снимается.
@@ -671,19 +709,20 @@ export type ApproveResult = "ok" | "expired" | "banned" | "failed";
  * Карточка одноразовая и со сроком: второе нажатие и нажатие через сутки — "expired".
  */
 export async function approveSwitchByOwner(contactId: string, target: SwitchTarget): Promise<ApproveResult> {
-  const approval = approvals.get(contactId);
-  // Гасим до первого await: два одновременных нажатия не пройдут оба.
-  approvals.delete(contactId);
+  // Гасим атомарно в базе: два одновременных нажатия не пройдут оба.
+  const approval = await takeApproval(contactId);
   if (!approval || approval.until < Date.now() || approval.target !== target) return "expired";
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact) return "failed";
   const outcome = await switchCourseChannel(contact, target, "owner");
   logInfo("course:channelSwitch", `контакт ${contactId}: владелец разрешил переход на ${target}, итог ${outcome}`);
-  if (outcome === "switched" || outcome === "already") return "ok";
+  if (outcome === "switched") return "ok";
+  // Ничего не поменялось — владельцу не «переведена, ей написали» (ревью #95).
+  if (outcome === "already") return "already";
   if (outcome === "banned") return "banned";
   // Сбой отправки или проверки — карточка снова действует до своего срока (как в phoneChange.ts).
   if (outcome === "failed" || outcome === "unverifiable" || outcome === "unavailable")
-    approvals.set(contactId, approval);
+    await setSetting(APPROVAL_PREFIX + contactId, JSON.stringify(approval));
   return "failed";
 }
 
@@ -693,8 +732,10 @@ export async function approveSwitchByOwner(contactId: string, target: SwitchTarg
  * «одна ссылка» её видело (дыра из #78: ссылка уходила, а в базе — ни следа):
  *  - покупки без ссылки получают эту ссылку (как в grantCourses), ожидание
  *    вопроса «куда прислать» снимается — повторный чек не выдаст вторую дверь;
- *  - выбор человека — «сайт»: напоминание и следующая выдача не пришлют
- *    приглашение в группу поверх сайта;
+ *  - ВЫБОР человека (courseDeliveryChoice) НЕ меняется (ревью #95): ручная выдача —
+ *    разовое решение, следующая покупка идёт по каналу и режиму (курс, которого
+ *    нет на сайте, не должен уйти на ручную проверку). Напоминание видит сайт по
+ *    самой покупке (joinReminder.ts: ссылка на сайт в Purchase.inviteLink);
  *  - неиспользованные приглашения в группу гаснут; из группы НЕ убираем — Ширин
  *    всего лишь выдала ссылку, выгонять ученицу не за что.
  * Курс, которого ещё нет на сайте, не трогаем: его доступ — группа.
@@ -724,11 +765,8 @@ export async function markWebIssuedByOwner(
         data: { inviteLink: url },
       });
     }
-    if (allOnSite) {
-      await tx.contact.update({
-        where: { id: contactId },
-        data: { courseDeliveryChoice: "web", ...(hadInvite ? { inviteLink: null } : {}) },
-      });
+    if (allOnSite && hadInvite) {
+      await tx.contact.update({ where: { id: contactId }, data: { inviteLink: null } });
     }
   });
   // Вопрос «куда прислать» по этим покупкам снят, чек закрыт как обслуженный.
