@@ -119,14 +119,49 @@ export async function everTalkedWithShirin(contact: { id: string; humanTakenOver
 }
 
 /**
+ * «ПОЗОВИТЕ ЧЕЛОВЕКА» — ОТВЕЧАЕТ ТОЛЬКО ШИРИН (решение владельца 15.11.2026).
+ *
+ * Клиент сам попросил живого человека: бот молчит с ним на ВСЕХ путях (вебхук,
+ * сторож, повторы ИИ, воронка, напоминания), пока Ширин не ответит этому клиенту
+ * (webhook.ts::handleEcho снимает отметку её ответом) или владелец не вернёт
+ * помощника вручную (POST /admin/v1/conversations/:id/resume). Раньше тишина
+ * длилась час, а потом бот возвращался сам — поверх обещания «Ширин ответит».
+ *
+ * Отметка — humanSilencedUntil «до ответа Ширин» (дата далеко в будущем), поэтому
+ * дверь отправки, очередь повторов и напоминания видят её без новых проверок.
+ * Деньги не блокируются: ссылка по проверенному чеку (verified_receipt_access)
+ * проходит дверь, как и при любой человеческой тишине.
+ * Только Instagram и Messenger; WhatsApp и сайт — как было (час).
+ */
+export const ASKED_HUMAN_HOLD_UNTIL = new Date("2999-01-01T00:00:00Z");
+const ASKED_HUMAN_HOLD_FROM = Date.parse("2900-01-01T00:00:00Z");
+const ASKED_HUMAN_HOUR_MS = 60 * 60_000;
+
+/** До какого момента бот молчит после «позовите человека» в этом канале. */
+export function askedHumanSilenceUntil(channel: string | null | undefined, now = Date.now()): Date {
+  return channel === "INSTAGRAM" || channel === "MESSENGER" ? ASKED_HUMAN_HOLD_UNTIL : new Date(now + ASKED_HUMAN_HOUR_MS);
+}
+
+/** Клиент просил человека, и бот ждёт ответа Ширин (без срока). */
+export function askedHumanHold(contact: { humanSilencedUntil?: Date | null }): boolean {
+  return Boolean(contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() >= ASKED_HUMAN_HOLD_FROM);
+}
+
+/** Нижняя граница отметки «до ответа Ширин» — для выборок (список «бот молчит»). */
+export function askedHumanHoldFrom(): Date {
+  return new Date(ASKED_HUMAN_HOLD_FROM);
+}
+
+/**
  * Почему дверь не пускает ответ бота этому человеку — для журнала решений
  * (messaging/noReply.ts). null — дверь открыта.
  */
 export function automationBlockKind(
   contact: ContactPolicy,
   now = Date.now(),
-): "personal" | "human_takeover" | "human_requested" | null {
+): "personal" | "asked_human" | "human_takeover" | "human_requested" | null {
   if (contact.personal || contact.spamBlockedAt || contact.whatsappSavedContact) return "personal";
+  if (askedHumanHold(contact)) return "asked_human";
   if (humanTakeoverActive(contact, now)) return "human_takeover";
   if (contact.humanSilencedUntil && contact.humanSilencedUntil.getTime() > now) return "human_requested";
   return null;

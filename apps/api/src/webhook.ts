@@ -29,7 +29,7 @@ import { fetchAttachment, type Attachment } from "./ai/media.js";
 import { saveOwnerMedia } from "./upload.js";
 import type { MetaChannel } from "./instagram.js";
 import { wasOurRecentReaction } from "./ai/reactions.js";
-import { humanSilenceActive, loadHumanSilenceMs } from "./messaging/automation.js";
+import { humanSilenceActive, loadHumanSilenceMs, askedHumanHold } from "./messaging/automation.js";
 import { recordNoReply, policyNoReplyReason } from "./messaging/noReply.js";
 import { outgoingInFlight, waitOutgoingIdle } from "./messaging/inFlight.js";
 
@@ -427,6 +427,8 @@ async function handleReaction(event: MessagingEvent, selfId?: string, channel: M
   if (wasOurRecentReaction(recipientId)) return;
 
   const contact = await upsertContact(recipientId, null, channel);
+  // Клиент просил человека — бот и так молчит до ответа Ширин; сердечко не укорачивает это до 10 минут.
+  if (askedHumanHold(contact)) return;
   await prisma.contact.update({
     where: { id: contact.id },
     data: { humanSilencedUntil: new Date(Date.now() + HUMAN_TAKEOVER_SILENCE_MS) },

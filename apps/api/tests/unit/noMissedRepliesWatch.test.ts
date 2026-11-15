@@ -289,7 +289,7 @@ describe("ревью: сторож не делает хуже", () => {
     );
   });
 
-  it("п.4 напоминание уже было — второй раз Ширин не тревожим", async () => {
+  it("п.4 напоминание было меньше часа назад — Ширин не тревожим и ожидание не закрываем (напомним позже)", async () => {
     db.model("contact").findMany.mockResolvedValue([
       contactWith([msg("OUT", 120, "Ширин скоро ответит"), msg("IN", 20, "Алло?")], {
         humanRequestedAt: ago(120),
@@ -302,6 +302,7 @@ describe("ревью: сторож не делает хуже", () => {
     await runUnansweredWatch(NOW);
     expect(aiReply).not.toHaveBeenCalled();
     expect(sendKind).not.toHaveBeenCalled();
+    expect(db.model("contact").updateMany).not.toHaveBeenCalled();
   });
 
   it("п.4 просьба до журнала решений узнаётся по самому сообщению «позовите человека»", async () => {
@@ -350,6 +351,45 @@ describe("ревью: сторож не делает хуже", () => {
         where: expect.objectContaining({ messages: { none: { createdAt: { gt: ago(60) } } } }),
       }),
     );
+    expect(aiReply).not.toHaveBeenCalled();
+  });
+});
+
+/** Решение владельца 15.11.2026: «позовите человека» — отвечает только Ширин, бот молчит до её ответа. */
+describe("«позовите человека»: бот молчит до ответа Ширин, Ширин — напоминания без спама", () => {
+  const HOLD = new Date("2999-01-01T00:00:00Z");
+  const holdContact = (messages: ReturnType<typeof msg>[]) =>
+    contactWith(messages, { humanRequestedAt: ago(5 * 60), humanSilencedUntil: HOLD });
+
+  it("клиент снова написал — бот не отвечает, Ширин получает одно напоминание", async () => {
+    db.model("contact").findMany.mockResolvedValue([holdContact([msg("OUT", 300, "Ширин скоро ответит"), msg("IN", 30, "Жду ответа")])]);
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+    expect(sendKind).toHaveBeenCalledTimes(1);
+    expect(String(sendKind.mock.calls[0][1])).toContain("Жду ответа");
+    expect(db.model("replyGate").create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ reason: expect.stringMatching(/^asked_human_reminded/) }) }),
+    );
+  });
+
+  it("не чаще раза в час: напоминание было 20 минут назад — молчим", async () => {
+    db.model("contact").findMany.mockResolvedValue([holdContact([msg("OUT", 300, "Ширин скоро ответит"), msg("IN", 30, "Когда ответите про курс?")])]);
+    db.model("replyGate").findFirst.mockImplementation(
+      async ({ where }: { where: { reason?: { startsWith: string }; createdAt?: { gte: Date } } }) =>
+        where.reason?.startsWith === "asked_human_reminded:" && where.createdAt && where.createdAt.gte <= ago(20) ? { id: "r" } : null,
+    );
+    await runUnansweredWatch(NOW);
+    expect(sendKind).not.toHaveBeenCalled();
+  });
+
+  it("прошлое напоминание больше часа назад, клиент написал снова — напоминаем ещё раз", async () => {
+    db.model("contact").findMany.mockResolvedValue([holdContact([msg("OUT", 300, "Ширин скоро ответит"), msg("IN", 30, "Когда ответите про курс?")])]);
+    db.model("replyGate").findFirst.mockImplementation(
+      async ({ where }: { where: { reason?: { startsWith: string }; createdAt?: { gte: Date } } }) =>
+        where.reason?.startsWith === "asked_human_reminded:" && where.createdAt && where.createdAt.gte <= ago(90) ? { id: "r" } : null,
+    );
+    await runUnansweredWatch(NOW);
+    expect(sendKind).toHaveBeenCalledTimes(1);
     expect(aiReply).not.toHaveBeenCalled();
   });
 });

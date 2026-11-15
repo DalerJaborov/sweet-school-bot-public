@@ -24,7 +24,7 @@ import { sendToContact, sendPrivateReplyRecorded } from "./messaging/send.js";
 import { recordNoReply, policyNoReplyReason, type NoReplyReason } from "./messaging/noReply.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
-import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked } from "./messaging/automation.js";
+import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, askedHumanSilenceUntil } from "./messaging/automation.js";
 import {
   guardOffTopic,
   guardReply,
@@ -486,10 +486,16 @@ async function answerTurn(
         // закрытый чат снова нельзя.
         (await prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null } })) > 0;
       const reply = guardReply(verdict.kind, language, isStudent, await replyDeliveryMode(contact));
-      // Обещали позвать Ширин — зовём и замолкаем (см. callOwnerToChat).
-      if (verdict.kind === "wants_human") await callOwnerToChat(contact, text);
-      const mid = await sendToContact(contact, reply);
-      await recordOutgoingMessage(contact.id, reply, mid);
+      // Обещали позвать Ширин — СНАЧАЛА ответ клиенту, потом тишина (см. callOwnerToChat).
+      // Раньше тишина ставилась первой, и дверь отправки не пропускала само «Ширин
+      // скоро ответит»: клиент, попросивший человека, не получал ничего.
+      try {
+        const mid = await sendToContact(contact, reply);
+        await recordOutgoingMessage(contact.id, reply, mid);
+      } finally {
+        // Ширин зовём, даже если само «Ширин скоро ответит» не ушло (сбой Meta).
+        if (verdict.kind === "wants_human") await callOwnerToChat(contact, text);
+      }
       // Реалтайм-версия «где бот застрял» (см. stuckAlert.ts) — заглушка
       // офф-топика тоже полноценный ответ бота, и именно на неё чаще всего
       // натыкается человек, чей вопрос бот раз за разом не понимает.
@@ -1068,7 +1074,8 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
   await prisma.contact
     .update({
       where: { id: contact.id },
-      data: { humanSilencedUntil: new Date(Date.now() + HUMAN_REQUESTED_SILENCE_MS), humanRequestedAt: new Date() },
+      // Instagram/Messenger — до ответа Ширин (решение владельца 15.11.2026), остальное — час.
+      data: { humanSilencedUntil: askedHumanSilenceUntil(contact.channel), humanRequestedAt: new Date() },
     })
     .catch((err) => {
       logError("ai:callOwnerToChat:silence", err);
@@ -1088,7 +1095,7 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
 
 Последнее сообщение: «${lastText.slice(0, 200)}»
 
-Бот замолчал, ждёт вас. Можно ответить одной из кнопок ниже — уйдёт клиенту сразу:`,
+Бот молчит, пока вы не ответите. Можно ответить одной из кнопок ниже — уйдёт клиенту сразу:`,
     { buttons },
   ).catch((err) => logError("ai:callOwnerToChat:notify", err));
 }

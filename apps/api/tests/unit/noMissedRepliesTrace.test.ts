@@ -224,6 +224,29 @@ describe("ревью PR #96: след и поведение хода", () => {
   });
 });
 
+describe("«позовите человека» (решение владельца 15.11.2026)", () => {
+  const holdUpdate = () =>
+    db.model("contact").update.mock.calls.find((c) => (c[0] as { data: { humanRequestedAt?: Date } }).data.humanRequestedAt);
+
+  it("Instagram: клиент получает «Ширин скоро ответит», и только ПОСЛЕ этого бот замолкает до её ответа", async () => {
+    await aiReply(ig, "Позовите живого человека, пожалуйста", [], []);
+    expect(sendToContact).toHaveBeenCalledTimes(1);
+    const update = holdUpdate();
+    expect(update).toBeDefined();
+    expect((update![0] as { data: { humanSilencedUntil: Date } }).data.humanSilencedUntil.getUTCFullYear()).toBeGreaterThanOrEqual(2999);
+    const sentAt = sendToContact.mock.invocationCallOrder[0];
+    const heldAt = db.model("contact").update.mock.invocationCallOrder[db.model("contact").update.mock.calls.indexOf(update!)];
+    expect(sentAt).toBeLessThan(heldAt);
+  });
+
+  it("WhatsApp — как раньше: час тишины, не «до ответа»", async () => {
+    const wa = { ...ig, channel: "WHATSAPP" } as typeof ig;
+    await aiReply(wa, "Позовите живого человека, пожалуйста", [], []);
+    const until = (holdUpdate()![0] as { data: { humanSilencedUntil: Date } }).data.humanSilencedUntil;
+    expect(until.getTime() - Date.now()).toBeLessThanOrEqual(3_600_000);
+  });
+});
+
 describe("сторож в CI: исходящие в Instagram/Messenger — только через дверь отправки", () => {
   it("sendText / sendAttachment / sendPrivateReply из instagram.ts импортирует только messaging/send.ts (и тестовая кнопка админки)", () => {
     const root = path.resolve(__dirname, "../../src");

@@ -3,7 +3,7 @@ import { prisma, getSetting, logError } from "./db.js";
 import { isTrivialMessage } from "./trivialMessage.js";
 import { codeRelevance } from "./ai/relevance.js";
 import { guardOffTopic, isSilentKind } from "./ai/offTopicGuard.js";
-import { humanTakeoverEndsAt, loadHumanSilenceMs, isBotFrozen } from "./messaging/automation.js";
+import { humanTakeoverEndsAt, loadHumanSilenceMs, isBotFrozen, askedHumanHold } from "./messaging/automation.js";
 import { recordNoReply } from "./messaging/noReply.js";
 import { sendKind } from "./notify.js";
 import { offlineHandoffSilences } from "./ai/offlineHandoff.js";
@@ -180,18 +180,25 @@ async function askedHumanOpen(contact: Contact): Promise<boolean> {
   return (before ?? []).some((m) => Boolean(m.text) && guardOffTopic(m.text as string)?.kind === "wants_human");
 }
 
-async function remindShirinOnce(contact: Contact, lastIn: Message): Promise<void> {
-  const at = contact.humanRequestedAt as Date;
-  const reminded = await prisma.replyGate.findFirst({
-    where: { contactId: contact.id, reason: { startsWith: "asked_human_reminded:" }, createdAt: { gte: at } },
+/** Напоминание Ширин о человеке, который ждёт живого ответа: одно на новую пачку его сообщений, не чаще раза в час. */
+const REMIND_EVERY_MS = 60 * 60_000;
+async function remindShirin(contact: Contact, lastIn: Message, now: Date): Promise<void> {
+  const recent = await prisma.replyGate.findFirst({
+    where: {
+      contactId: contact.id,
+      reason: { startsWith: "asked_human_reminded:" },
+      createdAt: { gte: new Date(now.getTime() - REMIND_EVERY_MS) },
+    },
     select: { id: true },
   });
-  if (reminded) return;
+  // Час ещё не прошёл — отметку ожидания не ставим: эта пачка получит своё напоминание позже.
+  if (recent) return;
+  if (!(await claim(contact.id, lastIn.createdAt, now))) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   const last = (lastIn.text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
   const lines = [`🙋 ${who} просил(а) живого человека и всё ещё ждёт ответа.`];
   if (last) lines.push(`Последнее: «${last}»`);
-  lines.push("Бот сам не отвечает — ответьте, пожалуйста.");
+  lines.push("Бот молчит, пока вы не ответите (или не вернёте помощника в панели).");
   await sendKind("human", lines.join(NEWLINE)).catch((err) => logError("unansweredWatch:remind", err));
   await recordNoReply(contact, "asked_human_reminded", lastIn.text);
 }
@@ -282,6 +289,12 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
     const windowMs = lastIn.createdAt.getTime() < watchStartedAt ? FIRST_RUN_WINDOW_MS : REPLY_WINDOW_MS;
     if (waitedMs >= windowMs) continue;
 
+    // Клиент просил человека: бот молчит до ответа Ширин (решение владельца 15.11.2026) — только напоминание ей.
+    if (askedHumanHold(contact)) {
+      await remindShirin(contact, lastIn, now);
+      continue;
+    }
+
     // Тишина ещё идёт — Ширин ведёт разговор или клиент ждёт человека. Кончится — ответим.
     const ends = silenceEndsAt(contact, silenceMs);
     if (ends === Infinity || (ends !== null && now.getTime() < ends)) continue;
@@ -304,7 +317,7 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
     }
     // Клиент просил человека — бот сам не возвращается, Ширин напоминаем один раз.
     if (await askedHumanOpen(contact)) {
-      if (await claim(contact.id, lastIn.createdAt, now)) await remindShirinOnce(contact, lastIn);
+      await remindShirin(contact, lastIn, now);
       continue;
     }
 

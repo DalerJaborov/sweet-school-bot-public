@@ -202,3 +202,36 @@ describe("КЛАСС B, причина 3 (опровергнута): очере�
     expect(order).toEqual(["tail"]);
   });
 });
+
+describe("«позовите человека»: живой вебхук молчит до ответа Ширин, чек проверяется", () => {
+  const HOLD = new Date("2999-01-01T00:00:00Z");
+  const held = { ...client, humanSilencedUntil: HOLD, humanRequestedAt: new Date(Date.now() - 5 * 3_600_000) };
+
+  it("через 5 часов клиент пишет снова — бот не отвечает, в журнале «просил человека»", async () => {
+    vi.mocked(upsertContact).mockResolvedValueOnce(held as never);
+    await handleMessage({ sender: { id: "ig-1" }, message: { mid: "mid-held-1", text: "Нархи курс чанд?" } });
+    expect(debounceMessage).not.toHaveBeenCalled();
+    expect(db.model("replyGate").create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^asked_human/) }) }),
+    );
+  });
+
+  it("ДЕНЬГИ: прислал чек во время удержания — чек проверяется сразу", async () => {
+    const { verifyReceiptsNow, rescueIncomingImages } = await import("../../src/ai.js");
+    vi.mocked(upsertContact).mockResolvedValueOnce(held as never);
+    const rescued = [{ buffer: Buffer.from("x"), mimeType: "image/jpeg", hash: "h", url: "/media/x.jpg", queuedId: "q1" }];
+    vi.mocked(rescueIncomingImages).mockResolvedValueOnce(rescued as never);
+    await handleMessage({
+      sender: { id: "ig-1" },
+      message: { mid: "mid-held-2", attachments: [{ type: "image", payload: { url: "https://cdn.example/r.jpg" } }] },
+    });
+    expect(verifyReceiptsNow).toHaveBeenCalledWith(expect.objectContaining({ id: "contact-1" }), rescued);
+    expect(debounceMessage).not.toHaveBeenCalled();
+  });
+
+  it("реакция Ширин (сердечко) удержание не укорачивает до 10 минут", async () => {
+    vi.mocked(upsertContact).mockResolvedValueOnce(held as never);
+    await handleMessage({ sender: { id: "page-1" }, recipient: { id: "ig-1" }, reaction: { mid: "m", action: "react", reaction: "love" } }, "page-1");
+    expect(db.model("contact").update).not.toHaveBeenCalled();
+  });
+});
