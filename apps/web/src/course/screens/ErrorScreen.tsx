@@ -45,6 +45,10 @@ export function ErrorScreen({
     };
   }, [school]);
 
+  // Кнопки «Открыть уроки в Telegram» здесь НЕТ намеренно (ревью PR 64): экран не
+  // знает, есть ли у человека Telegram, а переход в группу закрывает сайт. Ученица,
+  // которая учится только на сайте, нажала бы её и осталась без уроков. Нужна
+  // группа — она пишет боту словами, бот переспрашивает (course/channelSwitch.ts).
   const contacts = withPrefilledWhatsapp(school ?? fetched, error.reason === "not_found" ? brokenLinkMessage(t) : null);
 
   return (

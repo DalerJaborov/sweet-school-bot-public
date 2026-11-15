@@ -1,6 +1,6 @@
 import { prisma, getSetting, logError } from "../db.js";
 import { sendTelegramMessage, trustedChatIds } from "../telegram.js";
-import { issueCourseLink } from "./delivery.js";
+import { issueOwnerLink, REASON_TEXT } from "./ownerLink.js";
 
 /**
  * ВЫДАТЬ ССЫЛКУ НА УРОКИ РУКАМИ — командой из Telegram.
@@ -28,7 +28,9 @@ import { issueCourseLink } from "./delivery.js";
  *
  * Каждая выдача выпускает НОВУЮ ссылку, а прошлая перестаёт работать (см.
  * delivery.ts issueCourseLink). Так пересланная кому-то старая ссылка умирает
- * сама, без отдельного «отозвать».
+ * сама, без отдельного «отозвать». Выдача идёт общей дверью ownerLink.ts
+ * (как кнопка «Выдать ссылку»): она помечает выдачу и закрывает
+ * неиспользованное приглашение в группу — одна ссылка на человека.
  */
 
 /** Как можно позвать команду: по-русски, по-английски и таджикской латиницей. */
@@ -131,16 +133,17 @@ async function answer(argument: string, reply: (body: string) => Promise<unknown
     return;
   }
 
-  // Ссылка одна на человека: внутри все его курсы.
-  const url = await issueCourseLink(contact.id, { automatic: false });
-  if (!url) {
-    await reply("Адрес платформы не задан в настройках — ссылку собрать не из чего.");
+  // Ссылка одна на человека: внутри все его курсы. Общая дверь ручной выдачи (ownerLink.ts).
+  const issued = await issueOwnerLink(contact.id, "web");
+  if (!issued.ok || issued.kind !== "web") {
+    await reply(issued.ok ? "Не получилось выдать ссылку." : REASON_TEXT[issued.reason]);
     return;
   }
 
   const courses = purchases.map((p) => p.course).join(", ");
   await reply(
-    `Ссылка для ${who}${name ? ` (${name})` : ""}\nКурсы: ${courses}\n\n${url}\n\n` +
-      "Перешлите её человеку. Прошлая ссылка с этой минуты не работает."
+    `Ссылка для ${who}${name ? ` (${name})` : ""}\nКурсы: ${courses}\n\n${issued.url}\n\n` +
+      "Перешлите её человеку. Прошлая ссылка с этой минуты не работает." +
+      (issued.closedInvite ? " Приглашение в группу Telegram закрыто (из самой группы её не убирали)." : "")
   );
 }

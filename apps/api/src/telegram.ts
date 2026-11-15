@@ -397,10 +397,16 @@ export async function getChatMemberStatus(botToken: string, chatId: string, user
       body: JSON.stringify({ chat_id: chatId, user_id: Number(userId) }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    const data = (await res.json()) as { ok?: boolean; result?: { status?: string }; description?: string };
+    const data = (await res.json()) as {
+      ok?: boolean;
+      result?: { status?: string; is_member?: boolean };
+      description?: string;
+    };
     // «Участника нет» Telegram отдаёт ошибкой — для нас это «не в группе».
     if (!data.ok && /user not found|participant_id_invalid/i.test(data.description ?? "")) return "left";
     if (!data.ok || !data.result?.status) throw new Error(`Telegram API: ${data.description ?? `HTTP ${res.status}`}`);
+    // restricted — это и «ограничена внутри группы», и «ограничена, но уже вышла»: решает is_member (ревью #95).
+    if (data.result.status === "restricted" && data.result.is_member === false) return "left";
     return data.result.status;
   } catch (err) {
     logError("telegram:getChatMember", err);

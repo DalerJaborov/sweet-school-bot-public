@@ -40,11 +40,12 @@ export async function deliveryModeFor(contact: {
   channel: string;
   courseDeliveryChoice?: string | null;
 }): Promise<DeliveryMode> {
+  // Явный выбор человека (в том числе переключение канала, channelSwitch.ts) сильнее канала.
+  if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web")
+    return contact.courseDeliveryChoice;
   // WhatsApp идёт по общей настройке, как Instagram (владелец 08.11.2026: «как только получаем деньги —
   // пусть бот отправит ссылку на Телеграм, и всё»). Раньше WhatsApp был жёстко «только платформа».
   if (["WEB", "MANUAL"].includes(contact.channel)) return "web";
-  if (contact.courseDeliveryChoice === "telegram" || contact.courseDeliveryChoice === "web")
-    return contact.courseDeliveryChoice;
   return deliveryMode();
 }
 
@@ -101,6 +102,9 @@ export async function issueCourseLink(
     where: { id: contactId },
     data: { accessTokenId: jti, accessIssuedAt: new Date() },
   });
+  // Telegram-дверь здесь НЕ закрывается (ревью PR 64, «скрытое закрытие»): это
+  // общий выпуск ссылки, им пользуется и возврат доступа. Закрывает её только
+  // явная выдача сайта владельцем — course/channelSwitch.ts markWebIssuedByOwner.
   return url;
 }
 
