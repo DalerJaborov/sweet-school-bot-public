@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
 import type HlsType from "hls.js";
 import type { PlayerErrorKind } from "./ErrorOverlay";
-import { isSlowNetwork, SLOW_START_HEIGHT } from "./network";
+import { isSlowNetwork, loadBandwidth, saveBandwidth, SLOW_START_HEIGHT } from "./network";
 
 export type QualityLevel = { index: number; height: number };
 
@@ -9,6 +9,17 @@ export type QualityLevel = { index: number; height: number };
 export const NETWORK_RETRIES = 3;
 /** Пауза перед повтором: 1 с, 2 с, 4 с — связь в маршрутке пропадает на секунды, не навсегда. */
 export const retryDelayMs = (attempt: number): number => 1000 * 2 ** attempt;
+/** Раз во сколько загруженных сегментов запоминать скорость канала. */
+export const SAVE_BW_EVERY_FRAGS = 4;
+/** Стартовая оценка канала, если прошлой нет: лучше секунду в 480p, чем спиннер. */
+export const DEFAULT_BW_ESTIMATE = 500_000;
+
+/**
+ * «Качество» дорожки — КОРОТКАЯ сторона кадра, как на сервере (qualitySide):
+ * уроки вертикальные 720×1280, и по высоте меню показало бы «1280p».
+ */
+export const levelQuality = (l: { width?: number; height: number }): number =>
+  l.width && l.width > 0 ? Math.min(l.width, l.height) : l.height;
 
 /**
  * ИСТОЧНИК ВИДЕО: нативный HLS (Safari, iOS — экономнее по батарее) или hls.js
@@ -24,8 +35,9 @@ export const retryDelayMs = (attempt: number): number => 1000 * 2 ** attempt;
  *  • буфер вперёд 60 с (до 120 с, если память позволяет) — на мобильной связи
  *    скорость «дышит», и запас в минуту сглаживает провалы; назад держим 30 с,
  *    чтобы «−10» не качало заново;
- *  • стартовая оценка канала консервативная (500 кбит/с) — лучше секунду
- *    посмотреть в 480p, чем 20 секунд крутить спиннер, выбрав 1080p наугад;
+ *  • стартовая оценка канала — скорость с прошлого урока (network.ts,
+ *    не старше недели), а если её нет — консервативные 500 кбит/с: лучше
+ *    секунду посмотреть в 480p, чем 20 секунд крутить спиннер;
  *  • качество не выше размера плеера (`capLevelToPlayerSize`) — 1080p на
  *    экране 360px — чистый перерасход трафика;
  *  • много попыток на фрагмент и манифест — hls.js сам переживает короткие
@@ -35,7 +47,8 @@ export const retryDelayMs = (attempt: number): number => 1000 * 2 ** attempt;
  *  • застревание буфера (`bufferStalledError`, не фатально) → `stalled` для
  *    спиннера, hls.js подтягивает сам; сбрасываем, как только пошёл кадр;
  *  • фатальная сетевая → до NETWORK_RETRIES тихих `startLoad` с нарастающей
- *    паузой, затем оверлей «Попробовать снова»; при `online` — повтор сразу;
+ *    паузой, затем оверлей «Попробовать снова»; при `online` — повтор сразу
+ *    (и во время тихих повторов тоже: ждать 4 с, когда сеть уже есть, незачем);
  *  • медиа → до двух тихих `recoverMediaError`, затем оверлей;
  *  • нативный HLS → `video.load()` и возврат на ту же секунду.
  * Текущая секунда живёт в `posRef` плеера — она же переживает смену источника.
@@ -108,6 +121,8 @@ export function useHls(
         return;
       }
       const slow = isSlowNetwork();
+      // На слабой связи стартуем с 480p принудительно — прошлая оценка там не нужна.
+      const knownBw = slow ? null : loadBandwidth();
       const hls = new Hls({
         // Ключ и сегменты идут с нашей же сессией: без куки сервер не отдаст ключ.
         xhrSetup: (xhr) => {
@@ -119,7 +134,7 @@ export function useHls(
         maxBufferLength: 60,
         maxMaxBufferLength: 120,
         backBufferLength: 30,
-        abrEwmaDefaultEstimate: 500_000,
+        abrEwmaDefaultEstimate: knownBw ?? DEFAULT_BW_ESTIMATE,
         capLevelToPlayerSize: true,
         fragLoadingMaxRetry: 8,
         levelLoadingMaxRetry: 8,
@@ -130,7 +145,7 @@ export function useHls(
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        const parsed = hls.levels.map((l, index) => ({ index, height: l.height }));
+        const parsed = hls.levels.map((l, index) => ({ index, height: levelQuality(l) }));
         setLevels(parsed);
         // Слабая связь: первый фрагмент — с 480p (или ближайшей снизу), потом авто.
         if (slow && parsed.length > 1) {
@@ -139,7 +154,10 @@ export function useHls(
         }
       });
       hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => setAutoLevel(data.level));
+      let bufferedFrags = 0;
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        // Следующий урок стартует с честной оценкой канала, а не с 500 кбит/с.
+        if (++bufferedFrags % SAVE_BW_EVERY_FRAGS === 0) saveBandwidth(hls.bandwidthEstimate);
         setStalled(false);
         networkRetries.current = 0; // связь ожила — счётчик повторов с нуля
       });
@@ -192,6 +210,11 @@ export function useHls(
   const retry = useCallback(() => {
     setError(null);
     setStalled(false);
+    // Отложенный тихий повтор больше не нужен — повторяем сейчас.
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
     const video = videoRef.current;
     const hls = hlsRef.current;
     const pos = posRef.current;
@@ -213,11 +236,12 @@ export function useHls(
   }, [videoRef, posRef]);
 
   // Связь вернулась — повторяем сами, не дожидаясь нажатия.
+  // Срабатывает и во время тихих повторов (`stalled`): сеть уже есть — не ждём таймер.
   useEffect(() => {
-    if (error !== "network") return;
+    if (error !== "network" && !stalled) return;
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
-  }, [error, retry]);
+  }, [error, stalled, retry]);
 
   const setLevel = useCallback((index: number) => {
     const hls = hlsRef.current;

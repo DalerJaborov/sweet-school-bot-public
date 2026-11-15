@@ -11,9 +11,9 @@ import { renderLessonCover, renderStoryCover, type CoverInput } from "./coverArt
 /**
  * ТРАНСКОДИНГ УРОКА В HLS — «как на ютубе, чтобы не тормозило».
  *
- * До трёх дорожек в одном манифесте: 1080p (если исходник не хуже — по
- * КОРОТКОЙ стороне, уроки вертикальные), 720p для нормальной связи и 480p
- * для слабой. Плеер сам переключается по фактической
+ * До четырёх дорожек в одном манифесте: 1080p (если исходник не хуже — по
+ * КОРОТКОЙ стороне, уроки вертикальные), 720p для нормальной связи, 480p
+ * для слабой и 360p для совсем слабой (с 15.11.2026, только новые уроки). Плеер сам переключается по фактической
  * скорости — это и есть adaptive bitrate, ничего изобретать не нужно, HLS
  * умеет из коробки. Дорожки выше исходника не делаем: растянутое видео
  * только весит больше, а чётче не становится. Офлайн-кеш в
@@ -45,7 +45,18 @@ const RENDITIONS = [
   { name: "480p", width: 854, height: 480, videoBitrate: "1200k", audioBitrate: "96k" },
 ] as const;
 
-type Rendition = (typeof RENDITIONS)[number];
+/**
+ * Лёгкая дорожка для слабой мобильной связи (15.11.2026, перенесено из
+ * аудита скорости PR 21). На канале ~1.5 Мбит/с 480p (≈1.3 Мбит/с вместе со
+ * звуком) почти не оставляет запаса, и плеер встаёт на буферизации; 360p в
+ * ≈0.6 Мбит/с играет без остановок. Добавляется ко ВСЕМ новым перекодировкам
+ * последней (самой лёгкой); уже готовые уроки не трогаем. Офлайн-копия
+ * по-прежнему 480p (OFFLINE_RENDITION) — её смотрят без сети, там важна
+ * чёткость, а не скорость.
+ */
+const LOW_RENDITION = { name: "360p", width: 640, height: 360, videoBitrate: "550k", audioBitrate: "64k" } as const;
+
+type Rendition = (typeof RENDITIONS)[number] | typeof LOW_RENDITION;
 
 export type Dimensions = { width: number | null; height: number | null };
 
@@ -64,14 +75,15 @@ export function qualitySide(dims: Dimensions | number | null): number | null {
 }
 
 /**
- * Какие дорожки делать для исходника такого качества: не выше него, но 480p —
- * всегда (иначе слабой связи нечего было бы играть). Размер неизвестен —
+ * Какие дорожки делать для исходника такого качества: не выше него, но 480p
+ * (офлайн-копия) и 360p (слабая связь) — всегда. Размер неизвестен —
  * считаем 720, как у типичного телефона.
  */
 export function renditionsFor(source: Dimensions | number | null): readonly Rendition[] {
   const q = qualitySide(source) ?? 720;
   const fit = RENDITIONS.filter((r) => r.height <= q);
-  return fit.length > 0 ? fit : [RENDITIONS[RENDITIONS.length - 1]];
+  const base: readonly Rendition[] = fit.length > 0 ? fit : [RENDITIONS[RENDITIONS.length - 1]];
+  return [...base, LOW_RENDITION];
 }
 
 /**
@@ -264,7 +276,7 @@ async function transcodeToHls(
   outDir: string,
   key: Buffer,
   keyUri: string,
-  renditions: readonly Rendition[] = RENDITIONS
+  renditions: readonly Rendition[] = renditionsFor(null)
 ): Promise<void> {
   const keyFile = path.join(outDir, "enc.key");
   const keyInfoFile = path.join(outDir, "enc.keyinfo");
