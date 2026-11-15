@@ -27,7 +27,9 @@ import { canRetryMetaFailure } from "./messaging/metaErrors.js";
 import { recordNoReply } from "./messaging/noReply.js";
 import { renderFunnelText } from "./funnelPlaceholders.js";
 import { stripRepeatGreeting } from "./greeting.js";
-import { shouldSkipRequisitesStep } from "./ai/repeatGuard.js";
+import { shouldSkipRequisitesStep, releaseRequisitesClaim, mentionsPaymentPhone } from "./ai/repeatGuard.js";
+import { getSalesTexts } from "./services/salesTextsService.js";
+import { detectFaq, replyToInstagramFaq } from "./ai/instagramFaqReply.js";
 import { funnelMenuFits } from "./ai/firstMessage.js";
 import {
   ContactMessagingBlocked,
@@ -103,8 +105,12 @@ async function retryOrGiveUp(delivery: Delivery, contact: Contact, err: unknown)
  * перетирал отмену: цепочка снова становилась ACTIVE и следующий шаг уходил поверх
  * живого разговора. Теперь переход пишется только по состоянию ACTIVE.
  */
-async function advanceIfActive(id: string, data: Prisma.DeliveryUpdateManyMutationInput): Promise<boolean> {
-  const res = await prisma.delivery.updateMany({ where: { id, state: "ACTIVE" }, data });
+async function advanceIfActive(
+  id: string,
+  data: Prisma.DeliveryUpdateManyMutationInput,
+  extraWhere: Prisma.DeliveryWhereInput = {},
+): Promise<boolean> {
+  const res = await prisma.delivery.updateMany({ where: { ...extraWhere, id, state: "ACTIVE" }, data });
   return (res?.count ?? 0) > 0;
 }
 
@@ -126,17 +132,79 @@ async function cancelDelivery(id: string, reason: string): Promise<void> {
  * только цепочки «в пути» (ACTIVE); ожидающие нажатия кнопки (WAITING) остаются:
  * человек может нажать кнопку позже, это его явный выбор.
  */
-export async function cancelPendingFunnelSteps(contactId: string, reason: string): Promise<number> {
+export async function cancelPendingFunnelSteps(
+  contactId: string,
+  reason: string,
+  opts: { keepRequisites?: boolean } = {},
+): Promise<number> {
   try {
-    const res = await prisma.delivery.updateMany({
+    if (!opts.keepRequisites) {
+      const res = await prisma.delivery.updateMany({
+        where: { contactId, state: "ACTIVE" },
+        data: { state: "DONE", nextRunAt: null, lastError: reason.slice(0, 300) },
+      });
+      return res?.count ?? 0;
+    }
+    // ШАГ С НОМЕРОМ КАРТЫ НЕ ОТМЕНЯЕТСЯ (разбор 16.11.2026). Люди жмут «💚ОНЛАЙН 21
+    // РЕЦЕПТ», через секунды спрашивают «70 сомони за день?», и отмена всей цепочки
+    // съедала шаг с номером: после #86 номер получали 1–3 человека в день вместо
+    // 7–17. Видео и картинки по-прежнему не шлём (разговор пошёл живьём), а цепочка
+    // перескакивает сразу на шаг с номером и на нём кончается (stopAfterOrder).
+    // Повтор номера, «не надо / позже» и купивших оба курса стережёт sendStep
+    // (repeatGuard.shouldSkipRequisitesStep).
+    const active = await prisma.delivery.findMany({
       where: { contactId, state: "ACTIVE" },
-      data: { state: "DONE", nextRunAt: null, lastError: reason.slice(0, 300) },
+      select: { id: true, funnelId: true, nextOrder: true, nextRunAt: true, stopAfterOrder: true },
     });
-    return res?.count ?? 0;
+    let cancelled = 0;
+    for (const d of active ?? []) {
+      if (d.stopAfterOrder !== null && d.stopAfterOrder !== undefined) continue; // номер уже в пути
+      const requisites = await requisitesStepAhead(d.funnelId, d.nextOrder);
+      if (requisites) {
+        const soon = Date.now() + REQUISITES_AFTER_CANCEL_MS;
+        const at = d.nextRunAt && d.nextRunAt.getTime() <= soon ? d.nextRunAt : new Date(soon);
+        await prisma.delivery.updateMany({
+          where: { id: d.id, state: "ACTIVE" },
+          data: {
+            nextOrder: requisites.order,
+            stopAfterOrder: requisites.order,
+            nextRunAt: at,
+            lastError: `${reason}; дойдёт только шаг с номером карты`.slice(0, 300),
+          },
+        });
+        continue;
+      }
+      const res = await prisma.delivery.updateMany({
+        where: { id: d.id, state: "ACTIVE" },
+        data: { state: "DONE", nextRunAt: null, lastError: reason.slice(0, 300) },
+      });
+      cancelled += res?.count ?? 0;
+    }
+    return cancelled;
   } catch (err) {
     logError("funnel:cancelPending", err);
     return 0;
   }
+}
+
+/** Через сколько после сообщения клиента дойдёт шаг с номером, если по расписанию он позже. */
+const REQUISITES_AFTER_CANCEL_MS = 5_000;
+
+/**
+ * Шаг с номером карты впереди по цепочке: от следующего шага до первой остановки
+ * (шаг с кнопками ждёт нажатия, stopAfter кончает цепочку). Номер узнаём по
+ * настройке «номер для оплаты», а не по жёсткому тексту.
+ */
+async function requisitesStepAhead(funnelId: string, fromOrder: number): Promise<FunnelStep | null> {
+  const [steps, texts] = await Promise.all([
+    prisma.funnelStep.findMany({ where: { funnelId, order: { gte: fromOrder } }, orderBy: { order: "asc" } }),
+    getSalesTexts(),
+  ]);
+  for (const step of steps ?? []) {
+    if (mentionsPaymentPhone(step.text ?? "", texts.paymentPhone)) return step;
+    if (step.stopAfter || parseStepButtonsJson(step.buttons).length > 0) return null;
+  }
+  return null;
 }
 
 /** Кнопки шага → quick-reply кнопки Meta с payload вида step:<funnelId>:<order>. */
@@ -194,19 +262,27 @@ async function sendStep(
   // человек написал в директ и под постом почти одновременно — две воронки
   // здоровались по очереди (разбор 11.11.2026). Режем и здесь.
   if (privateReplyCommentId && text) text = await stripRepeatGreeting(delivery.contactId, text);
-  // Реквизиты уже ушли в последние минуты (ответ ИИ или другой шаг) или человек
-  // уже оплатил и получил ссылку — текст шага с номером не повторяем (пункт 5).
+  // Реквизиты уже ушли в последние минуты (ответ ИИ или другой шаг), человек сказал
+  // «не надо / позже» или уже оплатил оба курса: текст шага с номером не шлём (пункт 5).
+  // Не пропустили — захват «номер шлю я» стоит за этим шагом (repeatGuard.ts).
   if (text && (await shouldSkipRequisitesStep(delivery.contactId, text))) text = "";
+  const carriesNumber = Boolean(text) && mentionsPaymentPhone(text, (await getSalesTexts()).paymentPhone);
   let mid: string | null = null;
 
   // Шаг может быть ЧИСТЫМ вложением — фото меню или видео без подписи, как это
   // было в ManyChat. Тогда текстовое сообщение не шлём вовсе: пустой пузырь
   // выглядел бы как сбой, да и Meta его не примет.
   if (text || buttons.length > 0) {
-    if (privateReplyCommentId) {
-      mid = await sendPrivateReplyRecorded(delivery.contact, privateReplyCommentId, text, buttons, { funnel: true });
-    } else {
-      mid = await withMessagingPermission("funnel", () => sendToContact(delivery.contact, text, buttons));
+    try {
+      if (privateReplyCommentId) {
+        mid = await sendPrivateReplyRecorded(delivery.contact, privateReplyCommentId, text, buttons, { funnel: true });
+      } else {
+        mid = await withMessagingPermission("funnel", () => sendToContact(delivery.contact, text, buttons));
+      }
+    } catch (err) {
+      // Номер не ушёл: снимаем захват, чтобы повтор шага или ответ ИИ его прислали.
+      if (carriesNumber) releaseRequisitesClaim(delivery.contactId);
+      throw err;
     }
     await recordOutgoingMessage(delivery.contactId, text, mid);
   }
@@ -222,27 +298,36 @@ async function sendStep(
     }
   }
 
+  // Переход пишется, только если пока шаг уходил, цепочку не перевели на «только
+  // номер» (cancelPendingFunnelSteps): иначе следующее видео ушло бы поверх живого
+  // разговора, а шаг с номером отодвинулся.
+  const sameRoute: Prisma.DeliveryWhereInput = { stopAfterOrder: delivery.stopAfterOrder ?? null };
   if (buttons.length > 0) {
     // Шаг с кнопками ставит цепочку на паузу до нажатия.
-    await advanceIfActive(delivery.id, { state: "WAITING", nextRunAt: null });
+    await advanceIfActive(delivery.id, { state: "WAITING", nextRunAt: null, stopAfterOrder: null }, sameRoute);
     return;
   }
 
-  const next = step.stopAfter
+  const lastOfRoute = delivery.stopAfterOrder !== null && delivery.stopAfterOrder !== undefined && step.order >= delivery.stopAfterOrder;
+  const next = step.stopAfter || lastOfRoute
     ? null
     : await prisma.funnelStep.findFirst({
         where: { funnelId: funnel.id, order: { gt: step.order } },
         orderBy: { order: "asc" },
       });
   if (!next) {
-    await advanceIfActive(delivery.id, { state: "DONE", nextRunAt: null });
+    await advanceIfActive(delivery.id, { state: "DONE", nextRunAt: null }, sameRoute);
     return;
   }
-  await advanceIfActive(delivery.id, {
-    state: "ACTIVE",
-    nextOrder: next.order,
-    nextRunAt: new Date(Date.now() + next.delaySeconds * 1000),
-  });
+  await advanceIfActive(
+    delivery.id,
+    {
+      state: "ACTIVE",
+      nextOrder: next.order,
+      nextRunAt: new Date(Date.now() + next.delaySeconds * 1000),
+    },
+    sameRoute,
+  );
 }
 
 /** Запуск воронки для человека. Повторный запуск той же воронки не происходит —
@@ -292,6 +377,7 @@ export async function startFunnel(
             nextOrder: firstStep.order,
             nextRunAt: new Date(Date.now() + 5 * 60_000),
             lastError: null,
+            stopAfterOrder: null,
             createdAt: new Date(), // отсчёт окна повтора идёт от нового прохода
             commentId: opts.commentId ?? null,
             commentText: opts.commentText ?? null,
@@ -390,7 +476,7 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
   // проходило оба раза и слало шаг воронки клиенту дважды.
   const claimed = await prisma.delivery.updateMany({
     where: { id: delivery.id, state: "WAITING" },
-    data: { state: "ACTIVE", nextOrder: step.order, nextRunAt: new Date(Date.now() + 5 * 60_000) },
+    data: { state: "ACTIVE", nextOrder: step.order, nextRunAt: new Date(Date.now() + 5 * 60_000), stopAfterOrder: null },
   });
   if (claimed.count === 0) {
     if (delivery.state === "ACTIVE") {
@@ -417,7 +503,7 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
       // долгим паузам: сторож иначе ответил бы за воронку раньше её шага).
       if (step.delaySeconds >= 60) await recordNoReply(contact, "funnel_step_scheduled", payload);
     } else {
-      await sendStep(delivery, step.funnel, step);
+      await sendStep({ ...delivery, stopAfterOrder: null }, step.funnel, step);
     }
   } catch (err) {
     await retryOrGiveUp({ ...delivery, nextOrder: step.order }, contact, err);
@@ -471,6 +557,24 @@ export async function handleIncomingDm(
       const greetingOnly = funnelMenuFits(text, opts.hasAttachments) && isTrivialMessage(text);
       if (greetingOnly) await recordNoReply(contact, "funnel_menu_sent", text);
       return greetingOnly;
+    }
+    // ГОТОВЫЙ ВОПРОС INSTAGRAM / РЕКЛАМЫ первым сообщением (16.11.2026): «Как долго
+    // доступен курс?» нажимают таджикоязычные люди с рекламы. После #86 им отвечал
+    // ИИ по-русски и без кнопок, 40% больше не писали. Теперь: короткий ответ по
+    // сути (по-таджикски, если человек сам не писал по-русски) и сразу меню воронки
+    // с кнопками. Экстренная пауза — только меню, как раньше («всё, кроме воронки»).
+    const faq = anyMessage && !opts.hasAttachments ? await detectFaq(text) : null;
+    if (faq) {
+      const answered = (await isBotFrozen())
+        ? false
+        : await replyToInstagramFaq(contact, faq, { withMenu: true }).catch((err) => {
+            logError("funnel:faq", err);
+            return false;
+          });
+      if (await startFunnel(funnel, contact)) return true;
+      // Меню не ушло (у воронки нет шагов), но ответ ушёл: второй раз ИИ не отвечает.
+      if (answered) return true;
+      continue;
     }
     // Первое сообщение — настоящий вопрос (или фото/голосовое): меню-приветствие
     // проглотило бы его. Отвечает ИИ (ai/firstMessage.ts), а воронка ОТЛОЖЕНА:

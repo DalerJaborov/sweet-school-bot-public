@@ -63,6 +63,14 @@ export const SETTING_KEYS = [
   // отправила первый шаг (владелец 08.11.2026, funnel.ts). По умолчанию
   // ВКЛЮЧЁН; "false" выключает только публичный ответ, директ идёт как раньше.
   "commentPublicReplyEnabled",
+  // Напоминание «завтра переведу» (paymentReminder.ts, 16.11.2026): рубильник (по умолчанию
+  // ВКЛЮЧЁН, "false" выключает) и текст по-таджикски / по-русски ({реквизиты} — номер карты).
+  "paymentReminderEnabled",
+  "paymentReminderTextTg",
+  "paymentReminderTextRu",
+  // Готовые вопросы Instagram и рекламы сверх списка в коде (ai/instagramFaq.ts):
+  // строки «вид: текст вопроса», вид — duration, length, single_recipes, certificate, about, talk.
+  "instagramFaqExtra",
   // Сторож «без ответа» (владелец 09.11.2026, unansweredWatch.ts): клиент в
   // Instagram ждёт дольше unansweredAfterMinutes (15) или комментарий без
   // ответа дольше unansweredCommentMinutes (30) — бот отвечает сам после паузы

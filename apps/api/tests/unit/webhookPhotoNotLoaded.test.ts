@@ -189,7 +189,7 @@ describe("п.9 чек при Ширин и п.6 отмена шагов воро
     const { cancelPendingFunnelSteps } = await import("../../src/funnel.js");
     vi.mocked(cancelPendingFunnelSteps).mockClear();
     await handleMessage({ sender: { id: "customer" }, message: { mid: "q1", text: "Кай сар мешавад?" } });
-    expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("клиент"));
+    expect(cancelPendingFunnelSteps).toHaveBeenCalledWith("contact-1", expect.stringContaining("клиент"), { keepRequisites: true });
     vi.mocked(cancelPendingFunnelSteps).mockClear();
     await handleMessage({
       sender: { id: "customer" },

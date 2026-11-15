@@ -50,6 +50,7 @@ import { startWhatsAppWorker } from "./whatsapp/worker.js";
 import { runMetaConversions } from "./metaConversions.js";
 import { runUnansweredWatch } from "./unansweredWatch.js";
 import { runPaymentNotifications } from "./paymentNotify.js";
+import { runPaymentReminders } from "./paymentReminder.js";
 
 // index.ts — единственная точка, где db.ts и telegram.ts (через systemAlerts.ts)
 // встречаются без цикла импортов (см. комментарий у onNewSystemError в db.ts).
@@ -334,6 +335,14 @@ const paymentNotifyTick = () =>
   void singleFlight("paymentNotify", async () => void (await runPaymentNotifications())).catch((err) => logError("paymentNotify", err));
 setTimeout(paymentNotifyTick, 90_000);
 setInterval(paymentNotifyTick, 30_000);
+
+// НАПОМИНАНИЕ «ЗАВТРА ПЕРЕВЕДУ» (paymentReminder.ts, 16.11.2026): человек получил номер
+// карты, написал «пагоҳ мефиристам» и пропал — через ~20 ч одно тёплое напоминание, строго
+// внутри окна Meta. Рубильник paymentReminderEnabled (по умолчанию включён); на паузе бота молчит.
+const paymentReminderTick = () =>
+  void singleFlight("paymentReminder", async () => void (await runPaymentReminders())).catch((err) => logError("paymentReminder", err));
+setTimeout(paymentReminderTick, 6 * 60_000);
+setInterval(paymentReminderTick, 10 * 60_000);
 
 // ПОКУПКИ — В РЕКЛАМУ META (metaConversions.ts): очередь событий «Покупка».
 // Рубильник metaCapiEnabled по умолчанию выключен — тогда задача ничего не делает.

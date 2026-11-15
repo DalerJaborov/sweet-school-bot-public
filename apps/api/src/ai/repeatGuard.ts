@@ -3,6 +3,7 @@ import { getSalesTexts } from "../services/salesTextsService.js";
 import { ACCEPTED_WHERE } from "../receiptAccepted.js";
 import type { ClientLanguage } from "./clientLanguage.js";
 import { COURSE_50, COURSE_70, type Course } from "../prices.js";
+import { declinesPayment, priceOrChoice } from "./paymentIntent.js";
 
 /**
  * РЕКВИЗИТЫ И «ПРИШЛИТЕ ЧЕК» — НЕ ЧАЩЕ ОДНОГО РАЗА (владелец 11.11.2026).
@@ -27,6 +28,81 @@ import { COURSE_50, COURSE_70, type Course } from "../prices.js";
 export const REPEAT_WINDOW_MS = 15 * 60_000;
 /** Сколько наших последних сообщений смотреть, кроме окна по времени. */
 const RECENT_OUT = 8;
+
+/**
+ * ЗАХВАТ «НОМЕР УХОДИТ СЕЙЧАС» (16.11.2026). Номер карты могут отправить почти
+ * одновременно двое: шаг воронки (клиент нажал «21 рецепт») и ответ ИИ на вопрос,
+ * который клиент дописал через 2 секунды. Оба смотрят историю ДО того, как другой
+ * успел записать отправленное, и номер уходил дважды. Захват ставится в памяти
+ * процесса синхронно (проверка и запись без await между ними): кто первый, тот
+ * шлёт; второй ведёт себя так, будто номер уже в переписке. Живёт столько же,
+ * сколько окно повтора; сбой отправки снимает захват (releaseRequisitesClaim).
+ */
+const requisitesClaims = new Map<string, number>();
+
+function claimedRecently(contactId: string, now = Date.now()): boolean {
+  const at = requisitesClaims.get(contactId);
+  if (at === undefined) return false;
+  if (now - at >= REPEAT_WINDOW_MS) {
+    requisitesClaims.delete(contactId);
+    return false;
+  }
+  return true;
+}
+
+/** true: номер шлёт вызывающий (захват его); false: его уже шлёт или прислал другой путь. */
+export function tryClaimRequisites(contactId: string, now = Date.now()): boolean {
+  if (claimedRecently(contactId, now)) return false;
+  requisitesClaims.set(contactId, now);
+  return true;
+}
+
+/** Отправка не удалась: номер не дошёл, следующий путь вправе прислать его. */
+export function releaseRequisitesClaim(contactId: string): void {
+  requisitesClaims.delete(contactId);
+}
+
+/** Только для тестов. */
+export function resetRequisitesClaims(): void {
+  requisitesClaims.clear();
+}
+
+/** Окно, в котором ищем «не надо / позже» после интереса к оплате. */
+const DECLINE_LOOKBACK_MS = 24 * 3_600_000;
+
+/**
+ * «НЕ НАДО / ПОЗЖЕ»: НОМЕР БОЛЬШЕ НЕ НАВЯЗЫВАЕМ (16.11.2026, дух #86).
+ * Смотрим сообщения клиента за сутки по порядку (текущее последним): решает
+ * последний сигнал. «Не надо» — молчим про номер; потом сам спросил цену или
+ * «куда переводить» — снова можно. Сообщения без сигнала ничего не меняют.
+ */
+export function declinedInOrder(clientTextsOldestFirst: readonly (string | null | undefined)[]): boolean {
+  let declined = false;
+  for (const t of clientTextsOldestFirst) {
+    if (!t) continue;
+    if (declinesPayment(t)) declined = true;
+    else if (priceOrChoice(t) || clientWantsToPayAgain(t)) declined = false;
+  }
+  return declined;
+}
+
+export async function requisitesDeclined(contactId: string, currentText = ""): Promise<boolean> {
+  try {
+    const rows = await prisma.message.findMany({
+      where: { contactId, direction: "IN", createdAt: { gte: new Date(Date.now() - DECLINE_LOOKBACK_MS) } },
+      orderBy: { createdAt: "asc" },
+      take: 40,
+      select: { text: true },
+    });
+    const texts = (rows ?? []).map((r) => r.text);
+    // Текущее сообщение уже может лежать в базе последним: второй раз не добавляем.
+    if (currentText && texts[texts.length - 1] !== currentText) texts.push(currentText);
+    return declinedInOrder(texts);
+  } catch (err) {
+    logError("repeatGuard:declined", err);
+    return false;
+  }
+}
 
 function digitsOf(text: string): string {
   return text.replace(/\D/g, "");
@@ -75,6 +151,8 @@ export type RepeatContext = {
   hasAcceptedReceipt: boolean;
   /** Клиент в этом ходе сам спросил про оплату второго курса / реквизиты. */
   clientAsksToPay: boolean;
+  /** Клиент сказал «не надо / позже» и с тех пор про оплату не спрашивал. */
+  requisitesDeclined?: boolean;
 };
 
 async function recentOutgoing(contactId: string): Promise<string[]> {
@@ -137,8 +215,8 @@ export async function hasDeliveredAccess(contactId: string, clientText = ""): Pr
   }
 }
 
-/** Оплачены оба онлайн-курса — номер для оплаты в шаге воронки бесполезен. */
-async function ownsAllCourses(contactId: string): Promise<boolean> {
+/** Оплачены оба онлайн-курса: номер для оплаты бесполезен (шаг воронки, ответ ИИ). */
+export async function ownsAllCourses(contactId: string): Promise<boolean> {
   const owned = await paidCourses(contactId);
   return ONLINE_COURSES.every((c) => owned.includes(c));
 }
@@ -156,15 +234,19 @@ async function hasAcceptedReceipt(contactId: string): Promise<boolean> {
 }
 
 export async function loadRepeatContext(contactId: string, clientText: string): Promise<RepeatContext> {
-  const [texts, recent, paidWithAccess, accepted] = await Promise.all([
+  const [texts, recent, paidWithAccess, accepted, declined] = await Promise.all([
     getSalesTexts(),
     recentOutgoing(contactId),
     hasDeliveredAccess(contactId, clientText),
     hasAcceptedReceipt(contactId),
+    requisitesDeclined(contactId, clientText),
   ]);
   return {
     phone: texts.paymentPhone,
-    requisitesSentRecently: recent.some((t) => mentionsPaymentPhone(t, texts.paymentPhone)),
+    // Номер уже в переписке ИЛИ его прямо сейчас шлёт другой путь (шаг воронки).
+    requisitesSentRecently:
+      recent.some((t) => mentionsPaymentPhone(t, texts.paymentPhone)) || claimedRecently(contactId),
+    requisitesDeclined: declined,
     receiptAskedRecently: recent.some((t) => asksForReceipt(t)),
     paidWithAccess,
     hasAcceptedReceipt: accepted,
@@ -172,7 +254,13 @@ export async function loadRepeatContext(contactId: string, clientText: string): 
   };
 }
 
-const ALREADY_WROTE_NUMBER: Record<ClientLanguage, string> = {
+/** Номер уже в наших сообщениях за окно повтора или его прямо сейчас шлёт другой путь. */
+export async function requisitesRecentlySent(contactId: string, phone: string): Promise<boolean> {
+  if (claimedRecently(contactId)) return true;
+  return (await recentOutgoing(contactId)).some((t) => mentionsPaymentPhone(t, phone));
+}
+
+export const ALREADY_WROTE_NUMBER: Record<ClientLanguage, string> = {
   ru: "Номер я написала выше",
   tg: "Номерро болотар навиштам",
   en: "I wrote the number above",
@@ -198,7 +286,8 @@ export function withoutRepeats(
   const removed = new Set<string>();
   // Реквизиты режем только как повтор (ревью 11.11.2026): оплатившему один курс номер
   // нужен для второго. Просьбу чека — повтор или курс уже оплачен (accessCovers).
-  const dropRequisites = ctx.requisitesSentRecently;
+  // «Не надо / позже»: номер не повторяем, пока клиент сам не спросит, куда платить.
+  const dropRequisites = ctx.requisitesSentRecently || (Boolean(ctx.requisitesDeclined) && !ctx.clientAsksToPay);
   const dropReceiptAsk = ctx.receiptAskedRecently || ctx.paidWithAccess;
   const kept = sentences(reply).filter((s) => {
     if (dropRequisites && mentionsPaymentPhone(s, ctx.phone)) {
@@ -225,8 +314,11 @@ export function withoutRepeats(
 }
 
 /**
- * Шаг воронки с реквизитами: пропустить текст, если номер только что уходил или
- * человек уже оплатил ОБА онлайн-курса (купившему один номер нужен для второго).
+ * Шаг воронки с реквизитами: пропустить текст, если номер только что уходил (или
+ * его прямо сейчас шлёт ответ ИИ), человек сказал «не надо / позже» или уже
+ * оплатил ОБА онлайн-курса (купившему один номер нужен для второго).
+ * Не пропускаем: захват «номер шлю я» ставится здесь же, синхронно с решением;
+ * отправка не удалась — вызывающий снимает его (releaseRequisitesClaim).
  * Ошибка базы — шлём как обычно.
  */
 export async function shouldSkipRequisitesStep(contactId: string, stepText: string): Promise<boolean> {
@@ -234,8 +326,10 @@ export async function shouldSkipRequisitesStep(contactId: string, stepText: stri
     const texts = await getSalesTexts();
     if (!mentionsPaymentPhone(stepText, texts.paymentPhone)) return false;
     if (await ownsAllCourses(contactId)) return true;
+    if (await requisitesDeclined(contactId)) return true;
     const recent = await recentOutgoing(contactId);
-    return recent.some((t) => mentionsPaymentPhone(t, texts.paymentPhone));
+    if (recent.some((t) => mentionsPaymentPhone(t, texts.paymentPhone))) return true;
+    return !tryClaimRequisites(contactId);
   } catch (err) {
     logError("repeatGuard:step", err);
     return false;
@@ -244,7 +338,8 @@ export async function shouldSkipRequisitesStep(contactId: string, stepText: stri
 
 /** Подсказка модели на повторный ход: что именно вырезал фильтр и почему. */
 const REGENERATE_HINT: Record<string, string> = {
-  requisites: "номер для оплаты уже есть в переписке выше, не повторяйте его (можно сказать, что номер выше)",
+  requisites:
+    "номер для оплаты сейчас не пишите: он уже есть в переписке выше (можно сказать, что номер выше) или клиент сказал «не надо / позже»",
   receipt_ask: "просить прислать чек сейчас нельзя: уже просили или этот курс уже оплачен",
   false_receipt_ack: "не пишите, что чек принят: принятого чека нет",
   cleanup: "ответ был пустым или из одних значков",

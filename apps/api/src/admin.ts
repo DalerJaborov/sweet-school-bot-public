@@ -36,6 +36,8 @@ import { GROUP_EVENT_ACTIONS, inGroupNow } from "./groupExit.js";
 import { offsetMs, localDayStart } from "./dailyReport.js";
 import { countNotOpened } from "./notOpened.js";
 import { linksAdminRouter } from "./links/routes.js";
+import { gotRequisites as contactGotRequisites } from "./requisitesMetric.js";
+import { getSalesTexts } from "./services/salesTextsService.js";
 
 export const adminRouter = Router();
 
@@ -172,7 +174,6 @@ const TAKEOVER_WINDOW_MS = 15 * 60_000;
  * деньги; «получил реквизиты» — мы отправили номер; дальше чек и покупка.
  */
 const PRICE_ASKED = /нарх|цен[аыу]|чанд|сколько|почём|почем|сумай|пул/iu;
-const REQUISITES_SENT = /905\s?355\s?355|алиф|душанбе\s*сити|фарангис/iu;
 
 /**
  * ВОРОНКА ПРОВАЛОВ ПОСЛЕ РЕКВИЗИТОВ: на каком именно сообщении отваливаются.
@@ -197,6 +198,7 @@ function normalizeLastBotMessage(text: string): string {
 adminRouter.get("/admin/funnel-stats", async (req, res) => {
   const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
   const since = new Date(Date.now() - days * 86_400_000);
+  const phone = (await getSalesTexts()).paymentPhone;
 
   const contacts = await prisma.contact.findMany({
     where: { createdAt: { gte: since }, personal: false },
@@ -231,13 +233,12 @@ adminRouter.get("/admin/funnel-stats", async (req, res) => {
     wrote++;
 
     const clientText = incoming.map((m) => m.text ?? "").join(" ");
-    const ourText = c.messages
-      .filter((m) => m.direction === "OUT")
-      .map((m) => m.text ?? "")
-      .join(" ");
-
     const asked = PRICE_ASKED.test(clientText);
-    const gotReq = REQUISITES_SENT.test(ourText);
+    // Одно определение «получил номер» с утренней сводкой (requisitesMetric.ts).
+    const gotReq = contactGotRequisites(
+      c.messages.filter((m) => m.direction === "OUT").map((m) => m.text),
+      phone,
+    );
     const hasReceipt = c.receiptChecks.length > 0;
     const hasPurchase = c.purchases.some((p) => !p.revokedAt);
 

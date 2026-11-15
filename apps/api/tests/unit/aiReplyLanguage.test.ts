@@ -152,7 +152,10 @@ describe("Язык ответа проверяет код", () => {
     expect(systemPromptOfCall(0)).not.toContain("СРОЧНОЕ ИСПРАВЛЕНИЕ");
     expect(systemPromptOfCall(1)).toContain("Отвечай ТОЛЬКО на русском");
     expect(sendToContact).toHaveBeenCalledTimes(1);
-    expect(String(sendToContact.mock.calls[0][1])).toBe("Курс стоит 70 сомони."); // «апачон» бот не говорит (08.11.2026)
+    // «апачон» бот не говорит (08.11.2026); спросили цену — номер карты в том же сообщении (16.11.2026).
+    expect(String(sendToContact.mock.calls[0][1])).toBe(
+      "Курс стоит 70 сомони.\nНомер карты для оплаты: 905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф)",
+    );
   });
 
   it("и наоборот: таджикский вопрос, русский ответ — повтор по-таджикски", async () => {

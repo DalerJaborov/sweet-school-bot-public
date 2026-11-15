@@ -117,7 +117,7 @@ describe("п.4 реквизиты оплатившему и чек — по ку
     expect(await regenerateAfterFilters(["receipt_ask"], async () => "[NO_REPLY]", ctx, "ru")).toBe("");
     const hint = vi.fn(async (_extra: string) => "ок");
     await regenerateAfterFilters(["requisites"], hint, ctx, "ru");
-    expect(hint.mock.calls[0][0]).toMatch(/номер для оплаты уже есть/);
+    expect(hint.mock.calls[0][0]).toMatch(/уже есть в переписке выше/);
   });
 });
 
