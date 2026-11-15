@@ -95,7 +95,7 @@ export function ReceiptsPage() {
                 confidence: r.confidence,
                 createdAt: r.createdAt,
               }}
-              onApprove={() => void decision.approve({ id: r.id, handle: personTitle(r.contact), amount: r.amount ?? null })}
+              onApprove={() => void decision.approve({ id: r.id, handle: personTitle(r.contact), amount: r.amount ?? null, courseGuess: r.courseGuess })}
               onReject={() => void decision.reject({ id: r.id, handle: personTitle(r.contact), amount: r.amount ?? null })}
               onZoom={setZoom}
             />

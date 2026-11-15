@@ -349,7 +349,7 @@ export type TextsResponse = TextsForm & { defaults: TextsForm; preview: TextsPre
 export type Offer = {
   prices: { course50: number; course70: number; bundle: number };
   /** Допуск по сумме чека, сомони (сервер всегда присылает, старому экрану не обязателен). */
-  payment?: { toleranceDown: number; toleranceUp: number };
+  payment?: { toleranceDown: number; toleranceUp: number; toleranceForeignPct?: number };
   offline: {
     price: number;
     /** ГГГГ-ММ-ДД или "" — «дата уточняется». */

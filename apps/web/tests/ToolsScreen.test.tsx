@@ -4,10 +4,12 @@ import "@testing-library/jest-dom/vitest";
 import { ToolsScreen } from "../src/course/screens/ToolsScreen";
 import { dict } from "../src/course/i18n";
 import type { CourseInfo } from "../src/course/api";
+import type { CourseState } from "../src/course/hooks/useCourse";
 
 afterEach(cleanup);
 
 const t = dict("ru");
+const fakeState = () => ({ t, lang: "ru", switchLanguage: vi.fn() }) as unknown as CourseState;
 
 function course(over: Partial<CourseInfo> = {}): CourseInfo {
   return {
@@ -27,14 +29,14 @@ function course(over: Partial<CourseInfo> = {}): CourseInfo {
  */
 describe("ToolsScreen", () => {
   it("пустой список — понятное сообщение, а не пустой экран", () => {
-    render(<ToolsScreen t={t} course={course({ toolsData: [] })} onBack={vi.fn()} />);
+    render(<ToolsScreen state={fakeState()} course={course({ toolsData: [] })} onBack={vi.fn()} />);
     expect(screen.getByText(t.noTools)).toBeTruthy();
   });
 
   it("инструмент с фото — картинка, номер и ссылка «где купить»", () => {
     const { container } = render(
       <ToolsScreen
-        t={t}
+        state={fakeState()}
         course={course({
           toolsData: [{ name: "Насадка", photoUrl: "https://x/y.jpg", toolNumber: "847", buyLink: "https://shop" }],
         })}
@@ -53,7 +55,7 @@ describe("ToolsScreen", () => {
   it("инструмент без фото — плейсхолдер вместо сломанной картинки, без ссылки «купить»", () => {
     const { container } = render(
       <ToolsScreen
-        t={t}
+        state={fakeState()}
         course={course({ toolsData: [{ name: "Форма", photoUrl: null, toolNumber: null, buyLink: null }] })}
         onBack={vi.fn()}
       />,

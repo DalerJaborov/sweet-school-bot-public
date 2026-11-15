@@ -4,7 +4,7 @@ import { contactLanguage } from "./contactLanguage.js";
 import { sendToContact } from "../messaging/send.js";
 import { createOneTimeInviteLink } from "../telegram.js";
 import { rememberInviteLink } from "../groupAccess.js";
-import { chatIdFor, COURSE_TITLE, type Allocation, type Course } from "../courses.js";
+import { awaitsBotDelivery, chatIdFor, COURSE_TITLE, splitAmount, type Allocation, type Course } from "../courses.js";
 import {
   deliveryModeFor,
   issueCourseLink,
@@ -87,19 +87,25 @@ export async function grantCourses(
     return true;
   };
 
+  // Сумма делится только между НОВЫМИ курсами: повтор доставки уже созданной
+  // покупки не должен уменьшать долю (35 вместо 70).
+  const already = await prisma.purchase.findMany({ where: { contactId: contact.id, course: { in: plan.grant } }, select: { course: true } });
+  const newList = plan.grant.filter((c) => !(already ?? []).some((a) => a.course === c));
+  const shares = splitAmount(amount, newList.length);
   for (const course of plan.grant) {
     if (await stopIfFrozen()) return done;
     let purchaseId: string | null = null;
     const existing = await prisma.purchase.findUnique({ where: { contactId_course: { contactId: contact.id, course } } });
     if (existing) {
       // Resume only an undelivered active purchase; never revive revoked access.
-      if (existing.revokedAt || existing.inviteLink || existing.accessDeliveryUncertainAt ||
+      // Ручная запись и ручная выдача Ширин - уже доставлены (courses.awaitsBotDelivery).
+      if (!awaitsBotDelivery(existing) || existing.accessDeliveryUncertainAt ||
           (existing.deliveryAwaitingChoice && !opts.fromDeliveryChoice)) continue;
       purchaseId = existing.id;
     } else {
       try {
         const purchase = await prisma.purchase.create({ data: {
-          contactId: contact.id, course, amount: Math.round(amount / plan.grant.length),
+          contactId: contact.id, course, amount: shares[Math.max(0, newList.indexOf(course))] ?? Math.round(amount),
           rawAmount: verdict.amount, currency: verdict.currency ?? "TJS",
         } });
         purchaseId = purchase.id;

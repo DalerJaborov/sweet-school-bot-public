@@ -278,12 +278,12 @@ function QueueCard({
   onGo: (tab: GoTab) => void;
   onOpenStudent?: (contactId: string) => void;
   onZoom: (url: string) => void;
-  onApprove: (r: { id: string; handle: string; amount: number | null }) => void;
+  onApprove: (r: { id: string; handle: string; amount: number | null; courseGuess?: string | null }) => void;
   onReject: (r: { id: string; handle: string; amount: number | null }) => void;
   onChanged: () => void;
 }) {
   if (item.kind === "receipt") {
-    const r = { id: item.id, handle: item.who.handle, amount: item.amount };
+    const r = { id: item.id, handle: item.who.handle, amount: item.amount, courseGuess: item.courseGuess };
     return (
       <ReceiptCard
         compact

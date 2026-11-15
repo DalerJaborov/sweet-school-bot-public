@@ -160,6 +160,7 @@ export const SETTING_KEYS = [
   "priceBundle",
   "receiptToleranceDown",
   "receiptToleranceUp",
+  "receiptToleranceForeignPct",
   // Реквизиты, условие сертификата, язык уроков, «что после оплаты» — RU и TG.
   // Бот (правила 4, 17–21 в ai/prompts.ts) читает их на каждом ходе через
   // services/salesTextsService.ts; пусто — сегодняшний текст по умолчанию.
@@ -300,6 +301,7 @@ export const OFFER_SETTING_KEYS = [
   "priceBundle",
   "receiptToleranceDown",
   "receiptToleranceUp",
+  "receiptToleranceForeignPct",
   "offlineCoursePrice",
   "offlineCourseStartDate",
   "offlineCourseHours",
