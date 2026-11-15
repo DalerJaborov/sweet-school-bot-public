@@ -5,6 +5,7 @@ import { codeRelevance } from "./ai/relevance.js";
 import { guardOffTopic, isSilentKind } from "./ai/offTopicGuard.js";
 import { humanTakeoverEndsAt, loadHumanSilenceMs, isBotFrozen } from "./messaging/automation.js";
 import { recordNoReply } from "./messaging/noReply.js";
+import { sendKind } from "./notify.js";
 import { offlineHandoffSilences } from "./ai/offlineHandoff.js";
 import { aiReply } from "./ai.js";
 
@@ -48,9 +49,17 @@ const DEFAULT_AFTER_MIN = 15;
 const LOOKBACK_MS = 24 * 3_600_000;
 /** Бот отвечает сам, только пока окно Meta точно открыто (24 ч с запасом). */
 const REPLY_WINDOW_MS = 23 * 3_600_000;
+/** То, что ждало ещё до старта процесса (выкатка, рестарт), — только последние 6 ч. */
+const FIRST_RUN_WINDOW_MS = 6 * 3_600_000;
+let watchStartedAt = Date.now();
+/** Только для тестов: момент «старта процесса». */
+export function setWatchStartedAt(ms: number): void {
+  watchStartedAt = ms;
+}
+const NEWLINE = String.fromCharCode(10);
 /** Сколько ответов бота за один тик: первый запуск может найти несколько человек сразу. */
 const MAX_REPLIES_PER_TICK = 5;
-const MAX_CONTACTS = 200;
+const MAX_CONTACTS = 500;
 
 async function minutesSetting(key: string, fallback: number): Promise<number> {
   const raw = Number((await getSetting(key))?.trim());
@@ -96,13 +105,95 @@ function waitingOf(contact: Contact & { messages: Message[] }, since: Date, cuto
   return { contact: plain as Contact, pending };
 }
 
-/** Одно напоминание на ожидание: занимаем отметку атомарно (два тика не задвоят). */
+/**
+ * Одно решение на ожидание: занимаем отметку атомарно (два тика не задвоят) и
+ * ТЕМ ЖЕ запросом проверяем, что после этого входящего в переписке ничего не
+ * появилось (ответ Ширин, бота, новое сообщение клиента) — иначе двойной ответ.
+ */
 async function claim(contactId: string, lastInAt: Date, now: Date): Promise<boolean> {
   const res = await prisma.contact.updateMany({
-    where: { id: contactId, OR: [{ unansweredAlertAt: null }, { unansweredAlertAt: { lt: lastInAt } }] },
+    where: {
+      id: contactId,
+      OR: [{ unansweredAlertAt: null }, { unansweredAlertAt: { lt: lastInAt } }],
+      messages: { none: { createdAt: { gt: lastInAt } } },
+    },
     data: { unansweredAlertAt: now },
   });
-  return res.count > 0;
+  return (res?.count ?? 0) > 0;
+}
+
+/** Ответ сторожа упал (Meta 500, сеть) — вернуть отметку, чтобы следующий тик попробовал снова; не больше MAX_ATTEMPTS. */
+const MAX_ATTEMPTS = 3;
+async function releaseAfterFailure(contact: Contact, lastInAt: Date, claimedAt: Date): Promise<void> {
+  try {
+    const failures = await prisma.replyGate.count({
+      where: { contactId: contact.id, reason: { startsWith: "send_failed:" }, createdAt: { gte: lastInAt } },
+    });
+    if ((failures ?? 0) >= MAX_ATTEMPTS) return;
+    await prisma.contact.updateMany({
+      where: { id: contact.id, unansweredAlertAt: claimedAt },
+      data: { unansweredAlertAt: contact.unansweredAlertAt },
+    });
+  } catch (err) {
+    logError("unansweredWatch:release", err);
+  }
+}
+
+/** После последнего ответа пришло фото или чек (в очереди, на проверке у владельца): текстом бот не гадает. */
+async function receiptOrPhotoPending(contactId: string, pending: Message[]): Promise<boolean> {
+  if (pending.some((m) => !m.text?.trim() && !m.payload)) return true;
+  const since = pending[pending.length - 1].createdAt;
+  const receipt = await prisma.receiptCheck.findFirst({
+    where: { contactId, createdAt: { gte: since } },
+    select: { id: true },
+  });
+  return Boolean(receipt);
+}
+
+/**
+ * КЛИЕНТ САМ ПОПРОСИЛ ЧЕЛОВЕКА (правило владельца): бот к нему сам не
+ * возвращается — сторож один раз напоминает Ширин. «Сейчас уточню» бота — другое:
+ * там после тишины бот отвечает сам. Просьба открыта, пока Ширин не ответила.
+ */
+async function askedHumanOpen(contact: Contact): Promise<boolean> {
+  const at = contact.humanRequestedAt;
+  if (!at) return false;
+  const human = await prisma.message.findFirst({
+    where: { contactId: contact.id, direction: "OUT", byHuman: true, createdAt: { gte: at } },
+    select: { id: true },
+  });
+  if (human) return false;
+  const trace = await prisma.replyGate.findFirst({
+    where: {
+      contactId: contact.id,
+      reason: { startsWith: "asked_human:" },
+      createdAt: { gte: new Date(at.getTime() - 60_000) },
+    },
+    select: { id: true },
+  });
+  if (trace) return true;
+  // Просьбы до журнала решений: входящее прямо перед отметкой — «позовите человека».
+  const before = await prisma.message.findMany({
+    where: { contactId: contact.id, direction: "IN", createdAt: { gte: new Date(at.getTime() - 15 * 60_000), lte: at } },
+    select: { text: true },
+  });
+  return (before ?? []).some((m) => Boolean(m.text) && guardOffTopic(m.text as string)?.kind === "wants_human");
+}
+
+async function remindShirinOnce(contact: Contact, lastIn: Message): Promise<void> {
+  const at = contact.humanRequestedAt as Date;
+  const reminded = await prisma.replyGate.findFirst({
+    where: { contactId: contact.id, reason: { startsWith: "asked_human_reminded:" }, createdAt: { gte: at } },
+    select: { id: true },
+  });
+  if (reminded) return;
+  const who = contact.username ? `@${contact.username}` : contact.igUserId;
+  const last = (lastIn.text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  const lines = [`🙋 ${who} просил(а) живого человека и всё ещё ждёт ответа.`];
+  if (last) lines.push(`Последнее: «${last}»`);
+  lines.push("Бот сам не отвечает — ответьте, пожалуйста.");
+  await sendKind("human", lines.join(NEWLINE)).catch((err) => logError("unansweredWatch:remind", err));
+  await recordNoReply(contact, "asked_human_reminded", lastIn.text);
 }
 
 /** Каналы, где тишина после Ширин временная и сторож отвечает сам (WhatsApp — вручную, automation.ts). */
@@ -148,17 +239,34 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
   // сообщать об этом больше некому: «ждут» видно в панели.
   if (frozen || !aiOn) return;
 
-  const candidates = await prisma.contact.findMany({
+  // Сначала — люди, которые писали последними (раньше take без порядка мог пропускать
+  // часть контактов при большом наплыве). Один запрос по входящим, по человеку — одно.
+  const recent = await prisma.message.findMany({
     where: {
-      channel: { in: WATCHED_CHANNELS },
-      spamBlockedAt: null,
-      whatsappSavedContact: false,
-      accessRevokedAt: null,
-      messages: { some: { direction: "IN", createdAt: { gte: since, lte: cutoff } } },
+      direction: "IN",
+      createdAt: { gte: since, lte: cutoff },
+      contact: {
+        channel: { in: WATCHED_CHANNELS },
+        spamBlockedAt: null,
+        whatsappSavedContact: false,
+        accessRevokedAt: null,
+        personal: false,
+      },
     },
-    include: { messages: { orderBy: { createdAt: "desc" }, take: 12 } },
+    orderBy: { createdAt: "desc" },
+    distinct: ["contactId"],
+    select: { contactId: true },
     take: MAX_CONTACTS,
   });
+  const ids = (recent ?? []).map((r) => r.contactId);
+  if (ids.length === 0) return;
+  const rank = new Map(ids.map((id, i) => [id, i]));
+  const candidates = (
+    (await prisma.contact.findMany({
+      where: { id: { in: ids } },
+      include: { messages: { orderBy: { createdAt: "desc" }, take: 12 } },
+    })) ?? []
+  ).sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
 
   let replies = 0;
   for (const raw of candidates) {
@@ -169,7 +277,10 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
     const lastIn = pending[0];
     // «Личный» — вручную или «знакомые» (на них подписана Ширин) — это не клиенты.
     if (contact.personal) continue;
-    if (now.getTime() - lastIn.createdAt.getTime() >= REPLY_WINDOW_MS) continue;
+    const waitedMs = now.getTime() - lastIn.createdAt.getTime();
+    // Сразу после выкатки (рестарта) не отвечаем на то, что ждёт с прошлого дня: окно 6 ч, не 23.
+    const windowMs = lastIn.createdAt.getTime() < watchStartedAt ? FIRST_RUN_WINDOW_MS : REPLY_WINDOW_MS;
+    if (waitedMs >= windowMs) continue;
 
     // Тишина ещё идёт — Ширин ведёт разговор или клиент ждёт человека. Кончится — ответим.
     const ends = silenceEndsAt(contact, silenceMs);
@@ -186,22 +297,29 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
     if (await offlineHandoffSilences(contact)) continue;
     if (await stillInProgress(contact.id, pending)) continue;
 
+    // Фото или чек после последнего ответа: без картинки бот ответил бы «чек не вижу».
+    if (await receiptOrPhotoPending(contact.id, pending)) {
+      if (await claim(contact.id, lastIn.createdAt, now)) await recordNoReply(contact, "media_only", lastIn.text);
+      continue;
+    }
+    // Клиент просил человека — бот сам не возвращается, Ширин напоминаем один раз.
+    if (await askedHumanOpen(contact)) {
+      if (await claim(contact.id, lastIn.createdAt, now)) await remindShirinOnce(contact, lastIn);
+      continue;
+    }
+
     if (!(await claim(contact.id, lastIn.createdAt, now))) continue;
     const texts = pending
       .map((m) => m.text?.trim())
       .filter((t): t is string => Boolean(t))
       .reverse();
-    if (texts.length === 0) {
-      // Только фото/файл: ссылка на вложение уже протухла, а чек разбирает своя очередь.
-      await recordNoReply(contact, "media_only", null);
-      continue;
-    }
     replies++;
     try {
       // Если и сейчас ответа не будет, aiReply сам запишет причину в журнал.
-      await aiReply(contact, texts.join("\n"));
+      await aiReply(contact, texts.join(NEWLINE), [], [], { waitedMs });
     } catch (err) {
       logError("unansweredWatch:reply", err);
+      await releaseAfterFailure(contact, lastIn.createdAt, now);
     }
   }
 }

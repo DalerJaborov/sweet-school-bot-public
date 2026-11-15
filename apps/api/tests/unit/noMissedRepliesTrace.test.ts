@@ -96,8 +96,9 @@ beforeEach(() => {
   db.model("message").count.mockResolvedValue(5);
   db.model("purchase").count.mockResolvedValue(0);
   // «Ушло ли что-то клиенту за этот ход» — единственный вопрос следа к истории.
-  db.model("message").findFirst.mockImplementation(async (args: { where?: { direction?: string; createdAt?: unknown } }) =>
-    args?.where?.direction === "OUT" && args.where.createdAt && outSince ? { id: "out-1" } : null,
+  db.model("message").findFirst.mockImplementation(
+    async (args: { where?: { direction?: string; createdAt?: unknown } }) =>
+      args?.where?.direction === "OUT" && args.where.createdAt && outSince ? { id: "out-1" } : null,
   );
   generateWithFallback.mockReset();
   sendToContact.mockReset().mockImplementation(async () => {
@@ -111,8 +112,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ig = fakeContact({ channel: "INSTAGRAM", humanTakenOverAt: null, humanSilencedUntil: null }) as Parameters<typeof aiReply>[0];
-const gateRow = () => db.model("replyGate").create.mock.calls.map((c) => (c[0] as { data: Record<string, string> }).data);
+const ig = fakeContact({ channel: "INSTAGRAM", humanTakenOverAt: null, humanSilencedUntil: null }) as Parameters<
+  typeof aiReply
+>[0];
+const gateRow = () =>
+  db.model("replyGate").create.mock.calls.map((c) => (c[0] as { data: Record<string, string> }).data);
 
 describe("aiReply: молчание всегда с причиной", () => {
   it("модель сказала [NO_REPLY] — в журнале «молчим нарочно» с началом сообщения", async () => {
@@ -120,19 +124,29 @@ describe("aiReply: молчание всегда с причиной", () => {
     await aiReply(ig, "Хоп, фаҳмидам", [], []);
     expect(sendToContact).not.toHaveBeenCalled();
     expect(gateRow()).toEqual([
-      expect.objectContaining({ contactId: "contact-1", cls: "policy", action: "silent", reason: expect.stringMatching(/^model_no_reply/), preview: "Хоп, фаҳмидам" }),
+      expect.objectContaining({
+        contactId: "contact-1",
+        cls: "policy",
+        action: "silent",
+        reason: expect.stringMatching(/^model_no_reply/),
+        preview: "Хоп, фаҳмидам",
+      }),
     ]);
   });
 
   it("Ширин ведёт разговор (пауза 3 ч) — модель не зовём, в журнале «ждём человека», сторож ответит после", async () => {
     await aiReply({ ...ig, humanTakenOverAt: new Date() } as typeof ig, "Нарх чанд?", [], []);
     expect(generateWithFallback).not.toHaveBeenCalled();
-    expect(gateRow()).toEqual([expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^human_takeover/) })]);
+    expect(gateRow()).toEqual([
+      expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^human_takeover/) }),
+    ]);
   });
 
   it("бот сказал «уточню» и ждёт Ширин час — тоже «ждём человека», а не тишина без следа", async () => {
     await aiReply({ ...ig, humanSilencedUntil: new Date(Date.now() + 30 * 60_000) } as typeof ig, "А когда?", [], []);
-    expect(gateRow()).toEqual([expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^human_requested/) })]);
+    expect(gateRow()).toEqual([
+      expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^human_requested/) }),
+    ]);
   });
 
   it("ответ ушёл — журнал не трогаем", async () => {
@@ -146,13 +160,67 @@ describe("aiReply: молчание всегда с причиной", () => {
     generateWithFallback.mockResolvedValue(said("Курс 70 сомони, навсегда."));
     sendToContact.mockReset().mockRejectedValue(new Error("Meta 500"));
     await expect(aiReply(ig, "Нарх чанд?", [], [])).rejects.toThrow("Meta 500");
-    expect(gateRow()).toEqual([expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^send_failed/) })]);
+    expect(gateRow()).toEqual([
+      expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^send_failed/) }),
+    ]);
   });
 
   it("ИИ не ответил — ход в очереди повторов и «ждём» в журнале", async () => {
     generateWithFallback.mockResolvedValue({ error: new Error("503") });
     await aiReply(ig, "Нарх чанд?", [], []);
-    expect(gateRow()).toEqual([expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^ai_error/) })]);
+    expect(gateRow()).toEqual([
+      expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^ai_error/) }),
+    ]);
+  });
+});
+
+describe("ревью PR #96: след и поведение хода", () => {
+  it("п.7 экстренная пауза — «ждём», а не окончательное молчание: после снятия паузы сторож ответит", async () => {
+    SETTINGS.botFrozen = "true";
+    try {
+      await aiReply(ig, "Нарх чанд?", [], []);
+    } finally {
+      delete SETTINGS.botFrozen;
+    }
+    expect(gateRow()).toEqual([expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^frozen/) })]);
+  });
+
+  it("п.10 WhatsApp повторяет ход сам — упавшая попытка строку в журнал не пишет", async () => {
+    generateWithFallback.mockResolvedValue(said("Курс 70 сомони, навсегда."));
+    sendToContact.mockReset().mockRejectedValue(new Error("bridge busy"));
+    const wa = { ...ig, channel: "WHATSAPP" } as typeof ig;
+    await expect(aiReply(wa, "Нарх чанд?", [], [])).rejects.toThrow();
+    expect(db.model("replyGate").create).not.toHaveBeenCalled();
+  });
+
+  it("п.4 «уточню» уже обещано и Ширин не ответила — второго «уточню» клиенту нет, ждём её", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ humanRequestedAt: new Date(Date.now() - 90 * 60_000) });
+    generateWithFallback.mockResolvedValue(said("[ASK_SHIRIN]"));
+    await aiReply(ig, "А скидка есть?", [], []);
+    expect(sendToContact).not.toHaveBeenCalled();
+    expect(gateRow()).toEqual([expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^human_requested/) })]);
+  });
+
+  it("п.4 первое «уточню» уходит как раньше", async () => {
+    db.model("contact").findUnique.mockResolvedValue({ humanRequestedAt: null });
+    generateWithFallback.mockResolvedValue(said("[ASK_SHIRIN]"));
+    await aiReply(ig, "А скидка есть?", [], []);
+    expect(sendToContact).toHaveBeenCalledTimes(1);
+    expect(String(sendToContact.mock.calls[0][1])).toMatch(/уточню/i);
+  });
+
+  it("п.5 сторож отвечает спустя больше двух часов — в промпте просьба коротко извиниться на «вы»", async () => {
+    generateWithFallback.mockResolvedValue(said("Курс 70 сомони, навсегда."));
+    await aiReply(ig, "Нарх чанд?", [], [], { waitedMs: 3 * 3_600_000 });
+    const build = generateWithFallback.mock.calls[0][2] as (m: string) => string;
+    expect(JSON.parse(build("m")).system_instruction.parts[0].text).toContain("извинения за задержку");
+  });
+
+  it("п.5 обычный ход — без извинений", async () => {
+    generateWithFallback.mockResolvedValue(said("Курс 70 сомони, навсегда."));
+    await aiReply(ig, "Нарх чанд?", [], []);
+    const build = generateWithFallback.mock.calls[0][2] as (m: string) => string;
+    expect(JSON.parse(build("m")).system_instruction.parts[0].text).not.toContain("извинения за задержку");
   });
 });
 

@@ -14,7 +14,7 @@ vi.mock("../../src/telegram.js", () => ({
 }));
 vi.mock("../../src/funnel.js", () => ({ COMMENT_WAITING_OUTCOMES: ["waiting_human", "ai_off", "no_keys", "budget", "ai_error"] }));
 
-import { runUnansweredWatch } from "../../src/unansweredWatch.js";
+import { runUnansweredWatch, setWatchStartedAt } from "../../src/unansweredWatch.js";
 import { resetHumanSilenceMs } from "../../src/messaging/automation.js";
 import { FOLLOW_PERSONAL_REASON } from "../../src/profiles.js";
 
@@ -60,6 +60,9 @@ beforeEach(() => {
   db.model("seenComment").findMany.mockResolvedValue([]);
   db.model("replyGate").findFirst.mockResolvedValue(null);
   db.model("message").findFirst.mockResolvedValue(null);
+  // Кандидаты — по последним входящим (сам список контактов отдаёт contact.findMany).
+  db.model("message").findMany.mockResolvedValue([{ contactId: "contact-1" }]);
+  setWatchStartedAt(0);
 });
 afterEach(() => {
   restorePrisma();

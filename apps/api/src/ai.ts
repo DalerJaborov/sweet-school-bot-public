@@ -24,11 +24,7 @@ import { sendToContact, sendPrivateReplyRecorded } from "./messaging/send.js";
 import { recordNoReply, policyNoReplyReason, type NoReplyReason } from "./messaging/noReply.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
-import {
-  isBotFrozen,
-  assertAutomationAllowed,
-  contactAutomationBlocked,
-} from "./messaging/automation.js";
+import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked } from "./messaging/automation.js";
 import {
   guardOffTopic,
   guardReply,
@@ -299,6 +295,7 @@ export async function aiReply(
   text: string,
   attachments: Attachment[] = [],
   rescuedImages: RescuedImage[] = [],
+  opts: TurnOptions = {},
 ): Promise<void> {
   // СЛЕД КАЖДОГО МОЛЧАНИЯ (аудит 15.11.2026): ход кончился, а клиенту ничего не
   // ушло — пишем причину в журнал решений (messaging/noReply.ts). По нему аудит
@@ -306,9 +303,10 @@ export async function aiReply(
   const startedAt = new Date();
   let reason: NoReplyReason | "relevance_gate" | undefined;
   try {
-    reason = await answerTurn(contact, text, attachments, rescuedImages);
+    reason = await answerTurn(contact, text, attachments, rescuedImages, opts);
   } catch (err) {
-    await traceIfUnanswered(contact, startedAt, text, "send_failed");
+    // WhatsApp повторяет ход сам (whatsapp/worker.ts) — строка на каждую попытку была бы шумом.
+    if (contact.channel !== "WHATSAPP") await traceIfUnanswered(contact, startedAt, text, "send_failed");
     throw err;
   }
   // Фильтр «не по делу» сам пишет своё решение (relevanceGate.ts) — второй строки не нужно.
@@ -316,7 +314,12 @@ export async function aiReply(
 }
 
 /** Ход закончился без исходящего — записать причину. Ответ ушёл (текст, фото, ссылка) — ничего. */
-async function traceIfUnanswered(contact: Contact, startedAt: Date, text: string, reason: NoReplyReason): Promise<void> {
+async function traceIfUnanswered(
+  contact: Contact,
+  startedAt: Date,
+  text: string,
+  reason: NoReplyReason,
+): Promise<void> {
   try {
     const sent = await prisma.message.findFirst({
       where: { contactId: contact.id, direction: "OUT", createdAt: { gte: startedAt } },
@@ -329,11 +332,21 @@ async function traceIfUnanswered(contact: Contact, startedAt: Date, text: string
   await recordNoReply(contact, reason, text);
 }
 
+/** Ход сторожа «без ответа»: сколько клиент уже ждёт (для извинения за задержку). */
+export type TurnOptions = { waitedMs?: number };
+
+/** Ждал дольше — бот начинает с короткого извинения (ревью 15.11.2026). */
+export const LATE_REPLY_AFTER_MS = 2 * 3_600_000;
+export const LATE_REPLY_HINT =
+  "\nКлиент ждал ответа больше двух часов. Начните ответ с одной короткой фразы-извинения за задержку " +
+  "на языке клиента, строго на «вы» (по-таджикски — «шумо»), и сразу ответьте по сути.";
+
 async function answerTurn(
   contact: Contact,
   text: string,
   attachments: Attachment[],
   rescuedImages: RescuedImage[],
+  opts: TurnOptions = {},
 ): Promise<NoReplyReason | "relevance_gate" | undefined> {
   // ЭКСТРЕННАЯ ПАУЗА (владелец 13.09.2026): «всё, кроме воронки». Гасит и
   // выдачу ссылки на курс (maybeRestoreAccess ниже — обычно работает ДАЖЕ при
@@ -549,6 +562,7 @@ async function answerTurn(
     webChannelBlock(contact) +
     (await deliveryPrompt(contact)) +
     (await videoHelpPrompt()) +
+    ((opts.waitedMs ?? 0) >= LATE_REPLY_AFTER_MS ? LATE_REPLY_HINT : "") +
     REPLY_POLICY_INSTRUCTION;
   // gemini-2.5-flash закрыта Google (404 на каждый вызов) — та же модель, что
   // сейчас реально отвечает в основной CRM (см. GEMINI_MODEL там).
@@ -676,7 +690,7 @@ async function answerTurn(
     }
     // Модель честно сказала «фактов нет» — «Ширин сама ответит» и зовём её (пункт 7).
     if (replyText && isAskShirin(replyText)) {
-      await handOffUnknownToShirin(contact, text, language);
+      if (!(await handOffUnknownToShirin(contact, text, language))) silence = "human_requested";
       replyText = null;
     }
     if (replyText) {
@@ -698,7 +712,7 @@ async function answerTurn(
           (isAskShirin(replyText) || (stillIssues.length > 0 && stillIssues.every((i) => FACT_ISSUES.has(i))))
         ) {
           logWarn("ai:replyPolicy", `${contact.id}: handed to Shirin ${issues.join(",")}`);
-          await handOffUnknownToShirin(contact, text, language);
+          if (!(await handOffUnknownToShirin(contact, text, language))) silence = "human_requested";
           replyText = null;
         } else if (!replyText || stillIssues.length || replyText.trim() === "[NO_REPLY]") {
           logWarn("ai:replyPolicy", `${contact.id}: held ${issues.join(",")}`);
@@ -750,7 +764,7 @@ async function answerTurn(
           silence = "model_no_reply";
         } else if (replyText === null) {
           logWarn("ai:emptyAfterFilters", `${contact.id}: handed to Shirin after ${emptiedBy.join(",")}`);
-          await handOffUnknownToShirin(contact, text, language);
+          if (!(await handOffUnknownToShirin(contact, text, language))) silence = "human_requested";
         }
       }
       // Редкий смайлик, как у самой Ширин (voice.ts): не чаще раза на три ответа,
@@ -1059,6 +1073,8 @@ async function callOwnerToChat(contact: Contact, lastText: string): Promise<void
     .catch((err) => {
       logError("ai:callOwnerToChat:silence", err);
     });
+  // След просьбы: по нему сторож не вернёт бота к этому человеку сам, а напомнит Ширин.
+  await recordNoReply(contact, "asked_human", lastText);
 
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   // Кнопки быстрых ответов под уведомлением — чтобы не набирать с телефона,
@@ -1404,7 +1420,22 @@ async function handOffUnknownToShirin(
   question: string,
   language: ClientLanguage,
   send: (reply: string) => Promise<string | null> = (reply) => sendToContact(contact, reply),
-): Promise<void> {
+): Promise<boolean> {
+  const who = contact.username ? `@${contact.username}` : contact.igUserId;
+  const quickReplies = await getQuickReplies();
+  const buttons = quickReplies.map((qr, i) => [{ text: qr.label, callback_data: `qr:${contact.id}:${i}` }]);
+  // ВТОРОГО «УТОЧНЮ» НЕ БЫВАЕТ (ревью 15.11.2026). Обещание уже висит, Ширин ещё не
+  // ответила — повтор клиенту звучит как автомат. Молчим и говорим Ширин ещё раз.
+  if (await shirinHandoffOpen(contact.id)) {
+    await sendKind(
+      "human",
+      `❓ ${who} снова спросил то, чего бот не знает: «${question.slice(0, 200)}»
+
+Бот уже обещал «уточню» и второй раз не повторяет — ответьте сами или кнопкой ниже.`,
+      { buttons },
+    ).catch((err) => logError("ai:askShirin:notify", err));
+    return false;
+  }
   const reply = ASK_SHIRIN_REPLY[language];
   const mid = await send(reply);
   if (mid) await recordOutgoingMessage(contact.id, reply, mid);
@@ -1415,9 +1446,6 @@ async function handOffUnknownToShirin(
       data: { humanSilencedUntil: new Date(now + HUMAN_REQUESTED_SILENCE_MS), humanRequestedAt: new Date(now) },
     })
     .catch((err) => logError("ai:askShirin:silence", err));
-  const who = contact.username ? `@${contact.username}` : contact.igUserId;
-  const quickReplies = await getQuickReplies();
-  const buttons = quickReplies.map((qr, i) => [{ text: qr.label, callback_data: `qr:${contact.id}:${i}` }]);
   await sendKind(
     "human",
     `❓ ${who} спросил то, чего бот не знает: «${question.slice(0, 200)}»
@@ -1425,6 +1453,25 @@ async function handOffUnknownToShirin(
 Бот ответил «сейчас уточню и напишу вам» и молчит час. Ответьте сами или кнопкой ниже.`,
     { buttons },
   ).catch((err) => logError("ai:askShirin:notify", err));
+  return true;
+}
+
+/** Обещание «Ширин ответит» ещё висит: за последние сутки бот передал человеку, а живого ответа после этого не было. */
+const HANDOFF_OPEN_MS = 24 * 3_600_000;
+async function shirinHandoffOpen(contactId: string): Promise<boolean> {
+  try {
+    const fresh = await prisma.contact.findUnique({ where: { id: contactId }, select: { humanRequestedAt: true } });
+    const at = fresh?.humanRequestedAt;
+    if (!at || Date.now() - at.getTime() > HANDOFF_OPEN_MS) return false;
+    const human = await prisma.message.findFirst({
+      where: { contactId, direction: "OUT", byHuman: true, createdAt: { gte: at } },
+      select: { id: true },
+    });
+    return !human;
+  } catch (err) {
+    logError("ai:askShirin:openCheck", err);
+    return false;
+  }
 }
 
 /** Факты, по которым replyPolicy проверяет ответ перед отправкой: суммы,

@@ -7,10 +7,12 @@ import { fakeContact, mockPrisma, restorePrisma, type PrismaMock } from "../help
  * только на паузу после ответа Ширин в Instagram и только на сообщения, пришедшие
  * во время неё. Данные выдуманные.
  */
-const aiReply = vi.fn(async () => undefined);
-vi.mock("../../src/ai.js", () => ({ aiReply: (...a: unknown[]) => aiReply(...(a as [])) }));
+const aiReply = vi.fn(async (..._a: unknown[]) => undefined);
+vi.mock("../../src/ai.js", () => ({ aiReply: (...a: unknown[]) => aiReply(...a) }));
+const sendKind = vi.fn(async (..._a: unknown[]) => 1);
+vi.mock("../../src/notify.js", () => ({ sendKind: (...a: unknown[]) => sendKind(...a) }));
 
-import { runUnansweredWatch } from "../../src/unansweredWatch.js";
+import { runUnansweredWatch, setWatchStartedAt } from "../../src/unansweredWatch.js";
 import { resetHumanSilenceMs } from "../../src/messaging/automation.js";
 import { FOLLOW_PERSONAL_REASON } from "../../src/profiles.js";
 
@@ -60,6 +62,11 @@ beforeEach(() => {
   db.model("replyGate").findFirst.mockResolvedValue(null);
   db.model("pendingAiReply").findFirst.mockResolvedValue(null);
   db.model("webhookInbox").findFirst.mockResolvedValue(null);
+  db.model("receiptCheck").findFirst.mockResolvedValue(null);
+  db.model("message").findFirst.mockResolvedValue(null);
+  db.model("message").findMany.mockResolvedValue([{ contactId: "contact-1" }]);
+  sendKind.mockClear();
+  setWatchStartedAt(0);
 });
 afterEach(() => {
   restorePrisma();
@@ -87,8 +94,12 @@ describe("КЛАСС A: тишина кончилась — бот отвеча�
       }),
     ]);
     await runUnansweredWatch(NOW);
-    expect(db.model("contact").findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ channel: { in: ["INSTAGRAM", "MESSENGER"] } }) }),
+    expect(db.model("message").findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          contact: expect.objectContaining({ channel: { in: ["INSTAGRAM", "MESSENGER"] } }),
+        }),
+      }),
     );
     expect(aiReply).toHaveBeenCalledTimes(1);
   });
@@ -162,7 +173,7 @@ describe("КЛАСС A: тишина кончилась — бот отвеча�
     );
   });
 
-  it("только фото без текста — бот не гадает, но решение записано в журнал (один раз на ожидание)", async () => {
+  it("только фото без текста — бот не гадает, но «ждём разбора» записано в журнал (один раз на ожидание)", async () => {
     db.model("contact").findMany.mockResolvedValue([
       contactWith([msg("OUT", 240, "Салом!"), msg("IN", 200, null)], { humanTakenOverAt: ago(240) }),
     ]);
@@ -173,7 +184,7 @@ describe("КЛАСС A: тишина кончилась — бот отвеча�
     );
     expect(db.model("replyGate").create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ action: "silent", reason: expect.stringMatching(/^media_only/) }),
+        data: expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^media_only/) }),
       }),
     );
   });
@@ -184,6 +195,161 @@ describe("КЛАСС A: тишина кончилась — бот отвеча�
       contactWith([msg("IN", 60, "Курс чанд?")], { id: "c2", personal: true, personalReason: "мама" }),
     ]);
     await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+  });
+});
+
+/** Ревью PR #96 (15.11.2026): каждая проверка падала бы на первой версии сторожа. */
+describe("ревью: сторож не делает хуже", () => {
+  const pausedBuyer = (messages: ReturnType<typeof msg>[], overrides: Record<string, unknown> = {}) =>
+    contactWith(messages, { humanTakenOverAt: ago(400), ...overrides });
+
+  it("п.1 чек на проверке после последнего ответа + «Оплатила» — бот не говорит «чек не вижу», а ждёт разбора", async () => {
+    db.model("contact").findMany.mockResolvedValue([
+      pausedBuyer([msg("OUT", 400, "Реквизиты"), msg("IN", 60, "Оплатила")]),
+    ]);
+    db.model("receiptCheck").findFirst.mockResolvedValue({ id: "rc-1" });
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+    expect(db.model("receiptCheck").findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { contactId: "contact-1", createdAt: { gte: ago(60) } } }),
+    );
+    expect(db.model("replyGate").create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: "wait", reason: expect.stringMatching(/^media_only/) }),
+      }),
+    );
+  });
+
+  it("п.1 фото без подписи и следом «Оплатила» — тоже не отвечаем текстом", async () => {
+    db.model("contact").findMany.mockResolvedValue([
+      pausedBuyer([msg("OUT", 400, "Реквизиты"), msg("IN", 61, null), msg("IN", 60, "Оплатила")]),
+    ]);
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+  });
+
+  it("п.2 кандидаты — по последнему входящему, свежие первыми, без дублей; порядок обхода тот же", async () => {
+    db.model("message").findMany.mockResolvedValue([{ contactId: "c-new" }, { contactId: "c-old" }]);
+    db.model("contact").findMany.mockResolvedValue([
+      contactWith([msg("IN", 300, "Курс чанд?")], { id: "c-old" }),
+      contactWith([msg("IN", 30, "Онлайн аст?")], { id: "c-new" }),
+    ]);
+    await runUnansweredWatch(NOW);
+    expect(db.model("message").findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { createdAt: "desc" }, distinct: ["contactId"], select: { contactId: true } }),
+    );
+    expect(db.model("contact").findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["c-new", "c-old"] } } }),
+    );
+    expect(aiReply.mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual(["c-new", "c-old"]);
+  });
+
+  it("п.3 ответ упал (Meta 500) — отметка возвращается, следующий тик попробует снова", async () => {
+    const prev = ago(500);
+    db.model("contact").findMany.mockResolvedValue([
+      pausedBuyer([msg("OUT", 400, "Ҳа"), msg("IN", 60, "Нарх чанд?")], { unansweredAlertAt: prev }),
+    ]);
+    aiReply.mockRejectedValueOnce(new Error("Meta 500"));
+    db.model("replyGate").count.mockResolvedValue(1);
+    await runUnansweredWatch(NOW);
+    expect(db.model("contact").updateMany).toHaveBeenLastCalledWith({
+      where: { id: "contact-1", unansweredAlertAt: NOW },
+      data: { unansweredAlertAt: prev },
+    });
+  });
+
+  it("п.3 три сбоя подряд — больше не пробуем (потолок попыток)", async () => {
+    db.model("contact").findMany.mockResolvedValue([pausedBuyer([msg("OUT", 400, "Ҳа"), msg("IN", 60, "Нарх чанд?")])]);
+    aiReply.mockRejectedValueOnce(new Error("Meta 500"));
+    db.model("replyGate").count.mockResolvedValue(3);
+    await runUnansweredWatch(NOW);
+    expect(db.model("contact").updateMany).toHaveBeenCalledTimes(1); // только сама отметка
+  });
+
+  it("п.4 клиент САМ просил человека, Ширин не ответила — бот не возвращается, Ширин напоминаем один раз", async () => {
+    const asked = contactWith([msg("OUT", 120, "Ширин скоро ответит"), msg("IN", 50, "Ну где вы?")], {
+      humanRequestedAt: ago(120),
+      humanSilencedUntil: ago(60),
+    });
+    db.model("contact").findMany.mockResolvedValue([asked]);
+    db.model("replyGate").findFirst.mockImplementation(
+      async ({ where }: { where: { reason?: { startsWith: string } } }) =>
+        where.reason?.startsWith === "asked_human:" ? { id: "asked" } : null,
+    );
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+    expect(sendKind).toHaveBeenCalledTimes(1);
+    expect(sendKind.mock.calls[0][0]).toBe("human");
+    expect(String(sendKind.mock.calls[0][1])).toContain("Ну где вы?");
+    expect(db.model("replyGate").create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ reason: expect.stringMatching(/^asked_human_reminded/) }),
+      }),
+    );
+  });
+
+  it("п.4 напоминание уже было — второй раз Ширин не тревожим", async () => {
+    db.model("contact").findMany.mockResolvedValue([
+      contactWith([msg("OUT", 120, "Ширин скоро ответит"), msg("IN", 20, "Алло?")], {
+        humanRequestedAt: ago(120),
+        humanSilencedUntil: ago(60),
+      }),
+    ]);
+    db.model("replyGate").findFirst.mockImplementation(
+      async ({ where }: { where: { reason?: { startsWith: string } } }) => (where.reason ? { id: "row" } : null),
+    );
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+    expect(sendKind).not.toHaveBeenCalled();
+  });
+
+  it("п.4 просьба до журнала решений узнаётся по самому сообщению «позовите человека»", async () => {
+    db.model("contact").findMany.mockResolvedValue([
+      contactWith(
+        [msg("IN", 121, "Позовите живого человека"), msg("OUT", 120, "Ширин скоро ответит"), msg("IN", 50, "Ну?")],
+        {
+          humanRequestedAt: ago(120),
+          humanSilencedUntil: ago(60),
+        },
+      ),
+    ]);
+    db.model("message")
+      .findMany.mockResolvedValueOnce([{ contactId: "contact-1" }])
+      .mockResolvedValueOnce([{ text: "Позовите живого человека" }]);
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+    expect(sendKind).toHaveBeenCalledTimes(1);
+  });
+
+  it("п.5 ждал больше двух часов — сторож передаёт, сколько ждал (бот извинится за задержку)", async () => {
+    db.model("contact").findMany.mockResolvedValue([
+      pausedBuyer([msg("OUT", 400, "Ҳа"), msg("IN", 190, "Нарх чанд?")]),
+    ]);
+    await runUnansweredWatch(NOW);
+    expect(aiReply.mock.calls[0][4]).toEqual({ waitedMs: 190 * MIN });
+  });
+
+  it("п.5 первый запуск после выкатки: ждущее с прошлого дня (старше 6 ч) не трогаем, свежее — отвечаем", async () => {
+    setWatchStartedAt(NOW.getTime());
+    db.model("message").findMany.mockResolvedValue([{ contactId: "c-day" }, { contactId: "contact-1" }]);
+    db.model("contact").findMany.mockResolvedValue([
+      contactWith([msg("IN", 7 * 60, "Курс чанд?")], { id: "c-day" }),
+      contactWith([msg("IN", 5 * 60, "Онлайн аст?")]),
+    ]);
+    await runUnansweredWatch(NOW);
+    expect(aiReply.mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual(["contact-1"]);
+  });
+
+  it("п.6 отметка ставится только если после этого входящего в переписке ничего не появилось", async () => {
+    db.model("contact").findMany.mockResolvedValue([pausedBuyer([msg("OUT", 400, "Ҳа"), msg("IN", 60, "Нарх чанд?")])]);
+    db.model("contact").updateMany.mockResolvedValue({ count: 0 }); // успели ответить между выборкой и отметкой
+    await runUnansweredWatch(NOW);
+    expect(db.model("contact").updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ messages: { none: { createdAt: { gt: ago(60) } } } }),
+      }),
+    );
     expect(aiReply).not.toHaveBeenCalled();
   });
 });
