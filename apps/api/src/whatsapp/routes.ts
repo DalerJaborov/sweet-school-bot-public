@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { askedHumanHoldFrom } from "../messaging/automation.js";
 import { autoCatch } from "../asyncRoute.js";
 import { bridgeRequest, whatsappConfigured, BridgeError } from "./client.js";
 import { attentionText, chatTitle, describeIncoming } from "./attention.js";
@@ -61,7 +62,8 @@ conversationAdminRouter.post("/:id/return-to-bot", async (req, res) => {
   res.json({ ok: true });
 });
 conversationAdminRouter.get("/paused", async (_req, res) => {
-  res.json(await prisma.contact.findMany({ where: { humanTakenOverAt: { not: null } }, orderBy: { humanTakenOverAt: "desc" }, take: 50,
+  // И те, кто просил живого человека: бот молчит с ними до ответа Ширин — вернуть можно здесь (15.11.2026).
+  res.json(await prisma.contact.findMany({ where: { OR: [{ humanTakenOverAt: { not: null } }, { humanSilencedUntil: { gte: askedHumanHoldFrom() } }] }, orderBy: { humanTakenOverAt: "desc" }, take: 50,
     select: { id: true, name: true, username: true, channel: true, humanTakenOverAt: true, whatsappSavedContact: true, personal: true } }));
 });
 conversationAdminRouter.post("/:id/resume", async (req, res) => {

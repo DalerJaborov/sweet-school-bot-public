@@ -1,6 +1,5 @@
 import { prisma, logError, recordOutgoingMessage, getSetting } from "./db.js";
 import {
-  sendPrivateReply,
   replyToComment,
   deleteComment,
   metaChannelOf,
@@ -9,7 +8,7 @@ import {
   type Channel,
   type MetaChannel,
 } from "./instagram.js";
-import { sendToContact, sendAttachmentToContact } from "./messaging/send.js";
+import { sendToContact, sendAttachmentToContact, sendPrivateReplyRecorded } from "./messaging/send.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import {
   isBotFrozen,
@@ -25,6 +24,7 @@ import { notifyFunnelGaveUp } from "./systemAlerts.js";
 import type { Contact, Delivery, Funnel, FunnelStep, Prisma } from "@prisma/client";
 import { parseStepButtonsJson, parseStringArray } from "./json.js";
 import { canRetryMetaFailure } from "./messaging/metaErrors.js";
+import { recordNoReply } from "./messaging/noReply.js";
 import { renderFunnelText } from "./funnelPlaceholders.js";
 import { stripRepeatGreeting } from "./greeting.js";
 import { shouldSkipRequisitesStep } from "./ai/repeatGuard.js";
@@ -204,11 +204,7 @@ async function sendStep(
   // выглядел бы как сбой, да и Meta его не примет.
   if (text || buttons.length > 0) {
     if (privateReplyCommentId) {
-      mid = await withContactMessaging(delivery.contact.id, "reply", () =>
-        withMessagingPermission("funnel", () =>
-          sendPrivateReply(privateReplyCommentId, text, buttons, metaChannelOf(delivery.contact)),
-        ),
-      );
+      mid = await sendPrivateReplyRecorded(delivery.contact, privateReplyCommentId, text, buttons, { funnel: true });
     } else {
       mid = await withMessagingPermission("funnel", () => sendToContact(delivery.contact, text, buttons));
     }
@@ -397,7 +393,11 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
     data: { state: "ACTIVE", nextOrder: step.order, nextRunAt: new Date(Date.now() + 5 * 60_000) },
   });
   if (claimed.count === 0) {
-    if (delivery.state === "ACTIVE") return true; // The original tap is still scheduled/running.
+    if (delivery.state === "ACTIVE") {
+      // The original tap is still scheduled/running — его шаг и есть ответ (след для аудита).
+      await recordNoReply(contact, "funnel_tap_running", payload);
+      return true;
+    }
     const text =
       contact.preferredLanguage === "tg"
         ? "Ин тугма дигар кор намекунад. Саволатонро нависен ё тугмаи охиринро пахш кунен."
@@ -413,6 +413,9 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
         where: { id: delivery.id },
         data: { state: "ACTIVE", nextOrder: step.order, nextRunAt: new Date(Date.now() + step.delaySeconds * 1000) },
       });
+      // Ответ на нажатие уйдёт по расписанию шага — это решение, а не потеря (след нужен
+      // долгим паузам: сторож иначе ответил бы за воронку раньше её шага).
+      if (step.delaySeconds >= 60) await recordNoReply(contact, "funnel_step_scheduled", payload);
     } else {
       await sendStep(delivery, step.funnel, step);
     }
@@ -465,7 +468,9 @@ export async function handleIncomingDm(
     // отвечать нечего (меню уже перед ним), на вопрос ответит ИИ.
     if (anyMessage && opts.aiAvailable !== false && (await otherFunnelGreetedRecently(funnel, contact))) {
       await markFunnelSkipped(funnel, contact, "пропущено: меню другой воронки уже ушло");
-      return funnelMenuFits(text, opts.hasAttachments) && isTrivialMessage(text);
+      const greetingOnly = funnelMenuFits(text, opts.hasAttachments) && isTrivialMessage(text);
+      if (greetingOnly) await recordNoReply(contact, "funnel_menu_sent", text);
+      return greetingOnly;
     }
     // Первое сообщение — настоящий вопрос (или фото/голосовое): меню-приветствие
     // проглотило бы его. Отвечает ИИ (ai/firstMessage.ts), а воронка ОТЛОЖЕНА:

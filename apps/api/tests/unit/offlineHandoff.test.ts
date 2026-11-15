@@ -13,7 +13,10 @@ vi.mock("../../src/gemini.js", () => ({
 }));
 
 const sendToContact = vi.fn(async () => "mid-1");
-vi.mock("../../src/messaging/send.js", () => ({ sendToContact: (...a: unknown[]) => sendToContact(...a) }));
+vi.mock("../../src/messaging/send.js", async (original) => ({
+  ...(await original<typeof import("../../src/messaging/send.js")>()),
+  sendToContact: (...a: unknown[]) => sendToContact(...a),
+}));
 
 vi.mock("../../src/instagram.js", () => ({ sendPrivateReply: vi.fn(), metaChannelOf: () => "INSTAGRAM" }));
 vi.mock("../../src/upload.js", () => ({ saveReceiptImage: () => "/media/x.jpg" }));
