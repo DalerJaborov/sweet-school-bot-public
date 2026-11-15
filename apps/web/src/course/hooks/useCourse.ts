@@ -92,7 +92,7 @@ export function useCourse() {
   offlineRef.current = offline;
   savingRef.current = saving;
 
-  const lang: Lang = view?.profile?.language ?? "tg";
+  const lang: Lang = view?.profile?.language ?? "ru";
   const t = useMemo(() => dict(lang), [lang]);
   useEffect(() => applyLang(lang), [lang]);
 

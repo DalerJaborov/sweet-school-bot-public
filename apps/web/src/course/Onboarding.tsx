@@ -20,7 +20,7 @@ import { Illustration } from "./components/Illustration";
  */
 
 export function Onboarding({ onDone }: { onDone: (lang: Lang) => void }) {
-  const [lang, setLang] = useState<Lang | null>("tg");
+  const [lang, setLang] = useState<Lang | null>("ru");
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
   const [busy, setBusy] = useState(false);
