@@ -19,7 +19,8 @@ const { FakeHls, instances } = vi.hoisted(() => {
     static Events = { MANIFEST_PARSED: "mp", LEVEL_SWITCHED: "ls", FRAG_BUFFERED: "fb", ERROR: "err" };
     static ErrorTypes = { NETWORK_ERROR: "networkError", MEDIA_ERROR: "mediaError" };
     static ErrorDetails = { BUFFER_STALLED_ERROR: "bufferStalledError" };
-    levels = [{ height: 480 }, { height: 720 }, { height: 1080 }];
+    levels: { width?: number; height: number }[] = [{ height: 480 }, { height: 720 }, { height: 1080 }];
+    bandwidthEstimate = 2_400_000;
     currentLevel = -1;
     startLevel = -1;
     handlers: Record<string, Handler[]> = {};
@@ -334,5 +335,75 @@ describe("Плеер: сбои связи", () => {
       capLevelToPlayerSize: true,
       enableWorker: true,
     });
+  });
+});
+
+describe("Плеер: слабая связь (перенос из аудита скорости, 15.11.2026)", () => {
+  it("вертикальный урок 720×1280: в меню «720p», а не «1280p»; 360p в списке", async () => {
+    localStorage.setItem("ssb_player_hint", "1");
+    renderPlayer();
+    const hls = await hlsReady();
+    hls.levels = [
+      { width: 720, height: 1280 },
+      { width: 480, height: 854 },
+      { width: 360, height: 640 },
+    ];
+    act(() => {
+      hls.emit("mp", {});
+      hls.emit("ls", { level: 0 });
+    });
+    const btn = screen.getByRole("button", { name: `${t.quality}: ${t.qualityAutoWith("720p")}` });
+    fireEvent.click(btn);
+    expect(screen.getByRole("button", { name: "360p" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "1280p" })).toBeNull();
+  });
+
+  it("слабая связь на вертикальном уроке: старт с 480p (по короткой стороне)", async () => {
+    Object.defineProperty(navigator, "connection", { configurable: true, value: { effectiveType: "3g" } });
+    try {
+      renderPlayer();
+      const hls = await hlsReady();
+      hls.levels = [
+        { width: 720, height: 1280 },
+        { width: 480, height: 854 },
+        { width: 360, height: 640 },
+      ];
+      act(() => hls.emit("mp", {}));
+      expect(hls.startLevel).toBe(1);
+    } finally {
+      Object.defineProperty(navigator, "connection", { configurable: true, value: undefined });
+    }
+  });
+
+  it("скорость канала запоминается и следующий урок стартует с неё", async () => {
+    const first = renderPlayer();
+    const hls = await hlsReady();
+    expect(hls.config.abrEwmaDefaultEstimate).toBe(500_000);
+    act(() => {
+      for (let i = 0; i < 4; i += 1) hls.emit("fb", {});
+    });
+    expect(JSON.parse(localStorage.getItem("ssb_bw") ?? "null")).toMatchObject({ bps: 2_400_000 });
+    first.unmount();
+
+    renderPlayer();
+    const next = await hlsReady();
+    expect(next.config.abrEwmaDefaultEstimate).toBe(2_400_000);
+  });
+
+  it("сеть вернулась во время тихого повтора — грузим сразу, отложенный повтор отменён", async () => {
+    renderPlayer();
+    const hls = await hlsReady();
+    vi.useFakeTimers();
+    const start = vi.spyOn(hls, "startLoad");
+    act(() => hls.emit("err", { fatal: true, type: "networkError", details: "fragLoadError" }));
+    expect(start).not.toHaveBeenCalled();
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(start).toHaveBeenCalledTimes(1);
   });
 });
