@@ -30,7 +30,12 @@ import { applyRequisitesOffer } from "../../src/ai/requisitesOffer.js";
 import { resetRequisitesClaims } from "../../src/ai/repeatGuard.js";
 import { resetSalesTextsCache } from "../../src/services/salesTextsService.js";
 import { runPaymentReminders, PAYMENT_REMINDER_SEED } from "../../src/paymentReminder.js";
-import { requisitesReach, requisitesReachLine, requisitesDropped, alertIfRequisitesDropped } from "../../src/requisitesMetric.js";
+import {
+  requisitesReach,
+  requisitesReachLine,
+  requisitesDropped,
+  alertIfRequisitesDropped,
+} from "../../src/requisitesMetric.js";
 import { buildReport } from "../../src/dailyReport.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -39,7 +44,8 @@ const dbFile = path.join(dir, "test.db").replace(/\\/g, "/");
 let db: PrismaClient;
 const HOUR = 3_600_000;
 const PHONE = /905\s?355\s?355/;
-const NUMBER_STEP = "Нархи курс 70 сомонӣ. Рақами корт: 905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф). Чекро фиристед.";
+const NUMBER_STEP =
+  "Нархи курс 70 сомонӣ. Рақами корт: 905 355 355 Фарангис Чаборова (Душанбе Сити, Алиф). Чекро фиристед.";
 const MENU = "Ассалому алейкум! Ба шумо кадом маълумоти курсро равон кунем?";
 
 beforeAll(() => {
@@ -120,7 +126,9 @@ describe("(а) кнопка «21 рецепт», вопрос через 2 се�
   async function tappedCourse(c: Contact, f: { id: string }) {
     await handleIncomingDm(c, "Салом", null, { aiAvailable: true });
     expect((await db.delivery.findFirst({ where: { contactId: c.id } }))?.state).toBe("WAITING");
-    await db.message.create({ data: { contactId: c.id, direction: "IN", text: "💚ОНЛАЙН 21 РЕЦЕПТ", payload: `step:${f.id}:20` } });
+    await db.message.create({
+      data: { contactId: c.id, direction: "IN", text: "💚ОНЛАЙН 21 РЕЦЕПТ", payload: `step:${f.id}:20` },
+    });
     expect(await handleQuickReply(c, `step:${f.id}:20`)).toBe(true);
   }
 
@@ -162,7 +170,10 @@ describe("(а) кнопка «21 рецепт», вопрос через 2 се�
 
   it("цепочка без шага с номером впереди — отменяется, как раньше", async () => {
     const f = await dmFunnel();
-    await db.funnelStep.update({ where: { funnelId_order: { funnelId: f.id, order: 23 } }, data: { text: "Спасибо!" } });
+    await db.funnelStep.update({
+      where: { funnelId_order: { funnelId: f.id, order: 23 } },
+      data: { text: "Спасибо!" },
+    });
     const c = await contact();
     await tappedCourse(c, f);
     await cancelPendingFunnelSteps(c.id, "остановлено: клиент написал сам", { keepRequisites: true });
@@ -195,7 +206,10 @@ describe("(а) кнопка «21 рецепт», вопрос через 2 се�
     await cancelPendingFunnelSteps(c.id, "x", { keepRequisites: true });
     await runDueNow();
     // Месяц спустя человек снова проходит воронку — stopAfterOrder не должен остаться.
-    await db.delivery.updateMany({ where: { contactId: c.id }, data: { state: "WAITING", createdAt: new Date(Date.now() - 40 * 24 * HOUR) } });
+    await db.delivery.updateMany({
+      where: { contactId: c.id },
+      data: { state: "WAITING", createdAt: new Date(Date.now() - 40 * 24 * HOUR) },
+    });
     await handleQuickReply(c, `step:${f.id}:20`);
     expect((await db.delivery.findFirstOrThrow({ where: { contactId: c.id } })).stopAfterOrder).toBeNull();
   });
@@ -232,7 +246,14 @@ describe("(г) готовый вопрос Meta первым сообщение�
   it("человек раньше писал по-русски своими словами — ответ по-русски", async () => {
     await dmFunnel();
     const c = await contact();
-    await db.message.create({ data: { contactId: c.id, direction: "IN", text: "Здравствуйте, хочу узнать про обучение", createdAt: new Date(Date.now() - 60_000) } });
+    await db.message.create({
+      data: {
+        contactId: c.id,
+        direction: "IN",
+        text: "Здравствуйте, хочу узнать про обучение",
+        createdAt: new Date(Date.now() - 60_000),
+      },
+    });
     await handleIncomingDm(c, "Как долго доступен курс?", null, { aiAvailable: true });
     expect(String(sendToContact.mock.calls[0][1])).toMatch(/^Здравствуйте! Курс остаётся у вас навсегда/);
   });
@@ -258,8 +279,18 @@ describe("(д) напоминание «завтра переведу»", () => 
   /** Номер ушёл за 21 ч, отсрочка — последнее сообщение человека `hoursAgo` назад. */
   async function deferred(hoursAgo: number, text = "пагоҳ пулро мефиристам", over: Partial<Contact> = {}) {
     const c = await contact(over);
-    await db.message.create({ data: { contactId: c.id, direction: "OUT", text: NUMBER_STEP, mid: `o-${c.id}`, createdAt: new Date(Date.now() - (hoursAgo + 0.5) * HOUR) } });
-    await db.message.create({ data: { contactId: c.id, direction: "IN", text, createdAt: new Date(Date.now() - hoursAgo * HOUR) } });
+    await db.message.create({
+      data: {
+        contactId: c.id,
+        direction: "OUT",
+        text: NUMBER_STEP,
+        mid: `o-${c.id}`,
+        createdAt: new Date(Date.now() - (hoursAgo + 0.5) * HOUR),
+      },
+    });
+    await db.message.create({
+      data: { contactId: c.id, direction: "IN", text, createdAt: new Date(Date.now() - hoursAgo * HOUR) },
+    });
     return c;
   }
 
@@ -274,7 +305,9 @@ describe("(д) напоминание «завтра переведу»", () => 
     expect(msg).toMatch(/шумо|бошед|фиристед/);
     expect((await db.paymentReminder.findFirstOrThrow({ where: { contactId: c.id } })).state).toBe("SENT");
     // Заготовка текста легла в настройки — дальше её правит владелец.
-    expect((await db.setting.findUnique({ where: { key: "paymentReminderTextTg" } }))?.value).toBe(PAYMENT_REMINDER_SEED.tg);
+    expect((await db.setting.findUnique({ where: { key: "paymentReminderTextTg" } }))?.value).toBe(
+      PAYMENT_REMINDER_SEED.tg,
+    );
     sendToContact.mockClear();
     expect(await runPaymentReminders()).toBe(0);
     expect(sendToContact).not.toHaveBeenCalled();
@@ -296,11 +329,29 @@ describe("(д) напоминание «завтра переведу»", () => 
     const paid = await deferred(21);
     await db.purchase.create({ data: { contactId: paid.id, course: "COURSE70", amount: 70 } });
     const receipt = await deferred(21);
-    await db.receiptCheck.create({ data: { contactId: receipt.id, imageHash: "h1", kind: "receipt", confidence: 50, reason: "сомнительный" } });
+    await db.receiptCheck.create({
+      data: { contactId: receipt.id, imageHash: "h1", kind: "receipt", confidence: 50, reason: "сомнительный" },
+    });
     const talked = await deferred(22);
-    await db.message.create({ data: { contactId: talked.id, direction: "IN", text: "а сертификат будет?", createdAt: new Date(Date.now() - 21 * HOUR) } });
+    await db.message.create({
+      data: {
+        contactId: talked.id,
+        direction: "IN",
+        text: "а сертификат будет?",
+        createdAt: new Date(Date.now() - 21 * HOUR),
+      },
+    });
     const shirin = await deferred(21);
-    await db.message.create({ data: { contactId: shirin.id, direction: "OUT", byHuman: true, text: "Хоп", mid: `h-${shirin.id}`, createdAt: new Date(Date.now() - 20.8 * HOUR) } });
+    await db.message.create({
+      data: {
+        contactId: shirin.id,
+        direction: "OUT",
+        byHuman: true,
+        text: "Хоп",
+        mid: `h-${shirin.id}`,
+        createdAt: new Date(Date.now() - 20.8 * HOUR),
+      },
+    });
     await db.setting.create({ data: { key: "whatsappReceiptsOnly", value: "true" } });
     await deferred(21, "пагоҳ мепартоям", { channel: "WHATSAPP" });
     await deferred(21, "не надо, спасибо");
@@ -322,7 +373,9 @@ describe("(д) напоминание «завтра переведу»", () => 
 
   it("номер этому человеку не уходил — «завтра» не про оплату, молчим", async () => {
     const c = await contact();
-    await db.message.create({ data: { contactId: c.id, direction: "IN", text: "завтра напишу", createdAt: new Date(Date.now() - 21 * HOUR) } });
+    await db.message.create({
+      data: { contactId: c.id, direction: "IN", text: "завтра напишу", createdAt: new Date(Date.now() - 21 * HOUR) },
+    });
     expect(await runPaymentReminders()).toBe(0);
   });
 
@@ -347,7 +400,13 @@ describe("(е) сводка: «получили номер карты» и тр�
     for (let i = 0; i < n; i++) {
       const c = await contact({ createdAt: new Date(Date.now() - daysAgo * 24 * HOUR - 60_000) });
       await db.message.create({
-        data: { contactId: c.id, direction: "OUT", text: `Рақами корт 905-355-355`, mid: `n-${c.id}`, createdAt: new Date(Date.now() - daysAgo * 24 * HOUR - 60_000) },
+        data: {
+          contactId: c.id,
+          direction: "OUT",
+          text: `Рақами корт 905-355-355`,
+          mid: `n-${c.id}`,
+          createdAt: new Date(Date.now() - daysAgo * 24 * HOUR - 60_000),
+        },
       });
     }
   }
@@ -371,5 +430,60 @@ describe("(е) сводка: «получили номер карты» и тр�
     expect(String(notifyOwnerDirect.mock.calls[0][0])).toContain("Номер карты получили 2");
     // Вид «Сбои» по умолчанию — только владельцу, с дедупликацией.
     expect(notifyOwnerDirect.mock.calls[0][1]).toMatchObject({ dedupeKey: "requisites-drop" });
+  });
+});
+
+describe("(ж) ревью #99: номер не к месту", () => {
+  it("уже купил «21 рецепт» и спрашивает про него — номер не клеим; про второй курс — клеим", async () => {
+    const c = await contact();
+    await db.purchase.create({ data: { contactId: c.id, course: "COURSE70", amount: 70 } });
+    const own = await applyRequisitesOffer(c.id, "21 рецепт сколько стоит?", "Курс у вас уже есть.", "ru");
+    expect(own.carriesRequisites).toBe(false);
+    const other = await applyRequisitesOffer(c.id, "арт десерт сколько стоит?", "Арт десерт — отдельный курс.", "ru");
+    expect(other.carriesRequisites).toBe(true);
+    expect(other.text).toMatch(PHONE);
+  });
+
+  it("«нархаш чанд?» сразу после вопроса про офлайн — номер онлайн-курса не клеим", async () => {
+    const c = await contact();
+    await db.message.create({
+      data: {
+        contactId: c.id,
+        direction: "IN",
+        text: "офлайн курс кай сар мешавад?",
+        createdAt: new Date(Date.now() - 60_000),
+      },
+    });
+    const r = await applyRequisitesOffer(c.id, "нархаш чанд?", "Офлайн курс 1500 сомонӣ.", "tg");
+    expect(r.carriesRequisites).toBe(false);
+    expect(r.text).not.toMatch(PHONE);
+    // Явно вернулся к онлайну — номер снова к месту.
+    const back = await applyRequisitesOffer(c.id, "онлайн курс нархаш чанд?", "", "tg");
+    expect(back.carriesRequisites).toBe(true);
+  });
+
+  it("сводка: напоминание с номером на следующий день — не новый «получил номер»", async () => {
+    const c = await contact();
+    await db.message.create({
+      data: {
+        contactId: c.id,
+        direction: "OUT",
+        text: NUMBER_STEP,
+        mid: `a-${c.id}`,
+        createdAt: new Date(Date.now() - 30 * HOUR),
+      },
+    });
+    await db.message.create({
+      data: {
+        contactId: c.id,
+        direction: "OUT",
+        text: NUMBER_STEP,
+        mid: `b-${c.id}`,
+        createdAt: new Date(Date.now() - 2 * HOUR),
+      },
+    });
+    const r = await requisitesReach();
+    expect(r.last24h).toBe(0);
+    expect(r.prev24h).toBe(1);
   });
 });

@@ -1,12 +1,13 @@
-import { logError } from "../db.js";
+import { prisma, logError } from "../db.js";
 import { COURSE_50, COURSE_70, type PriceTable } from "../prices.js";
 import { getPrices } from "../services/priceService.js";
 import { getSalesTexts } from "../services/salesTextsService.js";
 import type { ClientLanguage } from "./clientLanguage.js";
-import { priceOrChoice, type PriceTopic } from "./paymentIntent.js";
+import { mentionsOffline, mentionsOnline, priceOrChoice, type PriceTopic } from "./paymentIntent.js";
 import { paymentLine, type SalesTexts } from "./prompts.js";
 import {
   ALREADY_WROTE_NUMBER,
+  hasDeliveredAccess,
   mentionsPaymentPhone,
   ownsAllCourses,
   requisitesDeclined,
@@ -77,8 +78,16 @@ export function priceSentence(topic: PriceTopic, p: PriceTable, language: Client
   return `${line.charAt(0).toLocaleUpperCase("ru-RU")}${line.slice(1)}.`;
 }
 
-export function requisitesSentence(t: Pick<SalesTexts, "paymentPhone" | "paymentRecipient" | "paymentBanks">, language: ClientLanguage): string {
-  const lead = language === "tg" ? "Рақами корт барои пардохт" : language === "en" ? "Card number for payment" : "Номер карты для оплаты";
+export function requisitesSentence(
+  t: Pick<SalesTexts, "paymentPhone" | "paymentRecipient" | "paymentBanks">,
+  language: ClientLanguage,
+): string {
+  const lead =
+    language === "tg"
+      ? "Рақами корт барои пардохт"
+      : language === "en"
+        ? "Card number for payment"
+        : "Номер карты для оплаты";
   return `${lead}: ${paymentLine(t)}`;
 }
 
@@ -89,6 +98,31 @@ function hasPrice(reply: string, topic: PriceTopic, p: PriceTable): boolean {
   if (topic.bundle) return has(p.bundle);
   if (topic.courses.length === 1) return has(p.price[topic.courses[0]]);
   return [p.price[COURSE_70], p.price[COURSE_50], p.bundle].some(has);
+}
+
+/** Окно, в котором прошлые реплики клиента задают тему («офлайн кай?» → «нархаш чанд?»). */
+const TOPIC_LOOKBACK_MS = 30 * 60_000;
+
+/**
+ * Разговор сейчас про офлайн-курс: в текущей реплике или в 2 предыдущих за 30 минут
+ * (ревью #99). Явное «онлайн» в текущей реплике возвращает к онлайн-курсам.
+ * Сбой базы — смотрим только текущую реплику.
+ */
+async function offlineTopicNow(contactId: string, clientText: string): Promise<boolean> {
+  if (mentionsOffline(clientText)) return true;
+  if (mentionsOnline(clientText)) return false;
+  try {
+    const rows = await prisma.message.findMany({
+      where: { contactId, direction: "IN", createdAt: { gte: new Date(Date.now() - TOPIC_LOOKBACK_MS) } },
+      orderBy: { createdAt: "desc" },
+      take: 3,
+      select: { text: true },
+    });
+    return (rows ?? []).some((r) => r.text !== clientText && mentionsOffline(r.text));
+  } catch (err) {
+    logError("requisitesOffer:offlineTopic", err);
+    return false;
+  }
 }
 
 export type OfferResult = {
@@ -130,12 +164,18 @@ export async function applyRequisitesOffer(
     const allowed =
       topic !== null &&
       !(await ownsAllCourses(contactId)) &&
+      // Назвал курс, который уже купил («21 урок не открывается») — номер не нужен.
+      !(topic.courses.length > 0 && (await hasDeliveredAccess(contactId, clientText))) &&
+      // «Нархаш чанд?» после вопроса про офлайн — это цена офлайна, туда записывает Ширин.
+      !(await offlineTopicNow(contactId, clientText)) &&
       !(await requisitesDeclined(contactId, clientText)) &&
       !(await requisitesRecentlySent(contactId, phone));
     const prices = allowed ? await getPrices() : null;
     // Последним и без await: проверка захвата и его запись — одной синхронной операцией.
     if (topic && prices && tryClaimRequisites(contactId)) {
-      const add = (hasPrice(text, topic, prices) ? "" : `${priceSentence(topic, prices, language)} `) + requisitesSentence(texts, language);
+      const add =
+        (hasPrice(text, topic, prices) ? "" : `${priceSentence(topic, prices, language)} `) +
+        requisitesSentence(texts, language);
       text = text ? `${text}\n${add}` : add;
       return { text, carriesRequisites: true, action: "appended" };
     }

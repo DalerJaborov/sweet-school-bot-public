@@ -59,7 +59,7 @@ const NUMBER_SENT_WITHIN_MS = 72 * HOUR;
 /** Не чаще одного напоминания на человека за столько дней. */
 const REMINDER_COOLDOWN_DAYS = 7;
 /** Про офлайн-курс номер не шлём: туда записывает Ширин. */
-const OFFLINE = /офлайн|оффлайн|offline|дар\s+назди|назди\s+ман|очн/iu;
+const OFFLINE = /офлайн|оффлайн|offline|дар\s+назди|назди\s+ман|(?<!\p{L})очн/iu;
 
 async function reminderEnabled(): Promise<boolean> {
   if ((await getSetting(PAYMENT_REMINDER_SETTING))?.trim() === "false") return false;
@@ -104,10 +104,18 @@ async function skipReason(
   if (await everTalkedWithShirin(contact)) return "talked_with_shirin";
   const [purchases, receipts, laterOut, cooldown, numberOut] = await Promise.all([
     prisma.purchase.count({ where: { contactId: contact.id, revokedAt: null } }),
-    prisma.receiptCheck.count({ where: { contactId: contact.id, createdAt: { gte: new Date(trigger.createdAt.getTime() - 48 * HOUR) } } }),
-    prisma.message.count({ where: { contactId: contact.id, direction: "OUT", byHuman: true, createdAt: { gt: trigger.createdAt } } }),
+    prisma.receiptCheck.count({
+      where: { contactId: contact.id, createdAt: { gte: new Date(trigger.createdAt.getTime() - 48 * HOUR) } },
+    }),
+    prisma.message.count({
+      where: { contactId: contact.id, direction: "OUT", byHuman: true, createdAt: { gt: trigger.createdAt } },
+    }),
     prisma.paymentReminder.count({
-      where: { contactId: contact.id, state: "SENT", createdAt: { gte: new Date(Date.now() - REMINDER_COOLDOWN_DAYS * 24 * HOUR) } },
+      where: {
+        contactId: contact.id,
+        state: "SENT",
+        createdAt: { gte: new Date(Date.now() - REMINDER_COOLDOWN_DAYS * 24 * HOUR) },
+      },
     }),
     prisma.message.findMany({
       where: {
@@ -132,7 +140,9 @@ async function skipReason(
  * Отсрочка, на которую напоминаем: последнее входящее человека — или, если оно
  * пустяк («ок», «рахмат»), отсрочка прямо перед ним.
  */
-async function deferralTrigger(contactId: string): Promise<{ id: string; text: string; createdAt: Date; lastInAt: Date } | null> {
+async function deferralTrigger(
+  contactId: string,
+): Promise<{ id: string; text: string; createdAt: Date; lastInAt: Date } | null> {
   const last = await prisma.message.findMany({
     where: { contactId, direction: "IN" },
     orderBy: { createdAt: "desc" },
@@ -144,7 +154,8 @@ async function deferralTrigger(contactId: string): Promise<{ id: string; text: s
   for (const m of last) {
     if (latest.createdAt.getTime() - m.createdAt.getTime() > TRIVIAL_TAIL_MS) break;
     const text = m.text ?? "";
-    if (defersPayment(text) && !OFFLINE.test(text)) return { id: m.id, text, createdAt: m.createdAt, lastInAt: latest.createdAt };
+    if (defersPayment(text) && !OFFLINE.test(text))
+      return { id: m.id, text, createdAt: m.createdAt, lastInAt: latest.createdAt };
     if (!isTrivialMessage(text)) break; // настоящее сообщение не про отсрочку — разговор ушёл дальше
   }
   return null;
@@ -197,11 +208,18 @@ export async function runPaymentReminders(now = Date.now()): Promise<number> {
         const mid = await sendToContact(contact, message);
         await recordOutgoingMessage(contactId, message, mid);
         if (mid) sent += 1;
-        else await prisma.paymentReminder.update({ where: { triggerMessageId: trigger.id }, data: { state: "SKIPPED", reason: "filtered_empty" } });
+        else
+          await prisma.paymentReminder.update({
+            where: { triggerMessageId: trigger.id },
+            data: { state: "SKIPPED", reason: "filtered_empty" },
+          });
       } catch (err) {
         logError("paymentReminder:send", err);
         await prisma.paymentReminder
-          .update({ where: { triggerMessageId: trigger.id }, data: { state: "FAILED", reason: String((err as Error)?.message ?? err).slice(0, 200) } })
+          .update({
+            where: { triggerMessageId: trigger.id },
+            data: { state: "FAILED", reason: String((err as Error)?.message ?? err).slice(0, 200) },
+          })
           .catch((e) => logError("paymentReminder:markFailed", e));
       }
     } catch (err) {

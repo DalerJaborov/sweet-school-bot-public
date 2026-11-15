@@ -42,14 +42,20 @@ export async function requisitesReach(now = Date.now()): Promise<RequisitesReach
     prisma.message.findMany({
       where: { direction: "OUT", text: { not: null }, createdAt: { gte: new Date(now - 8 * DAY), lte: new Date(now) } },
       select: { contactId: true, text: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
     }),
     prisma.contact.count({
       where: { createdAt: { gte: new Date(now - DAY) }, personal: false, messages: { some: { direction: "IN" } } },
     }),
   ]);
   const buckets: Set<string>[] = Array.from({ length: 8 }, () => new Set<string>());
+  // Человек считается в день, когда номер пришёл ВПЕРВЫЕ за 8 дней: напоминание и
+  // «номер верный» — не новые «получили номер» (ревью #99, иначе падение маскируется).
+  const seen = new Set<string>();
   for (const m of rows ?? []) {
     if (!mentionsPaymentPhone(m.text ?? "", texts.paymentPhone)) continue;
+    if (seen.has(m.contactId)) continue;
+    seen.add(m.contactId);
     const k = Math.floor((now - m.createdAt.getTime()) / DAY);
     if (k >= 0 && k < 8) buckets[k].add(m.contactId);
   }

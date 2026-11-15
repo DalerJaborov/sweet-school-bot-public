@@ -308,13 +308,15 @@ async function sendStep(
     return;
   }
 
-  const lastOfRoute = delivery.stopAfterOrder !== null && delivery.stopAfterOrder !== undefined && step.order >= delivery.stopAfterOrder;
-  const next = step.stopAfter || lastOfRoute
-    ? null
-    : await prisma.funnelStep.findFirst({
-        where: { funnelId: funnel.id, order: { gt: step.order } },
-        orderBy: { order: "asc" },
-      });
+  const lastOfRoute =
+    delivery.stopAfterOrder !== null && delivery.stopAfterOrder !== undefined && step.order >= delivery.stopAfterOrder;
+  const next =
+    step.stopAfter || lastOfRoute
+      ? null
+      : await prisma.funnelStep.findFirst({
+          where: { funnelId: funnel.id, order: { gt: step.order } },
+          orderBy: { order: "asc" },
+        });
   if (!next) {
     await advanceIfActive(delivery.id, { state: "DONE", nextRunAt: null }, sameRoute);
     return;
@@ -476,7 +478,12 @@ export async function handleQuickReply(contact: Contact, payload: string): Promi
   // проходило оба раза и слало шаг воронки клиенту дважды.
   const claimed = await prisma.delivery.updateMany({
     where: { id: delivery.id, state: "WAITING" },
-    data: { state: "ACTIVE", nextOrder: step.order, nextRunAt: new Date(Date.now() + 5 * 60_000), stopAfterOrder: null },
+    data: {
+      state: "ACTIVE",
+      nextOrder: step.order,
+      nextRunAt: new Date(Date.now() + 5 * 60_000),
+      stopAfterOrder: null,
+    },
   });
   if (claimed.count === 0) {
     if (delivery.state === "ACTIVE") {

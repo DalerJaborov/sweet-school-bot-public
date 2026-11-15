@@ -26,7 +26,12 @@ import { sendToContact, sendPrivateReplyRecorded } from "./messaging/send.js";
 import { recordNoReply, policyNoReplyReason, type NoReplyReason } from "./messaging/noReply.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
-import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, askedHumanSilenceUntil } from "./messaging/automation.js";
+import {
+  isBotFrozen,
+  assertAutomationAllowed,
+  contactAutomationBlocked,
+  askedHumanSilenceUntil,
+} from "./messaging/automation.js";
 import {
   guardOffTopic,
   guardReply,
@@ -787,7 +792,12 @@ async function answerTurn(
       }
       // Редкий смайлик, как у самой Ширин (voice.ts): не чаще раза на три ответа,
       // только на коротких тёплых репликах без цифр (значит, никогда в реквизитах).
-      if (replyText && !carriesRequisites && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
+      if (
+        replyText &&
+        !carriesRequisites &&
+        !replyText.includes("---") &&
+        (await getSetting("warmEmojiEnabled")) !== "false"
+      ) {
         if (!(await recentBotUsedEmoji(contact.id))) replyText = maybeWarmEmoji(replyText, WARM_EMOJI_EVERY);
       }
     }
@@ -804,7 +814,13 @@ async function answerTurn(
         });
         // Цена и номер — ОДНИМ сообщением: не режем на пузыри, иначе номер уедет от цены.
         const parts = carriesRequisites
-          ? [replyText.split(/\n*---\n*/).map((p) => p.trim()).filter(Boolean).join("\n")]
+          ? [
+              replyText
+                .split(/\n*---\n*/)
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .join("\n"),
+            ]
           : splitHumanLike(replyText, splitOpts);
         // Короткий тёплый ответ может уйти голосом (рубильник voiceReplyEnabled, по
         // умолчанию выключен; правило и границы - ai/voiceReply.ts). Любая ошибка до отправки - текстом.
@@ -812,7 +828,12 @@ async function answerTurn(
         // тоже может уйти голосом (владелец 08.11.2026: «не отправил голос»).
         const textRest = carriesRequisites
           ? null
-          : await trySendVoiceReply(contact, replyText, attachments.some((a) => a.kind === "audio"), text);
+          : await trySendVoiceReply(
+              contact,
+              replyText,
+              attachments.some((a) => a.kind === "audio"),
+              text,
+            );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         // Голос ушёл, а текст пуст — это ответ; ничего не ушло вовсе — «после фильтров пусто».
         silence = "filtered_empty";

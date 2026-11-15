@@ -80,8 +80,9 @@ export function declinedInOrder(clientTextsOldestFirst: readonly (string | null 
   let declined = false;
   for (const t of clientTextsOldestFirst) {
     if (!t) continue;
-    if (declinesPayment(t)) declined = true;
-    else if (priceOrChoice(t) || clientWantsToPayAgain(t)) declined = false;
+    // Вопрос о цене / выбор курса побеждает слово отказа в той же реплике (ревью #99).
+    if (priceOrChoice(t) || clientWantsToPayAgain(t)) declined = false;
+    else if (declinesPayment(t)) declined = true;
   }
   return declined;
 }
