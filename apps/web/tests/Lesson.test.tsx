@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import { Lesson } from "../src/course/screens/Lesson";
 import { dict } from "../src/course/i18n";
 import type { LessonView } from "../src/course/api";
@@ -35,6 +35,8 @@ function lesson(over: Partial<LessonView> = {}): LessonView {
 function fakeState(): CourseState {
   return {
     t,
+    lang: "ru",
+    switchLanguage: vi.fn(),
     view: undefined,
     courses: [],
     offline: {},
@@ -44,39 +46,21 @@ function fakeState(): CourseState {
   } as unknown as CourseState;
 }
 
-/**
- * ГЕРОЙСКИЙ ЭКРАН НА ЭКРАНЕ УРОКА (§4 визуальной системы 04.09.2026):
- * показывается для свежего открытия (startAt === 0) и уступает место плееру
- * по тапу; при «Продолжить с 12:30» (startAt > 0) экран пропускается — это
- * защищает принцип «один тап», которым уже живёт LessonCard.
- */
-describe("Lesson — переключение геройского экрана и плеера", () => {
-  it("свежее открытие (startAt=0) — сперва геройский экран, плеера ещё нет", () => {
+/** Экран урока: плеер сразу, без геройского экрана (решение владельца 08.11.2026). */
+describe("Lesson — плеер сразу", () => {
+  it("свежее открытие — сразу плеер, без промежуточного экрана", () => {
     render(<Lesson state={fakeState()} lesson={lesson()} startAt={0} nonce={1} onBack={vi.fn()} />);
-    expect(screen.queryByTestId("player-stub")).toBeNull();
-    expect(screen.getByRole("button", { name: t.videoLabel("Наполеон") })).toBeTruthy();
-  });
-
-  it("тап по геройскому экрану переводит на плеер", () => {
-    render(<Lesson state={fakeState()} lesson={lesson()} startAt={0} nonce={1} onBack={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: t.videoLabel("Наполеон") }));
-    expect(screen.getByTestId("player-stub")).toBeTruthy();
-  });
-
-  it("продолжение (startAt>0) — сразу плеер, геройский экран пропущен ради одного тапа", () => {
-    render(<Lesson state={fakeState()} lesson={lesson({ positionSec: 750 })} startAt={750} nonce={1} onBack={vi.fn()} />);
     expect(screen.getByTestId("player-stub")).toBeTruthy();
     expect(screen.queryByRole("button", { name: t.videoLabel("Наполеон") })).toBeNull();
   });
 
-  it("новое открытие того же урока с начала (новый nonce, startAt=0) — геройский экран возвращается", () => {
-    const { rerender } = render(
-      <Lesson state={fakeState()} lesson={lesson({ positionSec: 750 })} startAt={750} nonce={1} onBack={vi.fn()} />,
-    );
+  it("продолжение (startAt>0) — тоже плеер", () => {
+    render(<Lesson state={fakeState()} lesson={lesson({ positionSec: 750 })} startAt={750} nonce={1} onBack={vi.fn()} />);
     expect(screen.getByTestId("player-stub")).toBeTruthy();
+  });
 
-    rerender(<Lesson state={fakeState()} lesson={lesson({ positionSec: 750 })} startAt={0} nonce={2} onBack={vi.fn()} />);
-    expect(screen.queryByTestId("player-stub")).toBeNull();
-    expect(screen.getByRole("button", { name: t.videoLabel("Наполеон") })).toBeTruthy();
+  it("в шапке есть переключатели темы и языка", () => {
+    render(<Lesson state={fakeState()} lesson={lesson()} startAt={0} nonce={1} onBack={vi.fn()} />);
+    expect(screen.getByRole("group", { name: t.languageLabel })).toBeTruthy();
   });
 });

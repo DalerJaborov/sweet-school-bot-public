@@ -49,28 +49,9 @@ describe("LessonList — журнальная сетка", () => {
     const { container } = render(
       <LessonList t={t} lang="ru" course={course()} offline={{}} saving={{}} online onOpen={vi.fn()} />,
     );
-    const numbers = Array.from(container.querySelectorAll(".lesson-number")).map((n) => n.textContent);
-    expect(numbers).toEqual(["01", "02", "03"]);
-  });
-
-  it("первый непройденный урок курса получает карточку на всю ширину", () => {
-    const { container } = render(
-      <LessonList t={t} lang="ru" course={course()} offline={{}} saving={{}} online onOpen={vi.fn()} />,
-    );
-    const nextCards = container.querySelectorAll(".lesson-card.is-next");
-    expect(nextCards).toHaveLength(1);
-    // l1 пройден, значит следующий — l2, второй по счёту.
-    expect(nextCards[0].querySelector(".lesson-number")?.textContent).toBe("02");
-  });
-
-  it("курс пройден целиком — карточки «следующий» нет", () => {
-    const done = course({
-      modules: [{ id: "m1", title: "Раздел 1", lessons: [lesson("l1", { completed: true, percent: 100 })] }],
-    });
-    const { container } = render(
-      <LessonList t={t} lang="ru" course={done} offline={{}} saving={{}} online onOpen={vi.fn()} />,
-    );
-    expect(container.querySelectorAll(".lesson-card.is-next")).toHaveLength(0);
+    const numbers = Array.from(container.querySelectorAll(".lesson-num")).map((n) => n.textContent);
+    // первый урок пройден — вместо номера галочка
+    expect(numbers).toEqual(["", "02", "03"]);
   });
 
   it("курс без материалов — пустое состояние, а не пустая сетка", () => {

@@ -1,5 +1,5 @@
 import { prisma, getSetting } from "./db.js";
-import { getPaymentTolerance, getPrices } from "./services/priceService.js";
+import { getPaymentTolerance, getPrices, type PaymentTolerance } from "./services/priceService.js";
 
 /**
  * ДВА КУРСА И ЧТО ЗА КАКИЕ ДЕНЬГИ ВЫДАВАТЬ.
@@ -38,6 +38,33 @@ function near(amount: number, price: number, down: number, up: number): boolean 
   return amount >= price - down && amount <= price + up;
 }
 
+/** Коды, которые считаются сомони (как в exchangeRates.toSomoni). */
+const SOMONI_CODES = new Set(["TJS", "SOMONI", "СОМОНИ"]);
+
+/** Код валюты одним способом: « tjs » - сомони, пусто - сомони. */
+export function currencyCode(raw: string | null | undefined): string {
+  return (raw ?? "").trim().toUpperCase() || "TJS";
+}
+
+/** Чек не в сомони (рубли, доллары…). */
+export function isForeignCurrency(raw: string | null | undefined): boolean {
+  return !SOMONI_CODES.has(currencyCode(raw));
+}
+
+/**
+ * НА СКОЛЬКО СОМОНИ ЧЕК МОЖЕТ НЕ ДОБРАТЬ ДО ЦЕНЫ - ОДНО МЕСТО.
+ *  - сомони: допуск вниз из «Цены и даты» (6 по умолчанию, комиссия банка);
+ *  - валюта (решение владельца Q20, 15.11.2026: «5%, но не меньше 6 сомони»):
+ *    max(процент от цены, допуск в сомони). Сумму в валюте мы переводим по
+ *    СВОЕМУ курсу, а банк клиентки - по своему: разница растёт с ценой. При
+ *    ценах 50/70/100 это те же 6 сомони, при цене 200 - уже 10.
+ * Оба слагаемых ограничены потолками настроек (15 сомони, 10%).
+ */
+export function shortfallAllowed(price: number, tol: PaymentTolerance, currency?: string | null): number {
+  if (!isForeignCurrency(currency)) return tol.down;
+  return Math.max((price * tol.foreignPct) / 100, tol.down);
+}
+
 /** Настройка chat_id группы для курса. */
 export function chatKeyFor(course: Course): string {
   return course === COURSE_50 ? "telegramChatId50" : "telegramChatId70";
@@ -69,9 +96,9 @@ export type Allocation = {
  * Возвращает ПУСТОЙ список, если сумма ни на что не похожа — тогда чек уходит
  * владельцу на глаза, а не отвергается молча и не открывает доступ наугад.
  */
-export async function allocate(contactId: string, amount: number): Promise<Allocation> {
+export async function allocate(contactId: string, amount: number, currency?: string | null): Promise<Allocation> {
   const [owned, prices, tol] = await Promise.all([ownedCourses(contactId), getPrices(), getPaymentTolerance()]);
-  const DOWN = tol.down;
+  const downFor = (target: number) => shortfallAllowed(target, tol, currency);
   const { price: PRICE, bundle: BUNDLE_PRICE, bundleFull: BUNDLE_FULL_PRICE } = prices;
   const missing = ([COURSE_50, COURSE_70] as Course[]).filter((c) => !owned.includes(c));
 
@@ -85,7 +112,7 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   // запасом сверху. Проверяется ПЕРЕД одиночными курсами: полоса курса за 70
   // с допуском вверх дотягивается до 100, и без этого порядка комплект за 100
   // открывал бы один курс.
-  if (missing.length === 2 && amount >= BUNDLE_PRICE - DOWN && amount <= BUNDLE_FULL_PRICE + tol.up + 10) {
+  if (missing.length === 2 && amount >= BUNDLE_PRICE - downFor(BUNDLE_PRICE) && amount <= BUNDLE_FULL_PRICE + tol.up + 10) {
     return { grant: missing, note: `оплата за оба курса (${Math.round(amount)} сомони)` };
   }
 
@@ -94,7 +121,7 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
   // формально попадает и в полосу пятидесятого курса — и без выбора ближайшего
   // код выдавал за 70 сомони курс за 50.
   const fits = missing
-    .filter((course) => near(amount, PRICE[course], DOWN, tol.up))
+    .filter((course) => near(amount, PRICE[course], downFor(PRICE[course]), tol.up))
     .sort((a, b) => Math.abs(amount - PRICE[a]) - Math.abs(amount - PRICE[b]));
   if (fits.length > 0) {
     const course = fits[0];
@@ -106,17 +133,55 @@ export async function allocate(contactId: string, amount: number): Promise<Alloc
 }
 
 /**
+ * ЧЕК В ВАЛЮТЕ: ВОРОТА АВТОПРИЁМА ПО НЕОКРУГЛЁННОЙ СУММЕ (Q20, 15.11.2026).
+ * allocate() решает по округлённой сумме (63.5 -> 64), а недобор считается от
+ * настоящей суммы после перевода: 63.5 за курс 70 - это 6.5, больше допуска 6,
+ * значит к Ширин. Цель - то, что выдаётся: два курса - цена комплекта, один -
+ * цена курса. Допуск - shortfallAllowed (тот же, что у allocate).
+ */
+export async function foreignShortfallOk(
+  amount: number,
+  grant: Course[],
+  currency: string | null = "RUB"
+): Promise<{ ok: boolean; price: number; minimum: number; allowed: number }> {
+  const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
+  const price = grant.length >= 2 ? prices.bundle : grant.length === 1 ? prices.price[grant[0]] : 0;
+  const allowed = shortfallAllowed(price, tol, currency);
+  const minimum = price - allowed;
+  return { ok: grant.length > 0 && amount >= minimum, price, minimum, allowed };
+}
+
+/**
  * Какие курсы даёт сумма чека, НЕ глядя на то, что уже куплено (для проверки
  * "этот платёж уже обслужен"). Те же границы, что у allocate().
  */
-export async function coursesForAmount(amount: number): Promise<Course[]> {
+export async function coursesForAmount(amount: number, currency?: string | null): Promise<Course[]> {
   const [prices, tol] = await Promise.all([getPrices(), getPaymentTolerance()]);
   const { price, bundle, bundleFull } = prices;
-  if (amount >= bundle - tol.down && amount <= bundleFull + tol.up + 10) return [COURSE_50, COURSE_70];
+  const downFor = (target: number) => shortfallAllowed(target, tol, currency);
+  if (amount >= bundle - downFor(bundle) && amount <= bundleFull + tol.up + 10) return [COURSE_50, COURSE_70];
   const fits = ([COURSE_50, COURSE_70] as Course[])
-    .filter((course) => near(amount, price[course], tol.down, tol.up))
+    .filter((course) => near(amount, price[course], downFor(price[course]), tol.up))
     .sort((a, b) => Math.abs(amount - price[a]) - Math.abs(amount - price[b]));
   return fits.length > 0 ? [fits[0]] : [];
+}
+
+/**
+ * ОДНО ПОНЯТИЕ «ЭТУ ПОКУПКУ БОТ ЕЩЁ ДОЛЖЕН ДОСТАВИТЬ» (ревью PR 72).
+ * Только покупка ПО ЧЕКУ без ссылки и без метки «выдано вручную» (accessIssuedAt
+ * ставят settleChoiceIfHandedOut и settleManualHandout). Ручная запись из панели
+ * (source MANUAL) и ручная выдача Ширин уже у человека: раньше такие покупки
+ * считались недоставленными, карточка обещала «Подтвердить откроет: 21 рецепт»,
+ * а кнопка слала вторую ссылку и не записывала оплату.
+ * Читают: planForAmount, grantCourses, deferGrantForChoice; тесты - receiptReview6.test.ts.
+ */
+export function awaitsBotDelivery(p: {
+  source?: string | null;
+  inviteLink?: string | null;
+  accessIssuedAt?: Date | null;
+  revokedAt?: Date | null;
+}): boolean {
+  return !p.revokedAt && (p.source ?? "RECEIPT") === "RECEIPT" && !p.inviteLink && !p.accessIssuedAt;
 }
 
 /**
@@ -130,10 +195,39 @@ export async function coursesForAmount(amount: number): Promise<Course[]> {
  */
 export async function planForAmount(
   contactId: string,
-  rawAmount: number
-): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; amount: number }> {
+  rawAmount: number,
+  currency?: string | null
+): Promise<{ wanted: Course[]; grant: Course[]; duplicate: boolean; revoked: Course[]; retry: Course[]; amount: number }> {
   const amount = Math.round(rawAmount);
-  const [wanted, owned] = await Promise.all([coursesForAmount(amount), ownedCourses(contactId).catch(() => [] as Course[])]);
-  const grant = wanted.filter((c) => !owned.includes(c));
-  return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0, amount };
+  const wanted = await coursesForAmount(amount, currency);
+  const rows = await prisma.purchase
+    .findMany({
+      where: { contactId, course: { in: wanted } },
+      select: { course: true, source: true, revokedAt: true, inviteLink: true, accessIssuedAt: true, deliveryAwaitingChoice: true },
+    })
+    .catch(() => []);
+  const revoked: Course[] = [];
+  const retry: Course[] = [];
+  const owned: Course[] = [];
+  for (const r of rows ?? []) {
+    const c = r.course as Course;
+    if (r.revokedAt) revoked.push(c);
+    // Куплен, но ссылка не ушла (сбой отправки) и не ждёт ответа про Telegram:
+    // решение владельца ПОВТОРИТ доставку, значит это не "дубль".
+    else if (awaitsBotDelivery(r) && r.deliveryAwaitingChoice === false) retry.push(c);
+    else owned.push(c);
+  }
+  const grant = wanted.filter((c) => !revoked.includes(c) && !owned.includes(c));
+  return { wanted, grant, duplicate: wanted.length > 0 && grant.length === 0 && revoked.length === 0, revoked, retry, amount };
+}
+
+/**
+ * ОДНО ДЕЛЕНИЕ СУММЫ между покупками (ревью PR 72): доли целые, остаток уходит
+ * последней, сумма долей всегда равна сумме чека (121 на двоих = 60 + 61).
+ */
+export function splitAmount(amount: number, parts: number): number[] {
+  const n = Math.max(1, parts);
+  const total = Math.round(amount);
+  const share = Math.floor(total / n);
+  return Array.from({ length: n }, (_, i) => (i === n - 1 ? total - share * (n - 1) : share));
 }

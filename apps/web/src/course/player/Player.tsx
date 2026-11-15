@@ -81,6 +81,7 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
   const lastNonce = useRef<number | null>(null);
   const hideTimer = useRef<number | null>(null);
 
+  const [portrait, setPortrait] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -280,7 +281,7 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
   return (
     <div
       ref={wrapperRef}
-      className={`player${fs.active ? " is-fullscreen" : ""}${fs.active && fs.pseudo ? " is-pseudo-fullscreen" : ""}${controlsShown ? "" : " hide-controls"}${gestures.holding ? " is-holding" : ""}`}
+      className={`player${portrait ? " is-portrait" : ""}${fs.active ? " is-fullscreen" : ""}${fs.active && fs.pseudo ? " is-pseudo-fullscreen" : ""}${controlsShown ? "" : " hide-controls"}${gestures.holding ? " is-holding" : ""}`}
       tabIndex={0}
       onKeyDown={onKey}
       onPointerMove={poke}
@@ -297,7 +298,11 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
         onContextMenu={(e) => e.preventDefault()}
         onTimeUpdate={onTimeUpdate}
         onDurationChange={() => setDuration(videoRef.current?.duration ?? 0)}
-        onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
+        onLoadedMetadata={() => {
+          const v = videoRef.current;
+          setDuration(v?.duration ?? 0);
+          if (v?.videoWidth) setPortrait(v.videoHeight > v.videoWidth);
+        }}
         onProgress={updateBuffered}
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}

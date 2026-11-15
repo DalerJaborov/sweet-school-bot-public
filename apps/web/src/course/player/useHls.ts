@@ -82,20 +82,9 @@ export function useHls(
     mediaRecoveries.current = 0;
     networkRetries.current = 0;
 
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      setNative(true);
-      video.src = src;
-      const onError = () => setError("network");
-      video.addEventListener("error", onError);
-      return () => {
-        video.removeEventListener("error", onError);
-        video.removeAttribute("src");
-        video.load();
-      };
-    }
-
     setNative(false);
     let disposed = false;
+    let nativeCleanup: (() => void) | null = null;
     // Манифест греем сразу, параллельно с загрузкой куска hls.js (~190 КБ
     // сжатых): иначе на первом открытии они шли бы друг за другом, и на 3g
     // это лишняя секунда до первого кадра. Ответ ляжет в HTTP-кэш, hls.js
@@ -104,7 +93,18 @@ export function useHls(
     void import("hls.js").then(({ default: Hls }) => {
       if (disposed) return;
       if (!Hls.isSupported()) {
-        setError("unsupported");
+        // Старый iPhone без MSE: играем родным HLS (без выбора качества).
+        if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          setNative(true);
+          video.src = src;
+          const onError = () => setError("network");
+          video.addEventListener("error", onError);
+          nativeCleanup = () => {
+            video.removeEventListener("error", onError);
+            video.removeAttribute("src");
+            video.load();
+          };
+        } else setError("unsupported");
         return;
       }
       const slow = isSlowNetwork();
@@ -179,6 +179,7 @@ export function useHls(
 
     return () => {
       disposed = true;
+      nativeCleanup?.();
       if (retryTimer.current !== null) {
         window.clearTimeout(retryTimer.current);
         retryTimer.current = null;
