@@ -6,6 +6,7 @@ import { shouldSendAlert } from "../alertGate.js";
 import { canTransferNow, describeDevice, issueMagicLink, transferToNewPhone } from "./access.js";
 import { parseRecoveryCode, recoveryCodeFor } from "./linkCode.js";
 import type { Contact } from "@prisma/client";
+import { ACCEPTED_WHERE } from "../receiptAccepted.js";
 
 /**
  * СМЕНА ТЕЛЕФОНА — только через бота (владелец 08.11.2026).
@@ -137,7 +138,7 @@ export async function phoneChangeProof(
       where: {
         contactId: contact.id,
         imageHash: { in: imageHashes },
-        OR: [{ ownerDecision: "APPROVED" }, { linkSent: true }],
+        OR: ACCEPTED_WHERE,
       },
     });
     if (mine > 0) return "receipt";
