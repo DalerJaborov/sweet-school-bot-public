@@ -9,22 +9,29 @@ import {
   COURSE_DATE_FACT,
   isAskShirin,
 } from "./ai/replyPolicy.js";
-import { detectInstagramFaq, instagramFaqAnswer } from "./ai/instagramFaq.js";
+import { detectFaq, replyToInstagramFaq } from "./ai/instagramFaqReply.js";
 import {
   hasDeliveredAccess,
   loadRepeatContext,
   withoutRepeats,
   mentionsPaymentPhone,
   regenerateAfterFilters,
+  releaseRequisitesClaim,
 } from "./ai/repeatGuard.js";
 import { replyDeliveryMode, deliveryPrompt, videoHelpPrompt } from "./ai/deliveryContext.js";
 import crypto from "node:crypto";
-import { prisma, getSetting, logError, logWarn, recordOutgoingMessage } from "./db.js";
+import { prisma, getSetting, logError, logInfo, logWarn, recordOutgoingMessage } from "./db.js";
+import { applyRequisitesOffer } from "./ai/requisitesOffer.js";
 import { sendToContact, sendPrivateReplyRecorded } from "./messaging/send.js";
 import { recordNoReply, policyNoReplyReason, type NoReplyReason } from "./messaging/noReply.js";
 import { humanizeForContact } from "./messaging/humanize.js";
 import { withoutAddressWords, withoutStockTails } from "./ai/humanText.js";
-import { isBotFrozen, assertAutomationAllowed, contactAutomationBlocked, askedHumanSilenceUntil } from "./messaging/automation.js";
+import {
+  isBotFrozen,
+  assertAutomationAllowed,
+  contactAutomationBlocked,
+  askedHumanSilenceUntil,
+} from "./messaging/automation.js";
 import {
   guardOffTopic,
   guardReply,
@@ -418,15 +425,14 @@ async function answerTurn(
   const ownLanguage = languageSignal(text ?? "");
   const language = ownLanguage ?? (await contactLanguage(contact.id));
 
-  // Готовый вопрос Instagram («Как долго доступен курс?» и ещё три) — точный ответ
-  // из фактов, без хода модели (ai/instagramFaq.ts, владелец 11.11.2026).
-  const faq = detectInstagramFaq(text);
+  // Готовый вопрос Instagram или рекламы («Как долго доступен курс?» и др.): точный
+  // ответ из фактов, без хода модели (ai/instagramFaq.ts, владелец 11.11.2026).
+  // Первым сообщением на него отвечает воронка вместе с меню (funnel.ts); сюда он
+  // доходит, когда меню уже было. Язык таджикский, пока человек сам не писал
+  // по-русски (16.11.2026): вопрос нажат кнопкой, это не его слова.
+  const faq = await detectFaq(text);
   if (faq && attachments.length === 0) {
-    const reply = instagramFaqAnswer(faq, language, await getPrices());
-    for (const part of reply.split("\n").filter(Boolean)) {
-      const mid = await sendToContact(contact, part);
-      if (mid) await recordOutgoingMessage(contact.id, part, mid);
-    }
+    await replyToInstagramFaq(contact, faq, { withMenu: false });
     return;
   }
 
@@ -689,6 +695,8 @@ async function answerTurn(
     let replyText = result.text
       ? await enforceReplyLanguage(contact, ownLanguage ? text : "", language, result.text, prompt, generate)
       : null;
+    // В ответе номер карты (ai/requisitesOffer.ts): одним сообщением и текстом, не голосом.
+    let carriesRequisites = false;
     if (replyText?.trim() === "[NO_REPLY]") {
       logWarn("ai:explicitSilence", `${contact.id}: explicit NO_REPLY`);
       replyText = null;
@@ -773,9 +781,23 @@ async function answerTurn(
           if (!(await handOffUnknownToShirin(contact, text, language))) silence = "human_requested";
         }
       }
+      // ЦЕНА И НОМЕР КАРТЫ ОДНИМ СООБЩЕНИЕМ (16.11.2026): спросили цену, «хочу купить»
+      // или выбрали курс — к ответу добавляется номер (если его не было выше и человек
+      // не говорил «не надо»); вопрос «отправить реквизиты?» вырезается всегда.
+      if (replyText) {
+        const offer = await applyRequisitesOffer(contact.id, text, replyText, language);
+        if (offer.action !== "none") logInfo("ai:requisitesOffer", `${contact.id}: ${offer.action}`);
+        replyText = offer.text || replyText;
+        carriesRequisites = offer.carriesRequisites;
+      }
       // Редкий смайлик, как у самой Ширин (voice.ts): не чаще раза на три ответа,
       // только на коротких тёплых репликах без цифр (значит, никогда в реквизитах).
-      if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
+      if (
+        replyText &&
+        !carriesRequisites &&
+        !replyText.includes("---") &&
+        (await getSetting("warmEmojiEnabled")) !== "false"
+      ) {
         if (!(await recentBotUsedEmoji(contact.id))) replyText = maybeWarmEmoji(replyText, WARM_EMOJI_EVERY);
       }
     }
@@ -790,17 +812,28 @@ async function answerTurn(
           web: await getSetting("replySplitWeb"),
           maxParts: await getSetting("replySplitMaxParts"),
         });
-        const parts = splitHumanLike(replyText, splitOpts);
+        // Цена и номер — ОДНИМ сообщением: не режем на пузыри, иначе номер уедет от цены.
+        const parts = carriesRequisites
+          ? [
+              replyText
+                .split(/\n*---\n*/)
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .join("\n"),
+            ]
+          : splitHumanLike(replyText, splitOpts);
         // Короткий тёплый ответ может уйти голосом (рубильник voiceReplyEnabled, по
         // умолчанию выключен; правило и границы - ai/voiceReply.ts). Любая ошибка до отправки - текстом.
         // Голос решает по ВСЕМУ ответу, а не по одной части: короткий ответ, разбитый на несколько сообщений,
         // тоже может уйти голосом (владелец 08.11.2026: «не отправил голос»).
-        const textRest = await trySendVoiceReply(
-          contact,
-          replyText,
-          attachments.some((a) => a.kind === "audio"),
-          text,
-        );
+        const textRest = carriesRequisites
+          ? null
+          : await trySendVoiceReply(
+              contact,
+              replyText,
+              attachments.some((a) => a.kind === "audio"),
+              text,
+            );
         const toSend = textRest === null ? parts : textRest ? splitHumanLike(textRest, splitOpts) : [];
         // Голос ушёл, а текст пуст — это ответ; ничего не ушло вовсе — «после фильтров пусто».
         silence = "filtered_empty";
@@ -818,6 +851,8 @@ async function answerTurn(
         notifyIfStuck(contact.id).catch((err) => logError("stuckAlert:check", err));
       } catch (err) {
         logError("ai:send", err);
+        // Номер не дошёл: снимаем захват, чтобы шаг воронки или повтор прислали его.
+        if (carriesRequisites) releaseRequisitesClaim(contact.id);
         deliveryFailure = err;
       }
     }

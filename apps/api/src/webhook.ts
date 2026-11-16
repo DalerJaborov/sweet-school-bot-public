@@ -631,10 +631,11 @@ export async function handleMessage(event: MessagingEvent, selfId?: string, chan
 
   // Клиент написал сам (не нажал кнопку) — отложенные шаги воронки отменяются:
   // разговор пошёл живьём, шаблон поверх него звучит как автомат (пункт 6, 11.11.2026).
+  // Кроме шага с номером карты: он доходит (16.11.2026, funnel.ts::cancelPendingFunnelSteps).
   // Только если ответит ИИ (включён, не пауза, ключи есть) и сообщение не пустяк
   // («рахмат», «ок»): иначе человек остался бы и без шага, и без ответа (ревью 11.11.2026).
   if (!payload && (await clientMessageStopsFunnel(textOrVoice, attachments))) {
-    await cancelPendingFunnelSteps(contact.id, "остановлено: клиент написал сам");
+    await cancelPendingFunnelSteps(contact.id, "остановлено: клиент написал сам", { keepRequisites: true });
   }
 
   // Only the confirmed pending course delivery may continue after human takeover.

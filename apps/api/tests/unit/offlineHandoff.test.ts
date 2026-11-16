@@ -274,7 +274,7 @@ describe("разбор 11.11.2026 — ход aiReply целиком", () => {
   it("п.1 готовый вопрос Instagram — точный ответ из фактов без хода модели", async () => {
     await aiReply(lead, "Можно ли купить отдельные рецепты?", [], []);
     expect(generateWithFallback).not.toHaveBeenCalled();
-    expect(sendToContact.mock.calls.map((c) => String(c[1])).join("\n")).toContain("отдельно не продаются");
+    expect(sendToContact.mock.calls.map((c) => String(c[1])).join("\n")).toContain("алоҳида фурӯхта намешаванд"); // по-таджикски: вопрос нажат кнопкой, не его слова (16.11.2026)
   });
 
   it("п.7 модель сказала [ASK_SHIRIN] — клиенту «сейчас уточню и напишу» (от первого лица), бот молчит час, вопрос в списке ждущих", async () => {

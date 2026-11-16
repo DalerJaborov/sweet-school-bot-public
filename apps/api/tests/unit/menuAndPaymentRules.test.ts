@@ -56,7 +56,10 @@ describe("какое меню слать", () => {
 describe("правила бота про оплату, имя и чек", () => {
   const rules = buildAlwaysRules();
   it("реквизиты не навязываются и не повторяются", () => {
-    expect(rules).toContain("НЕ ДАВИ И НЕ ТОРОПИ С ОПЛАТОЙ");
+    expect(rules).toContain("ЦЕНА И НОМЕР СРАЗУ, НО БЕЗ НАЖИМА");
+    expect(rules).toContain("НИКОГДА не спрашивай «отправить реквизиты?»");
+    expect(rules).toContain("905 355 355");
+    expect(rules).not.toContain("подскажу, как оформить» за разговор");
     expect(rules).toContain("не повторяй");
   });
   it("на «как вас зовут» — Ширин, без имени с карты", () => {

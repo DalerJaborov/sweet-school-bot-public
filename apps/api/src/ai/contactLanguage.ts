@@ -1,5 +1,6 @@
 import { prisma, logError } from "../db.js";
 import { conversationLanguage, languageSignal, type ClientLanguage } from "./clientLanguage.js";
+import { detectInstagramFaq } from "./instagramFaq.js";
 
 /** Сколько последних написанных сообщений клиента смотреть. */
 const HISTORY = 10;
@@ -12,7 +13,9 @@ const HISTORY = 10;
  *     «Салом хуб хастед» — таджикский);
  *  2) прошлые написанные сообщения клиента, свежие первыми (голосовое, фото,
  *     одно «Салом» языка не показывают). Нажатия кнопок воронки не в счёт:
- *     это текст владельца, а не клиента;
+ *     это текст владельца, а не клиента; готовые вопросы Instagram и рекламы
+ *     («Как долго доступен курс?») тоже: их пишет Meta по-русски, а нажимают
+ *     и таджикоязычные (16.11.2026);
  *  3) язык, выбранный на сайте (preferredLanguage);
  *  4) русский — ОЦЕНКА: следствие правила «одно Салом не значит таджикский»,
  *     отдельного решения владельца нет.
@@ -20,7 +23,7 @@ const HISTORY = 10;
  * Сбой базы — не падаем: идём дальше по цепочке.
  */
 export async function contactLanguage(contactId: string, currentText = ""): Promise<ClientLanguage> {
-  const own = languageSignal(currentText);
+  const own = detectInstagramFaq(currentText) ? null : languageSignal(currentText);
   if (own) return own;
   try {
     const rows = await prisma.message.findMany({
@@ -29,7 +32,7 @@ export async function contactLanguage(contactId: string, currentText = ""): Prom
       take: HISTORY,
       select: { text: true },
     });
-    const fromHistory = conversationLanguage((rows ?? []).map((r) => r.text));
+    const fromHistory = conversationLanguage((rows ?? []).map((r) => r.text).filter((t) => !detectInstagramFaq(t)));
     if (fromHistory) return fromHistory;
     const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { preferredLanguage: true } });
     const preferred = contact?.preferredLanguage;
