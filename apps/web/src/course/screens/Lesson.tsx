@@ -64,6 +64,7 @@ export function Lesson({
           startAt={startAt}
           nonce={nonce}
           showQuality={!useOffline}
+          poster={useOffline ? (saved?.poster ? offlineUrls.poster(lesson.id) : null) : lesson.posterUrl}
           onProgress={onProgress}
         />
       </div>

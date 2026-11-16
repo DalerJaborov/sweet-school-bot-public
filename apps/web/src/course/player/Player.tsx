@@ -72,10 +72,13 @@ export type PlayerProps = {
   nonce: number;
   /** Скрыть выбор качества (офлайн — одна дорожка; нативный HLS — не умеет). */
   showQuality: boolean;
+  /** Кадр урока до первого кадра видео (17.11.2026): на медленной связи вместо
+   *  чёрного прямоугольника ученица сразу видит, что это за урок. */
+  poster?: string | null;
   onProgress: (positionSec: number, percent: number, via: ProgressVia) => void;
 };
 
-export function Player({ t, src, title, watermark, startAt, nonce, showQuality, onProgress }: PlayerProps) {
+export function Player({ t, src, title, watermark, startAt, nonce, showQuality, poster, onProgress }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const posRef = useRef(0);
@@ -309,6 +312,7 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
       <video
         ref={videoRef}
         className="player-video"
+        poster={poster ?? undefined}
         playsInline
         disablePictureInPicture
         disableRemotePlayback
