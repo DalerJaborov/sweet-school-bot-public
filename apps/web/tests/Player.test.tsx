@@ -496,3 +496,14 @@ describe("Плеер: вертикальная рамка и узкая раск
     }
   });
 });
+
+describe("Плеер: кадр урока до первого кадра видео (17.11.2026)", () => {
+  it("постер есть — показываем его вместо чёрного прямоугольника; нет — атрибута нет", async () => {
+    localStorage.setItem("ssb_player_hint", "1");
+    const withPoster = renderPlayer({ poster: "https://cdn.example/poster.jpg" });
+    expect(withPoster.video.getAttribute("poster")).toBe("https://cdn.example/poster.jpg");
+    withPoster.unmount();
+    const without = renderPlayer({ poster: null });
+    expect(without.video.hasAttribute("poster")).toBe(false);
+  });
+});
