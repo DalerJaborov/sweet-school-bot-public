@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject, type R
 import type HlsType from "hls.js";
 import type { PlayerErrorKind } from "./ErrorOverlay";
 import { isSlowNetwork, loadBandwidth, saveBandwidth, SLOW_START_HEIGHT } from "./network";
+import { credentialsFor, isSameOrigin } from "../sameOrigin";
 
 export type QualityLevel = { index: number; height: number };
 
@@ -102,7 +103,7 @@ export function useHls(
     // сжатых): иначе на первом открытии они шли бы друг за другом, и на 3g
     // это лишняя секунда до первого кадра. Ответ ляжет в HTTP-кэш, hls.js
     // возьмёт его оттуда. Ошибка здесь не важна — hls.js запросит сам.
-    if (typeof fetch === "function") void fetch(src, { credentials: "include" }).catch(() => undefined);
+    if (typeof fetch === "function") void fetch(src, { credentials: credentialsFor(src) }).catch(() => undefined);
     void import("hls.js").then(({ default: Hls }) => {
       if (disposed) return;
       if (!Hls.isSupported()) {
@@ -124,9 +125,11 @@ export function useHls(
       // На слабой связи стартуем с 480p принудительно — прошлая оценка там не нужна.
       const knownBw = slow ? null : loadBandwidth();
       const hls = new Hls({
-        // Ключ и сегменты идут с нашей же сессией: без куки сервер не отдаст ключ.
-        xhrSetup: (xhr) => {
-          xhr.withCredentials = true;
+        // Манифест и ключ — наш сервер, ему нужна сессия. Сегменты — подписанные
+        // ссылки на хранилище: с куками туда браузер не пустит (CORS без
+        // Allow-Credentials), и урок крутил бы спиннер вечно. См. sameOrigin.ts.
+        xhrSetup: (xhr, url) => {
+          xhr.withCredentials = isSameOrigin(url);
         },
         enableWorker: true, // разбор сегментов в воркере — интерфейс не дёргается
         lowLatencyMode: false, // это записи, не эфир: латентность не важна, важна плавность
