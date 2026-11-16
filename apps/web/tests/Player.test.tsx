@@ -336,6 +336,27 @@ describe("Плеер: сбои связи", () => {
       enableWorker: true,
     });
   });
+
+  // 16.11.2026: ученицы на Android видели вечный спиннер. Хранилище (R2) не
+  // отвечает Allow-Credentials, и запрос сегмента «с куками» браузер рубит.
+  it("куки только своему серверу: сегменты из хранилища — без них", async () => {
+    localStorage.setItem("ssb_player_hint", "1");
+    renderPlayer();
+    const hls = await hlsReady();
+    const xhrSetup = hls.config.xhrSetup as (xhr: { withCredentials: boolean }, url: string) => void;
+    const own = { withCredentials: false };
+    xhrSetup(own, `${location.origin}/api/course/lessons/l1/key`);
+    expect(own.withCredentials).toBe(true);
+    const relative = { withCredentials: false };
+    xhrSetup(relative, "/api/course/lessons/l1/variant/480p");
+    expect(relative.withCredentials).toBe(true);
+    const segment = { withCredentials: true };
+    xhrSetup(
+      segment,
+      "https://acc.r2.cloudflarestorage.com/sweet-school/courses/c/l/480p/seg_000.ts?X-Amz-Signature=abc"
+    );
+    expect(segment.withCredentials).toBe(false);
+  });
 });
 
 describe("Плеер: слабая связь (перенос из аудита скорости, 15.11.2026)", () => {
