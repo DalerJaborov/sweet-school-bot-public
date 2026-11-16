@@ -185,7 +185,7 @@ export function useHls(
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         const parsed = hls.levels.map((l, index) => ({ index, height: levelQuality(l) }));
         setLevels(parsed);
-        // Слабая связь: первый фрагмент — с 480p (или ближайшей снизу), потом авто.
+        // Слабая связь: первый фрагмент — с 360p (или ближайшей снизу), потом авто.
         if (slow && parsed.length > 1) {
           const fit = parsed.filter((l) => l.height <= SLOW_START_HEIGHT).sort((a, b) => b.height - a.height)[0];
           if (fit) hls.startLevel = fit.index;

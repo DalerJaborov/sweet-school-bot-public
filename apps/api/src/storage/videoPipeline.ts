@@ -11,9 +11,11 @@ import { renderLessonCover, renderStoryCover, type CoverInput } from "./coverArt
 /**
  * ТРАНСКОДИНГ УРОКА В HLS — «как на ютубе, чтобы не тормозило».
  *
- * До четырёх дорожек в одном манифесте: 1080p (если исходник не хуже — по
+ * До пяти дорожек в одном манифесте: 1080p (если исходник не хуже — по
  * КОРОТКОЙ стороне, уроки вертикальные), 720p для нормальной связи, 480p
- * для слабой и 360p для совсем слабой (с 15.11.2026, только новые уроки). Плеер сам переключается по фактической
+ * для слабой, 360p и 240p для совсем слабой (360p с 15.11.2026, 240p с
+ * 16.11.2026; старым урокам их досоздаёт src/scripts/backfillLowRenditions.ts).
+ * Плеер сам переключается по фактической
  * скорости — это и есть adaptive bitrate, ничего изобретать не нужно, HLS
  * умеет из коробки. Дорожки выше исходника не делаем: растянутое видео
  * только весит больше, а чётче не становится. Офлайн-кеш в
@@ -56,7 +58,27 @@ const RENDITIONS = [
  */
 const LOW_RENDITION = { name: "360p", width: 640, height: 360, videoBitrate: "550k", audioBitrate: "64k" } as const;
 
-type Rendition = (typeof RENDITIONS)[number] | typeof LOW_RENDITION;
+/**
+ * Самая лёгкая дорожка 240p (16.11.2026): у части учениц в Таджикистане канал
+ * ниже 0.7 Мбит/с, и даже 360p там встаёт. ≈0.3 Мбит/с вместе со звуком —
+ * мелко, но рецепт видно и звук идёт без остановок, а ABR поднимется сам, как
+ * только связь позволит. GOP и длина сегмента — общие (SEGMENT_SEC), иначе
+ * переключение качества шло бы с рывком.
+ *
+ * Рамка 428, а не привычные 426: уроки сняты 720×1280, и вписывание в 240×426
+ * с округлением до чётного дало бы 238×426 — в меню плеера «238p». В рамку
+ * 240×428 вертикальный кадр ложится ровно 240×426, горизонтальный 16:9 —
+ * 426×240.
+ */
+const VERY_LOW_RENDITION = { name: "240p", width: 428, height: 240, videoBitrate: "250k", audioBitrate: "48k" } as const;
+
+/**
+ * Лёгкие дорожки для слабой связи — от лучшей к худшей. Их же досоздаёт старым
+ * урокам `src/scripts/backfillLowRenditions.ts` (там, где их нет в master.m3u8).
+ */
+export const LOW_RENDITIONS = [LOW_RENDITION, VERY_LOW_RENDITION] as const;
+
+export type Rendition = (typeof RENDITIONS)[number] | (typeof LOW_RENDITIONS)[number];
 
 export type Dimensions = { width: number | null; height: number | null };
 
@@ -76,14 +98,14 @@ export function qualitySide(dims: Dimensions | number | null): number | null {
 
 /**
  * Какие дорожки делать для исходника такого качества: не выше него, но 480p
- * (офлайн-копия) и 360p (слабая связь) — всегда. Размер неизвестен —
+ * (офлайн-копия), 360p и 240p (слабая связь) — всегда. Размер неизвестен —
  * считаем 720, как у типичного телефона.
  */
 export function renditionsFor(source: Dimensions | number | null): readonly Rendition[] {
   const q = qualitySide(source) ?? 720;
   const fit = RENDITIONS.filter((r) => r.height <= q);
   const base: readonly Rendition[] = fit.length > 0 ? fit : [RENDITIONS[RENDITIONS.length - 1]];
-  return [...base, LOW_RENDITION];
+  return [...base, ...LOW_RENDITIONS];
 }
 
 /**
@@ -265,33 +287,59 @@ function probeDurationStdout(file: string): Promise<number | null> {
 }
 
 /**
- * Один прогон ffmpeg: исходник → две дорожки HLS с шифрованием.
+ * Один прогон ffmpeg: исходник → дорожки HLS с шифрованием и master.m3u8 на
+ * них же (досоздание дорожек сливает его со старым — storage/hlsMaster.ts).
  *
  * `keyUri` попадает В МАНИФЕСТ как есть — это адрес нашего сервера, у которого
  * плеер спросит ключ. Сам ключ в бакет НЕ кладётся никогда: он живёт в базе
  * (Lesson.encryptionKey) и отдаётся только после проверки устройства.
  */
-async function transcodeToHls(
+export type TranscodeOptions = {
+  /**
+   * IV шифрования (32 hex-знака). Не задан — случайный, как при обычной
+   * перекодировке. `null` — без строки IV в keyinfo: ffmpeg тогда берёт номер
+   * сегмента, как в плейлистах, сделанных без IV. Досоздание дорожек старым
+   * урокам передаёт IV уже готовых дорожек — у урока остаётся один ключ и один IV.
+   */
+  iv?: string | null;
+  /** Потоков ffmpeg; по умолчанию все ядра, кроме одного. */
+  threads?: number;
+};
+
+/** Сколько потоков отдать ffmpeg, если не сказано иначе: одно ядро — боту. */
+function defaultThreads(): number {
+  return Math.max(1, (os.cpus().length || 2) - 1);
+}
+
+export async function transcodeToHls(
   sourceFile: string,
   outDir: string,
   key: Buffer,
   keyUri: string,
-  renditions: readonly Rendition[] = renditionsFor(null)
+  renditions: readonly Rendition[] = renditionsFor(null),
+  options: TranscodeOptions = {}
 ): Promise<void> {
+  if (renditions.length === 0) throw new Error("transcodeToHls: не задано ни одной дорожки");
   const keyFile = path.join(outDir, "enc.key");
   const keyInfoFile = path.join(outDir, "enc.keyinfo");
-  const iv = crypto.randomBytes(16).toString("hex");
+  const iv = options.iv === undefined ? crypto.randomBytes(16).toString("hex") : options.iv;
+  if (iv !== null && !/^[0-9a-fA-F]{32}$/.test(iv)) throw new Error("transcodeToHls: IV должен быть 32 hex-знака");
+  const threads = String(options.threads ?? defaultThreads());
   await fs.promises.writeFile(keyFile, key);
   // Формат keyinfo: строка 1 — URI для манифеста, строка 2 — путь к файлу
-  // ключа на диске, строка 3 — IV.
-  await fs.promises.writeFile(keyInfoFile, `${keyUri}\n${keyFile}\n${iv}\n`);
+  // ключа на диске, строка 3 — IV (необязательна).
+  await fs.promises.writeFile(keyInfoFile, iv === null ? `${keyUri}\n${keyFile}\n` : `${keyUri}\n${keyFile}\n${iv}\n`);
 
   const filter = [
     `[0:v]split=${renditions.length}${renditions.map((_, i) => `[v${i}]`).join("")}`,
     ...renditions.map((r, i) => `[v${i}]${scaleFilterFor(r)}[v${i}out]`),
   ].join(";");
 
-  const args = ["-y", "-i", sourceFile, "-filter_complex", filter];
+  // Явно заданный предел потоков ограничивает и ДЕКОДЕР (входная опция до -i):
+  // иначе разбор исходника всё равно занял бы все ядра. Обычная перекодировка
+  // урока предел не задаёт и работает, как раньше.
+  const inputThreads = options.threads === undefined ? [] : ["-threads", threads];
+  const args = ["-y", ...inputThreads, "-i", sourceFile, "-filter_complex", filter];
   renditions.forEach((r, i) => {
     args.push(
       "-map",
@@ -310,7 +358,7 @@ async function transcodeToHls(
       // Оставляем ядро боту: без ограничения ffmpeg забирает все, и ответы в
       // директе начинают приходить через десятки секунд.
       "-threads",
-      String(Math.max(1, (os.cpus().length || 2) - 1)),
+      threads,
       "-profile:v",
       "main",
       // Телефонные записи бывают в 10-бит или yuvj — старые Android такое не
@@ -497,7 +545,7 @@ async function processTeaser(
     "-b:a", "64k",
     "-ac", "2",
     "-movflags", "+faststart",
-    "-threads", String(Math.max(1, (os.cpus().length || 2) - 1)),
+    "-threads", String(defaultThreads()),
     out,
   ]);
   if (code !== 0) throw new Error(`ffmpeg teaser: код ${code}: ${stderr.slice(-600)}`);

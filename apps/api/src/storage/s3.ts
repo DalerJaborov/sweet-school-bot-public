@@ -315,6 +315,25 @@ export async function putBucketCors(cfg: StorageConfig, origins: string[]): Prom
   if (!res.ok) throw new Error(`Хранилище отказало на CORS: ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
+/**
+ * ЕСТЬ ЛИ ОБЪЕКТ — запросом HEAD, без скачивания. Размер в байтах, null — нет.
+ * Нужен досозданию дорожек (src/scripts/backfillLowRenditions.ts): «исходник
+ * на месте?» для сухого прогона, не таская сотни мегабайт.
+ */
+export async function headObject(cfg: StorageConfig, key: string): Promise<number | null> {
+  const canonicalUri = `/${cfg.bucket}/${encodeKey(key)}`;
+  const headers = authHeaders(cfg, "HEAD", canonicalUri, "", Buffer.alloc(0), {}, new Date());
+  const res = await fetch(`${cfg.endpoint}${canonicalUri}`, {
+    method: "HEAD",
+    headers,
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Хранилище отказало на проверке ${key}: ${res.status}`);
+  const size = Number(res.headers.get("content-length") ?? "0");
+  return Number.isFinite(size) ? size : 0;
+}
+
 export async function deleteObject(cfg: StorageConfig, key: string): Promise<void> {
   const canonicalUri = `/${cfg.bucket}/${encodeKey(key)}`;
   const headers = authHeaders(cfg, "DELETE", canonicalUri, "", Buffer.alloc(0), {}, new Date());

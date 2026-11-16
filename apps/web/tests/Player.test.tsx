@@ -380,7 +380,7 @@ describe("Плеер: слабая связь (перенос из аудита 
     expect(screen.queryByRole("button", { name: "1280p" })).toBeNull();
   });
 
-  it("слабая связь на вертикальном уроке: старт с 480p (по короткой стороне)", async () => {
+  it("слабая связь на вертикальном уроке: старт с 360p (по короткой стороне)", async () => {
     Object.defineProperty(navigator, "connection", { configurable: true, value: { effectiveType: "3g" } });
     try {
       renderPlayer();
@@ -389,9 +389,26 @@ describe("Плеер: слабая связь (перенос из аудита 
         { width: 720, height: 1280 },
         { width: 480, height: 854 },
         { width: 360, height: 640 },
+        { width: 240, height: 428 },
       ];
       act(() => hls.emit("mp", {}));
-      expect(hls.startLevel).toBe(1);
+      expect(hls.startLevel).toBe(2);
+    } finally {
+      Object.defineProperty(navigator, "connection", { configurable: true, value: undefined });
+    }
+  });
+
+  it("слабая связь, старый урок без 360p: стартовую дорожку не навязываем (ABR сам)", async () => {
+    Object.defineProperty(navigator, "connection", { configurable: true, value: { effectiveType: "3g" } });
+    try {
+      renderPlayer();
+      const hls = await hlsReady();
+      hls.levels = [
+        { width: 720, height: 1280 },
+        { width: 480, height: 854 },
+      ];
+      act(() => hls.emit("mp", {}));
+      expect(hls.startLevel).toBe(-1);
     } finally {
       Object.defineProperty(navigator, "connection", { configurable: true, value: undefined });
     }
