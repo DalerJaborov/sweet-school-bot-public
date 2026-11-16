@@ -89,7 +89,7 @@ function renderPlayer(props: Partial<Parameters<typeof Player>[0]> = {}) {
       showQuality
       onProgress={onProgress}
       {...props}
-    />
+    />,
   );
   const video = utils.container.querySelector("video") as HTMLVideoElement;
   const gesture = screen.getByTestId("player-gesture");
@@ -289,7 +289,8 @@ describe("Плеер: сбои связи", () => {
     renderPlayer();
     const hls = await hlsReady();
     vi.useFakeTimers();
-    const startLoad = vi.spyOn(hls, "startLoad");
+    // Повтор перечитывает манифест (свежие ссылки на сегменты), а не startLoad.
+    const startLoad = vi.spyOn(hls, "loadSource");
 
     act(() => {
       hls.emit("err", { fatal: false, details: "bufferStalledError", type: "mediaError" });
@@ -353,7 +354,7 @@ describe("Плеер: сбои связи", () => {
     const segment = { withCredentials: true };
     xhrSetup(
       segment,
-      "https://acc.r2.cloudflarestorage.com/sweet-school/courses/c/l/480p/seg_000.ts?X-Amz-Signature=abc"
+      "https://acc.r2.cloudflarestorage.com/sweet-school/courses/c/l/480p/seg_000.ts?X-Amz-Signature=abc",
     );
     expect(segment.withCredentials).toBe(false);
   });
@@ -415,7 +416,7 @@ describe("Плеер: слабая связь (перенос из аудита 
     renderPlayer();
     const hls = await hlsReady();
     vi.useFakeTimers();
-    const start = vi.spyOn(hls, "startLoad");
+    const start = vi.spyOn(hls, "loadSource");
     act(() => hls.emit("err", { fatal: true, type: "networkError", details: "fragLoadError" }));
     expect(start).not.toHaveBeenCalled();
     act(() => {
@@ -426,5 +427,27 @@ describe("Плеер: слабая связь (перенос из аудита 
       vi.advanceTimersByTime(5000);
     });
     expect(start).toHaveBeenCalledTimes(1);
+  });
+  // 16.11.2026: ссылки на сегменты истекали через 5 минут, а hls.js плейлист
+  // записи не перечитывает. 403 от хранилища — сразу новый манифест с той же секунды.
+  it("403 на сегменте — сразу перечитываем манифест и продолжаем с той же секунды", async () => {
+    localStorage.setItem("ssb_player_hint", "1");
+    const { video } = renderPlayer();
+    const hls = await hlsReady();
+    vi.useFakeTimers();
+    const reload = vi.spyOn(hls, "loadSource");
+    Object.defineProperty(video, "currentTime", { configurable: true, value: 312, writable: true });
+    act(() => {
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    act(() =>
+      hls.emit("err", { fatal: true, type: "networkError", details: "fragLoadError", response: { code: 403 } })
+    );
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(hls.config.startPosition).toBe(312);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
