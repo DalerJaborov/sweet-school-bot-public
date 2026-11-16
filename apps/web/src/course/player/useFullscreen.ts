@@ -9,7 +9,8 @@ type OrientationLock = ScreenOrientation & {
 /**
  * Полный экран ОБЁРТКИ, а не <video>: так поверх видео остаются водяной знак
  * и наши кнопки. При входе — поворот в альбомную (телефон в держателе на
- * кухне часто лежит боком, и крутить его руками в муке неудобно). На iOS
+ * кухне часто лежит боком, и крутить его руками в муке неудобно; для вертикального
+ * видео поворота нет). На iOS
  * полноэкран элемента запрещён — остаётся системный `webkitEnterFullscreen`
  * у самого видео, но он убирает именной водяной знак.
  *
@@ -18,7 +19,7 @@ type OrientationLock = ScreenOrientation & {
  * а водяной знак и наши кнопки остаются на месте. Системный плеер тут не
  * зовём: он прячет знак, а ради чего тогда защита.
  */
-export function useFullscreen(wrapperRef: RefObject<HTMLElement>, _videoRef: RefObject<HTMLVideoElement>) {
+export function useFullscreen(wrapperRef: RefObject<HTMLElement>, videoRef: RefObject<HTMLVideoElement>) {
   const [active, setActive] = useState(false);
   const pseudo = useMemo(() => {
     const env = environment();
@@ -58,13 +59,18 @@ export function useFullscreen(wrapperRef: RefObject<HTMLElement>, _videoRef: Ref
         return;
       }
       try {
-        await (screen.orientation as OrientationLock | undefined)?.lock?.("landscape");
+        // Вертикальное видео (все уроки школы, 720×1280) в альбомную НЕ крутим:
+        // оно стало бы узкой полоской посреди чёрного экрана и вдвое мельче,
+        // чем в портретном полном экране. Альбомное — крутим, как раньше.
+        const v = videoRef.current;
+        const portraitVideo = Boolean(v && v.videoHeight > v.videoWidth);
+        if (!portraitVideo) await (screen.orientation as OrientationLock | undefined)?.lock?.("landscape");
       } catch {
         // Настольный браузер или запрет — просто остаёмся как есть.
       }
       return;
     }
-  }, [pseudo, wrapperRef]);
+  }, [pseudo, wrapperRef, videoRef]);
 
   return { active, pseudo, toggle };
 }

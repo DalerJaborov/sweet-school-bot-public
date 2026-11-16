@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
+import Hls from "hls.js/light";
 import { freeVideoCopy, type Lang } from "./i18n";
 
 /** Loaded only after registration; hls.js is absent from the landing-page entry. */

@@ -32,6 +32,8 @@ export type ControlsProps = {
   autoLevel: number;
   showQuality: boolean;
   fullscreen: boolean;
+  /** Узкий плеер: время — над ползунком, у качества — только «480p». */
+  compact?: boolean;
   onPlayPause: () => void;
   onSeek: (sec: number) => void;
   onSkip: (delta: number) => void;
@@ -62,6 +64,9 @@ export function Controls(p: ControlsProps) {
         ? t.qualityAutoWith(`${heightOf(p.autoLevel)}p`)
         : t.qualityAuto
       : `${heightOf(p.level) ?? ""}p`;
+
+  // Для узкого плеера — без слова «Авто»: меню и подпись для чтения с экрана его скажут.
+  const qualityShort = p.level < 0 ? (heightOf(p.autoLevel) ? `${heightOf(p.autoLevel)}p` : t.qualityAuto) : qualityLabel;
 
   // Кнопки спрятались (пауза меню не нужна) или сменился урок — меню закрыть.
   useEffect(() => {
@@ -125,6 +130,11 @@ export function Controls(p: ControlsProps) {
         </div>
       )}
 
+      {p.compact && (
+        <div className="pc-time-top" aria-hidden="true">
+          {formatTime(p.current)} / {formatTime(dur)}
+        </div>
+      )}
       <div className="pc-seek">
         <div className="pc-track" aria-hidden="true">
           <div className="pc-buffered" style={{ width: `${bufferedPct}%` }} />
@@ -168,9 +178,11 @@ export function Controls(p: ControlsProps) {
           <SkipGlyph />
         </button>
 
-        <span className="pc-time" aria-hidden="true">
-          {formatTime(p.current)} / {formatTime(dur)}
-        </span>
+        {!p.compact && (
+          <span className="pc-time" aria-hidden="true">
+            {formatTime(p.current)} / {formatTime(dur)}
+          </span>
+        )}
 
         <span className="pc-spacer" />
 
@@ -191,7 +203,7 @@ export function Controls(p: ControlsProps) {
             aria-label={`${t.quality}: ${qualityLabel}`}
             aria-expanded={menu === "quality"}
           >
-            {qualityLabel}
+            {p.compact ? qualityShort : qualityLabel}
           </button>
         )}
         <button

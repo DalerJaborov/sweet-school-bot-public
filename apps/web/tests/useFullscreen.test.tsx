@@ -32,4 +32,25 @@ describe("fullscreen keeps the student watermark", () => {
     expect(requestFullscreen).toHaveBeenCalledOnce();
     expect(result.current.pseudo).toBe(false);
   });
+
+  it("does not rotate a vertical lesson to landscape, but does rotate a horizontal one", async () => {
+    env.platform = "other";
+    const lock = vi.fn(async () => undefined);
+    Object.defineProperty(screen, "orientation", { configurable: true, value: { lock, unlock: vi.fn() } });
+    const requestFullscreen = vi.fn(async () => undefined);
+    const wrapper = Object.assign(document.createElement("div"), { requestFullscreen });
+    const video = document.createElement("video");
+
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 720 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 1280 });
+    const { result } = renderHook(() => useFullscreen({ current: wrapper }, { current: video }));
+    await act(async () => { await result.current.toggle(); });
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+    expect(lock).not.toHaveBeenCalled();
+
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    await act(async () => { await result.current.toggle(); });
+    expect(lock).toHaveBeenCalledWith("landscape");
+  });
 });
