@@ -56,6 +56,8 @@ const HIDE_CONTROLS_MS = 3000;
 /** Скорость при зажатии — как в YouTube. */
 export const HOLD_RATE = 2;
 const SKIP_SEC = 10;
+/** Уже этого — кнопки управления в компактной раскладке. */
+export const COMPACT_BELOW_PX = 480;
 
 export type PlayerProps = {
   t: Dict;
@@ -81,7 +83,11 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
   const lastNonce = useRef<number | null>(null);
   const hideTimer = useRef<number | null>(null);
 
-  const [portrait, setPortrait] = useState(false);
+  // Уроки школы снимают вертикально (720×1280): рамку сразу делаем вертикальной,
+  // иначе пока грузится манифест, плеер 16:9 прыгает на 280 px вниз. Если в
+  // метаданных окажется горизонтальное видео — `onLoadedMetadata` вернёт 16:9.
+  const [portrait, setPortrait] = useState(true);
+  const [compact, setCompact] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -95,6 +101,20 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
   const hls = useHls(videoRef, src, posRef);
   const fs = useFullscreen(wrapperRef, videoRef);
   useWakeLock(videoRef, playing);
+
+  // Узкий плеер (телефон 320–400 px, столбик на ПК): кнопки в одну строку не
+  // помещаются, и «На весь экран» уезжал за край. Ширину меряем сами, а не
+  // @container/@media: так работает и в старых WebView.
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const apply = () => setCompact(el.clientWidth > 0 && el.clientWidth < COMPACT_BELOW_PX);
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const report = useCallback(
     (via: ProgressVia) => {
@@ -281,7 +301,7 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
   return (
     <div
       ref={wrapperRef}
-      className={`player${portrait ? " is-portrait" : ""}${fs.active ? " is-fullscreen" : ""}${fs.active && fs.pseudo ? " is-pseudo-fullscreen" : ""}${controlsShown ? "" : " hide-controls"}${gestures.holding ? " is-holding" : ""}`}
+      className={`player${portrait ? " is-portrait" : ""}${compact ? " is-compact" : ""}${fs.active ? " is-fullscreen" : ""}${fs.active && fs.pseudo ? " is-pseudo-fullscreen" : ""}${controlsShown ? "" : " hide-controls"}${gestures.holding ? " is-holding" : ""}`}
       tabIndex={0}
       onKeyDown={onKey}
       onPointerMove={poke}
@@ -374,6 +394,7 @@ export function Player({ t, src, title, watermark, startAt, nonce, showQuality, 
         autoLevel={hls.autoLevel}
         showQuality={showQuality && !hls.native}
         fullscreen={fs.active}
+        compact={compact}
         onPlayPause={playPause}
         onSeek={seekTo}
         onSkip={skip}
