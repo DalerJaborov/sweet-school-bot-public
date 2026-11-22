@@ -49,7 +49,7 @@ function defineFields<const K extends string>(fields: readonly FieldDef<K>[]): r
   return fields;
 }
 
-type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "offlineHandoffEnabled" | "botFrozen";
+type ToggleKey = "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "offlineHandoffEnabled" | "offlineRepliesPaused" | "botFrozen";
 
 /**
  * `checkable` — рядом с полем появляется кнопка «Проверить»: она спрашивает у Google
@@ -190,6 +190,7 @@ export function SettingsPage() {
   // «Офлайн: передано Ширин» — по умолчанию ВКЛЮЧЕНО (владелец 08.11.2026):
   // после карточки офлайн-курса помощник молчит, пока человек не напишет про онлайн.
   const [offlineHandoffEnabled, setOfflineHandoffEnabled] = useState(true);
+  const [offlineRepliesPaused, setOfflineRepliesPaused] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   /** Какое поле сейчас проверяется и что ответил Google по каждому — см. checkModel. */
@@ -228,6 +229,7 @@ export function SettingsPage() {
         setStuckAlertEnabled(s.stuckAlertEnabled !== "false");
         setQaAutoReplyEnabled(s.qaAutoReplyEnabled === "true");
         setOfflineHandoffEnabled(s.offlineHandoffEnabled !== "false");
+        setOfflineRepliesPaused(s.offlineRepliesPaused === "true");
         original.current = {
           values: s,
           aiEnabled: s.aiEnabled === "true",
@@ -281,7 +283,7 @@ export function SettingsPage() {
    * этом. Включение ответов клиентам — только после подтверждения: после него
    * помощник начинает писать настоящим людям.
    */
-  async function flip(key: "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "offlineHandoffEnabled", next: boolean, set: (v: boolean) => void) {
+  async function flip(key: "aiEnabled" | "stuckAlertEnabled" | "qaAutoReplyEnabled" | "offlineHandoffEnabled" | "offlineRepliesPaused", next: boolean, set: (v: boolean) => void) {
     if (inFlight.current.has(key)) return;
     if (key === "aiEnabled" && next) {
       const ok = await confirmDialog({
@@ -295,7 +297,7 @@ export function SettingsPage() {
     set(next);
     try {
       await api("/admin/settings", { method: "PUT", body: { [key]: String(next) } });
-      if (original.current) original.current[key] = next;
+      if (original.current && key !== "offlineRepliesPaused") original.current[key] = next;
     } catch (e) {
       set(!next);
       toast(e instanceof Error ? e.message : "Не удалось сохранить", "error");
@@ -431,6 +433,14 @@ export function SettingsPage() {
           label="Офлайн-курс: после карточки с условиями помощник молчит — дальше ведёте вы"
           hint="Клиент спросил про офлайн — получает готовый текст с условиями, и всё. Напишет «онлайн» — помощник снова отвечает. Выключите, чтобы помощник сам просил имя и номер."
           testId="switch-offlineHandoffEnabled"
+        />
+        <Switch
+          checked={offlineRepliesPaused}
+          disabled={values.botFrozen === "true"}
+          onChange={(next) => void flip("offlineRepliesPaused", next, setOfflineRepliesPaused)}
+          label="Пауза: помощник не отвечает по офлайн-курсам"
+          hint="Временно. Кто пишет про офлайн (или уже обсуждал его) — помощник молчит, отвечаете вы. Остальное работает как обычно."
+          testId="switch-offlineRepliesPaused"
         />
       </div>
       <button className="btn" onClick={save} disabled={saving}>
