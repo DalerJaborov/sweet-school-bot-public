@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const store = new Map<string, string>();
 vi.mock("../../src/db.js", () => ({ getSetting: vi.fn(async (k: string) => store.get(k) ?? null) }));
@@ -8,10 +8,16 @@ import { renderFunnelText } from "../../src/funnelPlaceholders.js";
 import { resetSalesTextsCache } from "../../src/services/salesTextsService.js";
 
 beforeEach(() => {
+  // Дата курса 20.11 уже в прошлом — без фиксации «сегодня» тест сам протухал (22.11.2026).
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-10T09:00:00Z") });
   resetSalesTextsCache();
   store.clear();
   store.set("offlineCourseStartDate", "2026-11-20");
   store.set("offlineCourseHours", "13:40–16:30");
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("renderFunnelText", () => {
