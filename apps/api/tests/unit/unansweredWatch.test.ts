@@ -6,7 +6,10 @@ import { fakeContact, mockPrisma, restorePrisma, type PrismaMock } from "../help
  * ответа — и в комментах, и в личных сообщениях Instagram».
  */
 const aiReply = vi.fn(async () => undefined);
-vi.mock("../../src/ai.js", () => ({ aiReply: (...a: unknown[]) => aiReply(...(a as [])) }));
+vi.mock("../../src/ai.js", () => ({
+  aiReply: (...a: unknown[]) => aiReply(...(a as [])),
+  offlineRepliesPausedFor: async () => false,
+}));
 const sendTelegramMessage = vi.fn(async () => undefined);
 vi.mock("../../src/telegram.js", () => ({
   sendTelegramMessage: (...a: unknown[]) => sendTelegramMessage(...(a as [])),

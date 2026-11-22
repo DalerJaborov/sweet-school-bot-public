@@ -7,7 +7,7 @@ import { humanTakeoverEndsAt, loadHumanSilenceMs, isBotFrozen, askedHumanHold } 
 import { recordNoReply } from "./messaging/noReply.js";
 import { sendKind } from "./notify.js";
 import { offlineHandoffSilences } from "./ai/offlineHandoff.js";
-import { aiReply } from "./ai.js";
+import { aiReply, offlineRepliesPausedFor } from "./ai.js";
 
 /**
  * СТОРОЖ «БЕЗ ОТВЕТА» (владелец 09.11.2026: «сделай так, чтобы никто не
@@ -182,7 +182,9 @@ async function askedHumanOpen(contact: Contact): Promise<boolean> {
 
 /** Напоминание Ширин о человеке, который ждёт живого ответа: одно на новую пачку его сообщений, не чаще раза в час. */
 const REMIND_EVERY_MS = 60 * 60_000;
-async function remindShirin(contact: Contact, lastIn: Message, now: Date): Promise<void> {
+const OFFLINE_PAUSE_HEADLINE = "пишет про офлайн-курс и ждёт ответа.";
+
+async function remindShirin(contact: Contact, lastIn: Message, now: Date, headline = "просил(а) живого человека и всё ещё ждёт ответа."): Promise<void> {
   const recent = await prisma.replyGate.findFirst({
     where: {
       contactId: contact.id,
@@ -196,9 +198,13 @@ async function remindShirin(contact: Contact, lastIn: Message, now: Date): Promi
   if (!(await claim(contact.id, lastIn.createdAt, now))) return;
   const who = contact.username ? `@${contact.username}` : contact.igUserId;
   const last = (lastIn.text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
-  const lines = [`🙋 ${who} просил(а) живого человека и всё ещё ждёт ответа.`];
+  const lines = [`🙋 ${who} ${headline}`];
   if (last) lines.push(`Последнее: «${last}»`);
-  lines.push("Бот молчит, пока вы не ответите (или не вернёте помощника в панели).");
+  lines.push(
+    headline === OFFLINE_PAUSE_HEADLINE
+      ? "Включена пауза «по офлайн-курсам не отвечаем»: бот молчит, ответьте сами."
+      : "Бот молчит, пока вы не ответите (или не вернёте помощника в панели).",
+  );
   await sendKind("human", lines.join(NEWLINE)).catch((err) => logError("unansweredWatch:remind", err));
   await recordNoReply(contact, "asked_human_reminded", lastIn.text);
 }
@@ -292,6 +298,12 @@ export async function runUnansweredWatch(now = new Date()): Promise<void> {
     // Клиент просил человека: бот молчит до ответа Ширин (решение владельца 15.11.2026) — только напоминание ей.
     if (askedHumanHold(contact)) {
       await remindShirin(contact, lastIn, now);
+      continue;
+    }
+
+    // Пауза «по офлайн-курсам не отвечаем»: бот молчит нарочно, значит человека надо поднять в Telegram.
+    if (await offlineRepliesPausedFor(contact, lastIn.text)) {
+      await remindShirin(contact, lastIn, now, OFFLINE_PAUSE_HEADLINE);
       continue;
     }
 

@@ -8,7 +8,11 @@ import { fakeContact, mockPrisma, restorePrisma, type PrismaMock } from "../help
  * во время неё. Данные выдуманные.
  */
 const aiReply = vi.fn(async (..._a: unknown[]) => undefined);
-vi.mock("../../src/ai.js", () => ({ aiReply: (...a: unknown[]) => aiReply(...a) }));
+const offlinePaused = vi.fn(async (..._a: unknown[]) => false);
+vi.mock("../../src/ai.js", () => ({
+  aiReply: (...a: unknown[]) => aiReply(...a),
+  offlineRepliesPausedFor: (...a: unknown[]) => offlinePaused(...a),
+}));
 const sendKind = vi.fn(async (..._a: unknown[]) => 1);
 vi.mock("../../src/notify.js", () => ({ sendKind: (...a: unknown[]) => sendKind(...a) }));
 
@@ -287,6 +291,19 @@ describe("ревью: сторож не делает хуже", () => {
         data: expect.objectContaining({ reason: expect.stringMatching(/^asked_human_reminded/) }),
       }),
     );
+  });
+
+  it("пауза по офлайну: бот молчит нарочно — Ширин напоминаем в Telegram один раз, бот не отвечает", async () => {
+    offlinePaused.mockResolvedValue(true);
+    db.model("contact").findMany.mockResolvedValue([contactWith([msg("OUT", 120, "Карточка"), msg("IN", 50, "А адрес?")])]);
+    await runUnansweredWatch(NOW);
+    expect(aiReply).not.toHaveBeenCalled();
+    expect(sendKind).toHaveBeenCalledTimes(1);
+    expect(sendKind.mock.calls[0][0]).toBe("human");
+    const text = String(sendKind.mock.calls[0][1]);
+    expect(text).toContain("офлайн");
+    expect(text).toContain("А адрес?");
+    offlinePaused.mockResolvedValue(false);
   });
 
   it("п.4 напоминание было меньше часа назад — Ширин не тревожим и ожидание не закрываем (напомним позже)", async () => {

@@ -358,14 +358,8 @@ async function answerTurn(
 
   if (text && (await handleDeliveryChoiceReply(contact, text))) return;
 
-  // ПАУЗА «ПО ОФЛАЙН-КУРСАМ НЕ ОТВЕЧАЕМ» (владелец 22.11.2026, временно): молчим, если
-  // сообщение про офлайн, разговор уже передан Ширин или недавно шёл про офлайн.
-  // «Онлайн» без слова «офлайн» пропускаем — это обычный вопрос. Остальное не трогаем.
-  if ((await getSetting("offlineRepliesPaused")) === "true" && !contact.paid && text && !asksOnlineNotOffline(text)) {
-    if (explicitOfflineInterest(text) || contact.offlineHandoffAt || (await recentIncomingWantsOffline(contact.id))) {
-      return "offline_handoff";
-    }
-  }
+  // ПАУЗА «ПО ОФЛАЙН-КУРСАМ НЕ ОТВЕЧАЕМ» (владелец 22.11.2026, временно): см. offlineRepliesPausedFor.
+  if (await offlineRepliesPausedFor(contact, text)) return "offline_handoff";
 
   // «ОФЛАЙН: ПЕРЕДАНО ШИРИН» (владелец 08.11.2026, ai/offlineHandoff.ts): после
   // карточки офлайн-курса бот с этим человеком молчит — ни текста, ни голоса —
@@ -1222,6 +1216,27 @@ export async function registerOfflineIfAsked(contact: Contact, text: string | nu
     (await recentIncomingWantsOffline(contact.id));
   if (!context || asksOnlineNotOffline(text)) return false;
   return registerOfflineSignup(contact, text);
+}
+
+/**
+ * Пауза «по офлайн-курсам не отвечаем» (владелец 22.11.2026, настройка offlineRepliesPaused).
+ * true — сообщение про офлайн, разговор уже передан Ширин, карточка офлайна уходила или
+ * недавно шёл разговор про офлайн: бот молчит (ни ответа, ни подтверждения записи), отвечает
+ * человек. «Онлайн» без слова «офлайн» и купившие не затрагиваются. Её же использует сторож
+ * (unansweredWatch.ts), чтобы напомнить Ширин в Telegram.
+ */
+export async function offlineRepliesPausedFor(
+  contact: Pick<Contact, "id" | "paid" | "offlineHandoffAt" | "offlineInfoSentAt">,
+  text: string | null | undefined,
+): Promise<boolean> {
+  if ((await getSetting("offlineRepliesPaused")) !== "true") return false;
+  if (contact.paid || !text || asksOnlineNotOffline(text)) return false;
+  return (
+    explicitOfflineInterest(text) ||
+    Boolean(contact.offlineHandoffAt) ||
+    Boolean(contact.offlineInfoSentAt) ||
+    (await recentIncomingWantsOffline(contact.id))
+  );
 }
 
 /**
