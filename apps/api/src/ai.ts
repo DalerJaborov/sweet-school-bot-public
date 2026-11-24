@@ -59,6 +59,7 @@ import {
   asksOnlineNotOffline,
   enterOfflineHandoff,
   explicitOfflineInterest,
+  replyHasOfflineFacts,
 } from "./ai/offlineHandoff.js";
 import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
@@ -776,6 +777,15 @@ async function answerTurn(
           if (!(await handOffUnknownToShirin(contact, text, language))) silence = "human_requested";
         }
       }
+      // Пауза «по офлайну не отвечаем», страховка на выходе (владелец 24.11.2026): входной
+      // фильтр не узнал офлайн («живой курс»), а модель сама выдала цену/адрес/дату офлайна.
+      // Такой ответ не шлём, разговор передаём Ширин — сторож напомнит ей в Telegram.
+      if (replyText && (await offlineReplyBlockedByPause(contact, replyText))) {
+        logWarn("ai:offlinePause", `${contact.id}: reply with offline facts held, handed to Shirin`);
+        await enterOfflineHandoff(contact.id);
+        replyText = null;
+        silence = "offline_handoff";
+      }
       // Редкий смайлик, как у самой Ширин (voice.ts): не чаще раза на три ответа,
       // только на коротких тёплых репликах без цифр (значит, никогда в реквизитах).
       if (replyText && !replyText.includes("---") && (await getSetting("warmEmojiEnabled")) !== "false") {
@@ -1237,6 +1247,15 @@ export async function offlineRepliesPausedFor(
     Boolean(contact.offlineInfoSentAt) ||
     (await recentIncomingWantsOffline(contact.id))
   );
+}
+
+/** Пауза по офлайну включена, а готовый ответ бота содержит факты офлайн-курса (ai/offlineHandoff.ts). */
+export async function offlineReplyBlockedByPause(
+  contact: Pick<Contact, "paid">,
+  reply: string | null | undefined,
+): Promise<boolean> {
+  if (contact.paid || !reply || (await getSetting("offlineRepliesPaused")) !== "true") return false;
+  return replyHasOfflineFacts(reply, await getOfflineFacts());
 }
 
 /**
