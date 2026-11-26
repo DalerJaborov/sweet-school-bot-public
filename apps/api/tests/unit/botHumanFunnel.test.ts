@@ -17,7 +17,10 @@ vi.mock("../../src/instagram.js", () => ({
 }));
 vi.mock("../../src/ai.js", () => ({ aiReplyToComment: vi.fn(async () => "ai") }));
 vi.mock("../../src/systemAlerts.js", () => ({ notifyFunnelGaveUp: vi.fn() }));
-vi.mock("../../src/ai/repeatGuard.js", () => ({ shouldSkipRequisitesStep: vi.fn(async () => false) }));
+vi.mock("../../src/ai/repeatGuard.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/ai/repeatGuard.js")>()),
+  shouldSkipRequisitesStep: vi.fn(async () => false),
+}));
 
 import {
   handleIncomingDm,
@@ -57,7 +60,7 @@ afterEach(() => {
 
 describe("п.1 первое сообщение", () => {
   it("настоящий вопрос: меню-приветствие не уходит, воронка ОТЛОЖЕНА до ответа ИИ (не «ответил ИИ» заранее)", async () => {
-    const handled = await handleIncomingDm(contact, "Как долго доступен курс?", null);
+    const handled = await handleIncomingDm(contact, "Можно узнать, какие рецепты входят?", null);
     expect(handled).toBe(false);
     expect(sendToContact).not.toHaveBeenCalled();
     expect(db.model("delivery").create).toHaveBeenCalledWith(
@@ -73,7 +76,7 @@ describe("п.1 первое сообщение", () => {
     expect(sendToContact).toHaveBeenCalledTimes(1);
   });
   it("ИИ выключен / пауза — лучше меню, чем тишина", async () => {
-    expect(await handleIncomingDm(contact, "Как долго доступен курс?", null, { aiAvailable: false })).toBe(true);
+    expect(await handleIncomingDm(contact, "Можно узнать, какие рецепты входят?", null, { aiAvailable: false })).toBe(true);
     expect(sendToContact).toHaveBeenCalledTimes(1);
   });
 });

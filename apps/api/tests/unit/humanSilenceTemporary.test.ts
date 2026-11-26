@@ -92,7 +92,7 @@ describe("одна дверь для паузы", () => {
   }
 
   /** Рассылки-напоминания (не ответы на вопрос): каждая обязана спросить дверь. */
-  const REMINDERS = ["followUp.ts", "joinReminder.ts", "offlineReminder.ts", "learningCheckIn.ts"];
+  const REMINDERS = ["followUp.ts", "joinReminder.ts", "offlineReminder.ts", "learningCheckIn.ts", "paymentReminder.ts"];
   it.each(REMINDERS)("напоминание %s спрашивает everTalkedWithShirin", (file) => {
     expect(fs.readFileSync(path.join(SRC, file), "utf8")).toContain("everTalkedWithShirin(");
   });

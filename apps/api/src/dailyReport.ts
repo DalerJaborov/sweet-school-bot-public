@@ -3,6 +3,7 @@ import { sendKind } from "./notify.js";
 import { unansweredCount } from "./course/chat.js";
 import { globalAiUsageToday } from "./ai/dailyBudget.js";
 import { completedCoursesSince, purchaseChannel, CHANNEL_TITLE, type PurchaseChannel } from "./metrics.js";
+import { alertIfRequisitesDropped, requisitesReach, requisitesReachLine, type RequisitesReach } from "./requisitesMetric.js";
 
 /**
  * Вечерняя сводка — в 23:00 по Душанбе, за ТЕКУЩИЙ день. Уходит владельцу и
@@ -130,7 +131,7 @@ function handleOfContact(c: { username: string | null; igUserId: string }): stri
 }
 
 /** Экспортировано для тестов: текст сводки собирается из моков базы. */
-export async function buildReport(offset: number): Promise<string> {
+export async function buildReport(offset: number, reach?: RequisitesReach | null): Promise<string> {
   // Сегодняшний день: от полуночи до «сейчас».
   const from = localDayStart(0, offset);
   const range = { gte: from, lte: new Date() };
@@ -257,6 +258,10 @@ export async function buildReport(offset: number): Promise<string> {
     const manual = unknownAmount > 0 ? ` (${unknownAmount} вручную, без суммы)` : "";
     lines.push(`💰 ${paidToday.length} ${plural(paidToday.length, "оплата", "оплаты", "оплат")}${sum}${manual}`);
   }
+  // Сколько людей получили номер карты (16.11.2026): по этой цифре падение продаж
+  // видно в тот же день, а не через четыре дня по оплатам. Скользящие сутки.
+  const requisites = reach === undefined ? await requisitesReach().catch(() => null) : reach;
+  if (requisites) lines.push(requisitesReachLine(requisites));
   if (learning.byChannel.length > 0) {
     lines.push(`     ${learning.byChannel.map((b) => `${CHANNEL_TITLE[b.channel]} ${b.sum} с. (${b.count})`).join(" · ")}`);
   }
@@ -290,7 +295,13 @@ export async function maybeSendDailyReport(): Promise<void> {
   await setSetting(SENT_KEY, today);
   try {
     // «Главное»: владельцу и Ширин (вид day, notify.ts) — деньги и записи.
-    await sendKind("day", await buildReport(offset));
+    const reach = await requisitesReach().catch((err) => {
+      logError("dailyReport:requisites", err);
+      return null;
+    });
+    await sendKind("day", await buildReport(offset, reach));
+    // Номер карты резко перестал доходить — отдельная тревога только владельцу.
+    if (reach) await alertIfRequisitesDropped(reach);
   } catch (err) {
     logError("dailyReport", err);
   }

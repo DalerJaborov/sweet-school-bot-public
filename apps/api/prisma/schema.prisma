@@ -123,6 +123,7 @@ model Contact {
   receiptChecks        ReceiptCheck[]
   pendingAiReplies     PendingAiReply[]
   followUpSends        FollowUpSend[]
+  paymentReminders     PaymentReminder[]
   offlineSignup        OfflineSignup?
   purchases            Purchase[]
   styleExamples        StyleExample[]
@@ -641,12 +642,31 @@ model Delivery {
   /// Теперь отказ уходит в растущую паузу (тот же приём, что в
   /// aiReplyRetry.ts), а не сразу хоронит разговор.
   failCount   Int       @default(0)
+  /// Цепочка кончается после шага с этим order (16.11.2026). Клиент написал сам
+  /// посреди воронки: видео и картинки дальше не шлём, но шаг с номером карты
+  /// доходит (funnel.ts::cancelPendingFunnelSteps). null — обычная цепочка.
+  stopAfterOrder Int?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   /// Один человек проходит одну воронку один раз — защита от повторной выдачи.
   @@unique([funnelId, contactId])
   @@index([state, nextRunAt])
+}
+
+/// Напоминание «завтра переведу» (paymentReminder.ts, 16.11.2026). Строка на каждое
+/// входящее-отсрочку, по которому решали: SENT — ушло, SKIPPED — решили не слать
+/// (reason). Уникальность triggerMessageId — второй раз на ту же отсрочку не шлём.
+model PaymentReminder {
+  id               String   @id @default(uuid())
+  contactId        String
+  contact          Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  triggerMessageId String   @unique
+  state            String
+  reason           String?
+  createdAt        DateTime @default(now())
+
+  @@index([contactId, createdAt])
 }
 
 /// Обработанные комментарии — чтобы повторная доставка вебхука не слала второй ответ.

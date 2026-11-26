@@ -100,7 +100,7 @@ describe("handleIncomingDm", () => {
     );
     // Шагов больше нет — доставка закрыта.
     expect(db.model("delivery").updateMany).toHaveBeenLastCalledWith(
-      expect.objectContaining({ where: { id: "delivery-1", state: "ACTIVE" }, data: { state: "DONE", nextRunAt: null } })
+      expect.objectContaining({ where: { id: "delivery-1", state: "ACTIVE", stopAfterOrder: null }, data: { state: "DONE", nextRunAt: null } })
     );
   });
 
