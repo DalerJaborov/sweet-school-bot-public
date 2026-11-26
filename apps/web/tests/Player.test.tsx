@@ -42,7 +42,7 @@ const { FakeHls, instances } = vi.hoisted(() => {
   return { FakeHls, instances };
 });
 
-vi.mock("hls.js", () => ({ default: FakeHls }));
+vi.mock("hls.js/light", () => ({ default: FakeHls }));
 
 const t = dict("ru");
 let paused = true;
@@ -89,7 +89,7 @@ function renderPlayer(props: Partial<Parameters<typeof Player>[0]> = {}) {
       showQuality
       onProgress={onProgress}
       {...props}
-    />
+    />,
   );
   const video = utils.container.querySelector("video") as HTMLVideoElement;
   const gesture = screen.getByTestId("player-gesture");
@@ -98,7 +98,7 @@ function renderPlayer(props: Partial<Parameters<typeof Player>[0]> = {}) {
   return { ...utils, video, gesture, onProgress };
 }
 
-/** Дождаться динамического import("hls.js") и его подписок. */
+/** Дождаться динамического import("hls.js/light") и его подписок. */
 async function hlsReady(): Promise<FakeHls> {
   await act(async () => {});
   expect(instances.length).toBeGreaterThan(0);
@@ -289,7 +289,8 @@ describe("Плеер: сбои связи", () => {
     renderPlayer();
     const hls = await hlsReady();
     vi.useFakeTimers();
-    const startLoad = vi.spyOn(hls, "startLoad");
+    // Повтор перечитывает манифест (свежие ссылки на сегменты), а не startLoad.
+    const startLoad = vi.spyOn(hls, "loadSource");
 
     act(() => {
       hls.emit("err", { fatal: false, details: "bufferStalledError", type: "mediaError" });
@@ -336,6 +337,27 @@ describe("Плеер: сбои связи", () => {
       enableWorker: true,
     });
   });
+
+  // 16.11.2026: ученицы на Android видели вечный спиннер. Хранилище (R2) не
+  // отвечает Allow-Credentials, и запрос сегмента «с куками» браузер рубит.
+  it("куки только своему серверу: сегменты из хранилища — без них", async () => {
+    localStorage.setItem("ssb_player_hint", "1");
+    renderPlayer();
+    const hls = await hlsReady();
+    const xhrSetup = hls.config.xhrSetup as (xhr: { withCredentials: boolean }, url: string) => void;
+    const own = { withCredentials: false };
+    xhrSetup(own, `${location.origin}/api/course/lessons/l1/key`);
+    expect(own.withCredentials).toBe(true);
+    const relative = { withCredentials: false };
+    xhrSetup(relative, "/api/course/lessons/l1/variant/480p");
+    expect(relative.withCredentials).toBe(true);
+    const segment = { withCredentials: true };
+    xhrSetup(
+      segment,
+      "https://acc.r2.cloudflarestorage.com/sweet-school/courses/c/l/480p/seg_000.ts?X-Amz-Signature=abc",
+    );
+    expect(segment.withCredentials).toBe(false);
+  });
 });
 
 describe("Плеер: слабая связь (перенос из аудита скорости, 15.11.2026)", () => {
@@ -358,7 +380,7 @@ describe("Плеер: слабая связь (перенос из аудита 
     expect(screen.queryByRole("button", { name: "1280p" })).toBeNull();
   });
 
-  it("слабая связь на вертикальном уроке: старт с 480p (по короткой стороне)", async () => {
+  it("слабая связь на вертикальном уроке: старт с 360p (по короткой стороне)", async () => {
     Object.defineProperty(navigator, "connection", { configurable: true, value: { effectiveType: "3g" } });
     try {
       renderPlayer();
@@ -367,9 +389,26 @@ describe("Плеер: слабая связь (перенос из аудита 
         { width: 720, height: 1280 },
         { width: 480, height: 854 },
         { width: 360, height: 640 },
+        { width: 240, height: 428 },
       ];
       act(() => hls.emit("mp", {}));
-      expect(hls.startLevel).toBe(1);
+      expect(hls.startLevel).toBe(2);
+    } finally {
+      Object.defineProperty(navigator, "connection", { configurable: true, value: undefined });
+    }
+  });
+
+  it("слабая связь, старый урок без 360p: стартовую дорожку не навязываем (ABR сам)", async () => {
+    Object.defineProperty(navigator, "connection", { configurable: true, value: { effectiveType: "3g" } });
+    try {
+      renderPlayer();
+      const hls = await hlsReady();
+      hls.levels = [
+        { width: 720, height: 1280 },
+        { width: 480, height: 854 },
+      ];
+      act(() => hls.emit("mp", {}));
+      expect(hls.startLevel).toBe(-1);
     } finally {
       Object.defineProperty(navigator, "connection", { configurable: true, value: undefined });
     }
@@ -394,7 +433,7 @@ describe("Плеер: слабая связь (перенос из аудита 
     renderPlayer();
     const hls = await hlsReady();
     vi.useFakeTimers();
-    const start = vi.spyOn(hls, "startLoad");
+    const start = vi.spyOn(hls, "loadSource");
     act(() => hls.emit("err", { fatal: true, type: "networkError", details: "fragLoadError" }));
     expect(start).not.toHaveBeenCalled();
     act(() => {
@@ -405,5 +444,55 @@ describe("Плеер: слабая связь (перенос из аудита 
       vi.advanceTimersByTime(5000);
     });
     expect(start).toHaveBeenCalledTimes(1);
+  });
+  // 16.11.2026: ссылки на сегменты истекали через 5 минут, а hls.js плейлист
+  // записи не перечитывает. 403 от хранилища — сразу новый манифест с той же секунды.
+  it("403 на сегменте — сразу перечитываем манифест и продолжаем с той же секунды", async () => {
+    localStorage.setItem("ssb_player_hint", "1");
+    const { video } = renderPlayer();
+    const hls = await hlsReady();
+    vi.useFakeTimers();
+    const reload = vi.spyOn(hls, "loadSource");
+    Object.defineProperty(video, "currentTime", { configurable: true, value: 312, writable: true });
+    act(() => {
+      video.dispatchEvent(new Event("timeupdate"));
+    });
+    act(() =>
+      hls.emit("err", { fatal: true, type: "networkError", details: "fragLoadError", response: { code: 403 } })
+    );
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(hls.config.startPosition).toBe(312);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+describe("Плеер: вертикальная рамка и узкая раскладка", () => {
+  it("рамка вертикальная сразу, до метаданных; горизонтальное видео возвращает 16:9", () => {
+    const { video } = renderPlayer();
+    const player = () => document.querySelector(".player") as HTMLElement;
+    expect(player().classList.contains("is-portrait")).toBe(true);
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    fireEvent.loadedMetadata(video);
+    expect(player().classList.contains("is-portrait")).toBe(false);
+  });
+
+  it("на узком плеере время над ползунком, у качества только высота, а кнопка полного экрана на месте", async () => {
+    const orig = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 360 });
+    try {
+      renderPlayer();
+      const hls = await hlsReady();
+      expect(document.querySelector(".player")?.classList.contains("is-compact")).toBe(true);
+      expect(document.querySelector(".pc-time-top")).not.toBeNull();
+      expect(document.querySelector(".pc-time")).toBeNull();
+      expect(screen.getByRole("button", { name: t.fullscreen })).toBeTruthy();
+      expect(hls).toBeTruthy();
+    } finally {
+      if (orig) Object.defineProperty(HTMLElement.prototype, "clientWidth", orig);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+    }
   });
 });

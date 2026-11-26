@@ -1,6 +1,7 @@
 import { prisma, getSetting, logError } from "../db.js";
 import type { Contact } from "@prisma/client";
 import { hasDoubtSignal } from "./testimonials.js";
+import type { OfflineFacts } from "./offlineFacts.js";
 
 /**
  * «ОФЛАЙН: ПЕРЕДАНО ШИРИН» — состояние диалога (владелец 08.11.2026).
@@ -49,7 +50,7 @@ export const OFFLINE_HANDOFF_SETTING = "offlineHandoffEnabled";
  * Очно — только «дар назди шумо/ман» (прийти к вам) и «омадан назди шумо».
  */
 const EXPLICIT_OFFLINE =
-  /(офлайн\p{L}*|оффлайн\p{L}*|offline|oflayn|oflain|(?<!\p{L})очн(о|ый|ая|ое|ые|ого|ом)(?!\p{L})|вживую|ру\s*ба\s*ру|(?<!\p{L})дар\s+назди\s+(ман|худат\p{L}*|шумо)|(омад\p{L}*|биё\p{L}*|меоям|меоем|раф\p{L}*)\s+(ба\s+)?назди\s+(ман|шумо|худат\p{L}*)|назди\s+(шумо|худат\p{L}*)\s+(омад\p{L}*|биё\p{L}*|меоям|меоем|ояд|оям)|(?<!\d)700(?!\d)|(куда|где)\s+(приходить|прийти|проходит|находит\p{L}*)|(дар|ба)\s+душанбе\s+(омад\p{L}*|биё\p{L}*|меоям|рафт\p{L}*)|омада\s+(ёд|омуз)\p{L}*)/iu;
+  /(офлайн\p{L}*|оффлайн\p{L}*|offline|oflayn|oflain|(?<!\p{L})очн(о|ый|ая|ое|ые|ого|ом)(?!\p{L})|вживую|ру\s*ба\s*ру|(?<!\p{L})дар\s+назди\s+(ман|худат\p{L}*|шумо)|(омад\p{L}*|биё\p{L}*|меоям|меоем|раф\p{L}*)\s+(ба\s+)?назди\s+(ман|шумо|худат\p{L}*)|назди\s+(шумо|худат\p{L}*)\s+(омад\p{L}*|биё\p{L}*|меоям|меоем|ояд|оям)|(?<!\d)700(?!\d)|(куда|где)\s+(приходить|прийти|проходит|находит\p{L}*)|(дар|ба)\s+душанбе\s+(омад\p{L}*|биё\p{L}*|меоям|рафт\p{L}*)|омада\s+(ёд|омуз)\p{L}*|(?<!\p{L})жив(ой|ом|ые|ых|ого|ому|ьём|ьем)\s+(курс|заняти|обучени|урок|мастер)\p{L}*|(?<!\p{L})(курс\p{L}*\s+)?зинда\s+(курс|дарс)\p{L}*|(?<!\p{L})курс\p{L}*\s+зинда(?!\p{L}))/iu;
 
 /** «Адрес», «суроға» — офлайн, только если речь не про сайт, ссылку или страницу. */
 const ADDRESS_WORD = /(?<!\p{L})(адрес\p{L}*|сурог\p{L}*|суроғ\p{L}*)/iu;
@@ -61,6 +62,31 @@ export function explicitOfflineInterest(text: string | null | undefined): boolea
   if (asksOnlineNotOffline(text)) return false;
   if (EXPLICIT_OFFLINE.test(text)) return true;
   return ADDRESS_WORD.test(text) && !WEB_ADDRESS_CONTEXT.test(text);
+}
+
+/**
+ * ОТВЕТ БОТА СОДЕРЖИТ ФАКТЫ ОФЛАЙН-КУРСА (владелец 24.11.2026). Страховка паузы
+ * «по офлайну не отвечаем» на выходе: человек написал «живой курс» — входной фильтр
+ * не узнал офлайн, а модель сама выдала цену 700, адрес и дату старта. Ловим именно
+ * факты (цена, адрес, дата, длительность), а не слово «офлайн»: уточняющий вопрос
+ * «вам онлайн или офлайн в Душанбе?» — не ответ про офлайн, он остаётся.
+ */
+const DATE_IN_REPLY =
+  /(?<!\d)\d{1,2}\s*(январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)\p{L}*/iu;
+const ADDRESS_STOP_WORDS = new Set(["душанбе", "назди", "шахри", "город", "улица", "кучаи", "кӯчаи", "проспект"]);
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Факты берутся из одного источника (services/salesTextsService.getOfflineFacts): цена, дни, адрес из панели. */
+export function replyHasOfflineFacts(
+  reply: string | null | undefined,
+  facts: Pick<OfflineFacts, "price" | "days" | "address">,
+): boolean {
+  if (!reply) return false;
+  if (new RegExp(`(?<!\\d)${facts.price}(?!\\d)`).test(reply)) return true;
+  if (new RegExp(`(?<!\\d)${facts.days}\\s*(руз|рӯз|дн(ей|я))(?!\\p{L})`, "iu").test(reply)) return true;
+  if (DATE_IN_REPLY.test(reply)) return true;
+  const words = (facts.address.match(/\p{L}{5,}/gu) ?? []).filter((w) => !ADDRESS_STOP_WORDS.has(w.toLowerCase()));
+  return words.some((w) => new RegExp(`(?<!\\p{L})${escapeRe(w)}`, "iu").test(reply));
 }
 
 export async function offlineHandoffEnabled(): Promise<boolean> {

@@ -1,3 +1,4 @@
+import { credentialsFor } from "./sameOrigin";
 /**
  * ДЕЛИТЬСЯ ФАЙЛОМ — Web Share API с честным откатом (визуальная система
  * 04.09.2026, §4 «Поделиться» на геройском экране урока и §6 PNG-сертификат
@@ -25,7 +26,7 @@ export async function shareOrOpenImage(
   const nav = navigator as ShareCapableNavigator;
   if (typeof nav.share === "function" && typeof nav.canShare === "function") {
     try {
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(url, { credentials: credentialsFor(url) });
       if (res.ok) {
         const blob = await res.blob();
         const file = new File([blob], fileName, { type: blob.type || "image/jpeg" });

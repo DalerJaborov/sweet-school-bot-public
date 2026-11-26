@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject, type R
 import type HlsType from "hls.js";
 import type { PlayerErrorKind } from "./ErrorOverlay";
 import { isSlowNetwork, loadBandwidth, saveBandwidth, SLOW_START_HEIGHT } from "./network";
+import { isSameOrigin } from "../sameOrigin";
 
 export type QualityLevel = { index: number; height: number };
 
@@ -23,7 +24,8 @@ export const levelQuality = (l: { width?: number; height: number }): number =>
 
 /**
  * ИСТОЧНИК ВИДЕО: нативный HLS (Safari, iOS — экономнее по батарее) или hls.js
- * (Chrome на Android). hls.js весит около 600 КБ и грузится отдельным куском
+ * (Chrome на Android). hls.js — облегчённая сборка `hls.js/light` (AES-128 в ней есть:
+ * проверено по исходникам и живым прогоном; 365 КБ вместо 584) — грузится отдельным куском
  * только когда реально нужен: у части учениц мобильный интернет дорогой и
  * медленный, и лишние полмегабайта на старте они бы честно заметили.
  *
@@ -57,6 +59,25 @@ export const levelQuality = (l: { width?: number; height: number }): number =>
  * писать «Авто · 720p»: человек видит, что происходит, и реже лезет
  * переключать руками.
  */
+/**
+ * Перечитать манифест и продолжить с той же секунды. Нужен там, где ссылки
+ * на сегменты могли истечь: hls.js читает плейлист записи один раз и сам его
+ * не обновляет, а `startLoad` повторил бы те же мёртвые ссылки.
+ */
+export function reloadSource(
+  hls: Pick<HlsType, "config" | "loadSource">,
+  src: string,
+  position: number,
+  video?: HTMLVideoElement | null
+): void {
+  // Замер 16.11.2026 в Chromium (hls.js 1.6): после loadSource секунда
+  // сохраняется, но видео встаёт на паузу. Играло — продолжаем само.
+  const wasPlaying = Boolean(video && !video.paused);
+  hls.config.startPosition = position > 0 ? position : -1;
+  hls.loadSource(src);
+  if (wasPlaying) void video?.play().catch(() => undefined);
+}
+
 export function useHls(
   videoRef: RefObject<HTMLVideoElement>,
   src: string,
@@ -83,6 +104,9 @@ export function useHls(
   const mediaRecoveries = useRef(0);
   const networkRetries = useRef(0);
   const retryTimer = useRef<number | null>(null);
+  const nativeRef = useRef(false);
+  /** Растёт на «Попробовать снова», когда hls.js не загрузился: перезапуск эффекта. */
+  const [generation, setGeneration] = useState(0);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -96,19 +120,31 @@ export function useHls(
     networkRetries.current = 0;
 
     setNative(false);
+    nativeRef.current = false;
     let disposed = false;
     let nativeCleanup: (() => void) | null = null;
-    // Манифест греем сразу, параллельно с загрузкой куска hls.js (~190 КБ
-    // сжатых): иначе на первом открытии они шли бы друг за другом, и на 3g
-    // это лишняя секунда до первого кадра. Ответ ляжет в HTTP-кэш, hls.js
-    // возьмёт его оттуда. Ошибка здесь не важна — hls.js запросит сам.
-    if (typeof fetch === "function") void fetch(src, { credentials: "include" }).catch(() => undefined);
-    void import("hls.js").then(({ default: Hls }) => {
+    // Прогрева манифеста отдельным fetch больше нет (16.11.2026): сервер
+    // отдаёт его с `no-store`, в HTTP-кэш он не ложился, и на слабой связи
+    // это был просто второй запрос того же манифеста.
+    //
+    // Кусок hls.js грузится отдельно. Не загрузился (обрыв связи, или сайт
+    // обновили, пока страница была открыта, и старого куска уже нет) —
+    // раньше спиннер крутился вечно. Теперь — «Попробовать снова».
+    void import("hls.js/light").catch(() => {
+      if (!disposed) {
+        setStalled(false);
+        setError("network");
+      }
+      return null;
+    }).then((mod) => {
+      if (!mod) return;
+      const Hls = mod.default;
       if (disposed) return;
       if (!Hls.isSupported()) {
         // Старый iPhone без MSE: играем родным HLS (без выбора качества).
         if (video.canPlayType("application/vnd.apple.mpegurl")) {
           setNative(true);
+          nativeRef.current = true;
           video.src = src;
           const onError = () => setError("network");
           video.addEventListener("error", onError);
@@ -124,9 +160,11 @@ export function useHls(
       // На слабой связи стартуем с 480p принудительно — прошлая оценка там не нужна.
       const knownBw = slow ? null : loadBandwidth();
       const hls = new Hls({
-        // Ключ и сегменты идут с нашей же сессией: без куки сервер не отдаст ключ.
-        xhrSetup: (xhr) => {
-          xhr.withCredentials = true;
+        // Манифест и ключ — наш сервер, ему нужна сессия. Сегменты — подписанные
+        // ссылки на хранилище: с куками туда браузер не пустит (CORS без
+        // Allow-Credentials), и урок крутил бы спиннер вечно. См. sameOrigin.ts.
+        xhrSetup: (xhr, url) => {
+          xhr.withCredentials = isSameOrigin(url);
         },
         enableWorker: true, // разбор сегментов в воркере — интерфейс не дёргается
         lowLatencyMode: false, // это записи, не эфир: латентность не важна, важна плавность
@@ -147,7 +185,7 @@ export function useHls(
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         const parsed = hls.levels.map((l, index) => ({ index, height: levelQuality(l) }));
         setLevels(parsed);
-        // Слабая связь: первый фрагмент — с 480p (или ближайшей снизу), потом авто.
+        // Слабая связь: первый фрагмент — с 360p (или ближайшей снизу), потом авто.
         if (slow && parsed.length > 1) {
           const fit = parsed.filter((l) => l.height <= SLOW_START_HEIGHT).sort((a, b) => b.height - a.height)[0];
           if (fit) hls.startLevel = fit.index;
@@ -177,10 +215,16 @@ export function useHls(
             networkRetries.current += 1;
             setStalled(true);
             if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
-            retryTimer.current = window.setTimeout(() => {
-              retryTimer.current = null;
-              if (!disposed) hls.startLoad(posRef.current);
-            }, retryDelayMs(attempt));
+            // 403 от хранилища — истёкшая подпись сегмента: ждать незачем,
+            // свежие ссылки даст только перечитанный манифест.
+            const expired = data.response?.code === 403;
+            retryTimer.current = window.setTimeout(
+              () => {
+                retryTimer.current = null;
+                if (!disposed) reloadSource(hls, src, posRef.current, video);
+              },
+              expired ? 0 : retryDelayMs(attempt)
+            );
           } else {
             setStalled(false);
             setError("network");
@@ -205,7 +249,7 @@ export function useHls(
       hlsRef.current?.destroy();
       hlsRef.current = null;
     };
-  }, [videoRef, src, posRef]);
+  }, [videoRef, src, posRef, generation]);
 
   const retry = useCallback(() => {
     setError(null);
@@ -221,7 +265,13 @@ export function useHls(
     if (hls) {
       mediaRecoveries.current = 0;
       networkRetries.current = 0;
-      hls.startLoad(pos);
+      // Перечитываем манифест, а не только startLoad: после долгой паузы
+      // ссылки на сегменты могли истечь, и старые повторять бесполезно.
+      reloadSource(hls, src, pos, video);
+    } else if (!nativeRef.current) {
+      // hls.js так и не загрузился — запускаем всё с начала.
+      setGeneration((g) => g + 1);
+      return;
     } else if (video) {
       video.load();
       video.addEventListener(
@@ -233,7 +283,7 @@ export function useHls(
       );
     }
     void video?.play().catch(() => undefined);
-  }, [videoRef, posRef]);
+  }, [videoRef, posRef, src]);
 
   // Связь вернулась — повторяем сами, не дожидаясь нажатия.
   // Срабатывает и во время тихих повторов (`stalled`): сеть уже есть — не ждём таймер.

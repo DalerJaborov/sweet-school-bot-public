@@ -66,6 +66,7 @@ import {
   asksOnlineNotOffline,
   enterOfflineHandoff,
   explicitOfflineInterest,
+  replyHasOfflineFacts,
 } from "./ai/offlineHandoff.js";
 import { getPrices } from "./services/priceService.js";
 import { courseDateLabel } from "./ai/courseDate.js";
@@ -364,6 +365,9 @@ async function answerTurn(
   if (contactAutomationBlocked(contact)) return policyNoReplyReason(contact);
 
   if (text && (await handleDeliveryChoiceReply(contact, text))) return;
+
+  // ПАУЗА «ПО ОФЛАЙН-КУРСАМ НЕ ОТВЕЧАЕМ» (владелец 22.11.2026, временно): см. offlineRepliesPausedFor.
+  if (await offlineRepliesPausedFor(contact, text)) return "offline_handoff";
 
   // «ОФЛАЙН: ПЕРЕДАНО ШИРИН» (владелец 08.11.2026, ai/offlineHandoff.ts): после
   // карточки офлайн-курса бот с этим человеком молчит — ни текста, ни голоса —
@@ -780,6 +784,15 @@ async function answerTurn(
           logWarn("ai:emptyAfterFilters", `${contact.id}: handed to Shirin after ${emptiedBy.join(",")}`);
           if (!(await handOffUnknownToShirin(contact, text, language))) silence = "human_requested";
         }
+      }
+      // Пауза «по офлайну не отвечаем», страховка на выходе (владелец 24.11.2026): входной
+      // фильтр не узнал офлайн («живой курс»), а модель сама выдала цену/адрес/дату офлайна.
+      // Такой ответ не шлём, разговор передаём Ширин — сторож напомнит ей в Telegram.
+      if (replyText && (await offlineReplyBlockedByPause(contact, replyText))) {
+        logWarn("ai:offlinePause", `${contact.id}: reply with offline facts held, handed to Shirin`);
+        await enterOfflineHandoff(contact.id);
+        replyText = null;
+        silence = "offline_handoff";
       }
       // ЦЕНА И НОМЕР КАРТЫ ОДНИМ СООБЩЕНИЕМ (16.11.2026): спросили цену, «хочу купить»
       // или выбрали курс — к ответу добавляется номер (если его не было выше и человек
@@ -1248,6 +1261,36 @@ export async function registerOfflineIfAsked(contact: Contact, text: string | nu
     (await recentIncomingWantsOffline(contact.id));
   if (!context || asksOnlineNotOffline(text)) return false;
   return registerOfflineSignup(contact, text);
+}
+
+/**
+ * Пауза «по офлайн-курсам не отвечаем» (владелец 22.11.2026, настройка offlineRepliesPaused).
+ * true — сообщение про офлайн, разговор уже передан Ширин, карточка офлайна уходила или
+ * недавно шёл разговор про офлайн: бот молчит (ни ответа, ни подтверждения записи), отвечает
+ * человек. «Онлайн» без слова «офлайн» и купившие не затрагиваются. Её же использует сторож
+ * (unansweredWatch.ts), чтобы напомнить Ширин в Telegram.
+ */
+export async function offlineRepliesPausedFor(
+  contact: Pick<Contact, "id" | "paid" | "offlineHandoffAt" | "offlineInfoSentAt">,
+  text: string | null | undefined,
+): Promise<boolean> {
+  if ((await getSetting("offlineRepliesPaused")) !== "true") return false;
+  if (contact.paid || !text || asksOnlineNotOffline(text)) return false;
+  return (
+    explicitOfflineInterest(text) ||
+    Boolean(contact.offlineHandoffAt) ||
+    Boolean(contact.offlineInfoSentAt) ||
+    (await recentIncomingWantsOffline(contact.id))
+  );
+}
+
+/** Пауза по офлайну включена, а готовый ответ бота содержит факты офлайн-курса (ai/offlineHandoff.ts). */
+export async function offlineReplyBlockedByPause(
+  contact: Pick<Contact, "paid">,
+  reply: string | null | undefined,
+): Promise<boolean> {
+  if (contact.paid || !reply || (await getSetting("offlineRepliesPaused")) !== "true") return false;
+  return replyHasOfflineFacts(reply, await getOfflineFacts());
 }
 
 /**
